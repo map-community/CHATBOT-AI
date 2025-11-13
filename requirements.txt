@@ -13,7 +13,7 @@ sentence-transformers==2.2.2
 rank-bm25==0.2.2
 python-Levenshtein==0.23.0
 
-# LangChain & AI (호환 버전 - 0.3.x 시리즈)
+# LangChain & AI
 langchain==0.3.15
 langchain-community==0.3.15
 langchain-core==0.3.31
@@ -35,4 +35,3 @@ nltk==3.8.1
 # Utilities
 pytz==2023.3
 ipython==8.18.1
-python-dotenv==1.0.0
