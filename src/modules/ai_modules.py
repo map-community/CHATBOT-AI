@@ -313,7 +313,7 @@ def transformed_query(content):
 # Dense Retrieval (Upstage 임베딩)
 embeddings = UpstageEmbeddings(
   api_key=upstage_api_key,
-  model="solar-embedding-1-large"
+  model="solar-embedding-1-large-query"  # 질문 임베딩용 모델
 ) # Upstage API 키 사용
 # dense_doc_vectors = np.array(embeddings.embed_documents(texts))  # 문서 임베딩
 
