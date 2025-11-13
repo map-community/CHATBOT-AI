@@ -23,15 +23,6 @@ from langchain_core.runnables import RunnableLambda
 import nltk
 from nltk.tokenize import word_tokenize
 from nltk.tag import pos_tag
-try:
-    from konlpy.tag import Mecab
-    MECAB_AVAILABLE = True
-    logger.info("✅ Mecab 사용 가능 (30-50배 빠른 형태소 분석)")
-except Exception as e:
-    logger.warning(f"⚠️  Mecab을 불러올 수 없습니다: {e}")
-    logger.warning("⚠️  Mecab 없이 계속 진행합니다. 한국어 형태소 분석 정확도가 낮아질 수 있습니다.")
-    MECAB_AVAILABLE = False
-    Mecab = None
 from collections import defaultdict
 import numpy as np
 from IPython.display import display, HTML
@@ -68,6 +59,17 @@ if not upstage_api_key:
     raise ValueError("UPSTAGE_API_KEY가 필요합니다. .env 파일을 확인하세요.")
 
 logger.info("✅ API 키를 .env 파일에서 성공적으로 로드했습니다.")
+
+# Mecab import (logger 정의 이후)
+try:
+    from konlpy.tag import Mecab
+    MECAB_AVAILABLE = True
+    logger.info("✅ Mecab 사용 가능 (30-50배 빠른 형태소 분석)")
+except Exception as e:
+    logger.warning(f"⚠️  Mecab을 불러올 수 없습니다: {e}")
+    logger.warning("⚠️  Mecab 없이 계속 진행합니다. 한국어 형태소 분석 정확도가 낮아질 수 있습니다.")
+    MECAB_AVAILABLE = False
+    Mecab = None
 
 # Pinecone API 설정 및 초기화
 try:
