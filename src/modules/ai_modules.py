@@ -36,32 +36,74 @@ import pickle
 #시간 측정용
 import time
 import logging
-
-# Pinecone API 키와 인덱스 이름 선언
-#pinecone_api_key = 'cd22a6ee-0b74-4e9d-af1b-a1e83917d39e'
-#index_name = 'db1'
-pinecone_api_key = 'pcsk_3pp5QX_EeyfanpYE8u1G2hKkyLnfhWQMUHvdbUJeBZdULHaFMV5j67XDQwqXDUCBtFLYpt'
-index_name = 'info'
-# Upstage API 키 선언
-upstage_api_key = 'up_6hq78Et2phdvQWCMQLccIVpWJDF5R' 
-
-# Pinecone API 설정 및 초기화
-pc = Pinecone(api_key=pinecone_api_key)
-index = pc.Index(index_name)
-def get_korean_time():
-    return datetime.now(pytz.timezone('Asia/Seoul'))
-
-# mongodb 연결, client로
-client = MongoClient("mongodb://localhost:27017/")
-
-db = client["knu_chatbot"]
-collection = db["notice_collection"]
-
-#redis client 연결 ( 외부 캐시 저장소 )
-redis_client = redis.StrictRedis(host='localhost', port=6379, db=0)
+from dotenv import load_dotenv
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# .env 파일 로드
+load_dotenv()
+
+# 환경변수에서 API 키 읽기
+pinecone_api_key = os.getenv('PINECONE_API_KEY')
+index_name = os.getenv('PINECONE_INDEX_NAME', 'info')  # 기본값 'info'
+upstage_api_key = os.getenv('UPSTAGE_API_KEY')
+
+# API 키 검증
+if not pinecone_api_key:
+    logger.error("❌ PINECONE_API_KEY가 .env 파일에 설정되지 않았습니다!")
+    raise ValueError("PINECONE_API_KEY가 필요합니다. .env 파일을 확인하세요.")
+
+if not upstage_api_key:
+    logger.error("❌ UPSTAGE_API_KEY가 .env 파일에 설정되지 않았습니다!")
+    raise ValueError("UPSTAGE_API_KEY가 필요합니다. .env 파일을 확인하세요.")
+
+logger.info("✅ API 키를 .env 파일에서 성공적으로 로드했습니다.")
+
+# Pinecone API 설정 및 초기화
+try:
+    logger.info("🔄 Pinecone에 연결 중...")
+    pc = Pinecone(api_key=pinecone_api_key)
+    index = pc.Index(index_name)
+    logger.info(f"✅ Pinecone 인덱스 '{index_name}'에 연결되었습니다.")
+except Exception as e:
+    logger.error(f"❌ Pinecone 연결 실패: {e}")
+    raise
+
+def get_korean_time():
+    return datetime.now(pytz.timezone('Asia/Seoul'))
+
+# MongoDB 연결
+try:
+    logger.info("🔄 MongoDB에 연결 중...")
+    mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
+    client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
+    # 연결 테스트
+    client.admin.command('ping')
+    db = client["knu_chatbot"]
+    collection = db["notice_collection"]
+    logger.info("✅ MongoDB에 연결되었습니다.")
+except Exception as e:
+    logger.error(f"❌ MongoDB 연결 실패: {e}")
+    logger.warning("⚠️  MongoDB 없이 계속 진행합니다. 일부 기능이 제한될 수 있습니다.")
+    client = None
+    db = None
+    collection = None
+
+# Redis 연결
+try:
+    logger.info("🔄 Redis에 연결 중...")
+    redis_host = os.getenv('REDIS_HOST', 'localhost')
+    redis_port = int(os.getenv('REDIS_PORT', 6379))
+    redis_client = redis.StrictRedis(host=redis_host, port=redis_port, db=0, socket_connect_timeout=5)
+    # 연결 테스트
+    redis_client.ping()
+    logger.info("✅ Redis에 연결되었습니다.")
+except Exception as e:
+    logger.error(f"❌ Redis 연결 실패: {e}")
+    logger.warning("⚠️  Redis 없이 계속 진행합니다. 캐싱 기능이 비활성화됩니다.")
+    redis_client = None
 
 # 단어 명사화 함수.
 def transformed_query(content):

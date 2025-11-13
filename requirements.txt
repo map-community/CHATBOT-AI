@@ -35,3 +35,4 @@ nltk==3.8.1
 # Utilities
 pytz==2023.3
 ipython==8.18.1
+python-dotenv==1.0.0
