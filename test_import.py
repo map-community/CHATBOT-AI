@@ -45,6 +45,9 @@ try:
     print("   ✅ KoNLPy")
 
     print("\n6️⃣ ai_modules.py import 테스트...")
+    print("   (이 단계가 오래 걸릴 수 있습니다...)")
+    import sys
+    sys.path.insert(0, 'src')
     from modules import ai_modules
     print("   ✅ ai_modules 로딩 성공!")
 
