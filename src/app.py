@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify
-from ai_modules import get_ai_message, initialize_cache
+from modules.ai_modules import get_ai_message, initialize_cache
 from flask_cors import CORS
 import logging
 

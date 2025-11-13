@@ -4,6 +4,29 @@
 > **다음 단계**: 제공하신 Python 파일 복사 필요 📋
 
 ---
+1단계: 가상 환경 생성하기 (프로젝트 전용 방 만들기)
+먼저 CHATBOT-AI 프로젝트 전용 가상 환경을 만들겠습니다. (보통 .venv 라는 이름으로 만듭니다.)
+
+현재 터미널(PS C:\Users\Park\Desktop\myAIPROJECTS\CHATBOT-AI>)에서 다음 명령어를 입력하세요.
+
+Bash
+python -m venv .venv
+설명: 이 명령은 CHATBOT-AI 폴더 안에 파이썬, pip 등이 포함된 .venv라는 이름의 독립된 폴더(가상 환경)를 생성합니다.
+
+(참고) 만약 위 명령어가 작동하지 않으면, 윈도우에서는 py -m venv .venv 를 대신 시도해 보세요.
+
+2단계: 가상 환경 활성화하기 (방에 들어가기)
+가상 환경을 만들었으면, 이제 그 환경을 사용하겠다고 터미널에 알려야 합니다.
+
+4단계 (참고): 가상 환경 비활성화하기 (방에서 나오기)
+나중에 이 프로젝트 작업을 마치고 터미널에서 (.venv) 상태를 해제하고 싶다면, 언제든지 deactivate 명령어를 입력하면 됩니다.
+
+Bash
+deactivate
+
+.\.venv\Scripts\Activate.ps1
+✅ 성공 확인: 명령어 입력줄 맨 앞에 (.venv) 라는 표시가 나타나면 성공입니다. 이렇게 보여야 합니다: (.venv) PS C:\Users\Park\Desktop\myAIPROJECTS\CHATBOT-AI>
+
 
 ## 📊 현재 프로젝트 상태
 
