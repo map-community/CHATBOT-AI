@@ -23,7 +23,15 @@ from langchain_core.runnables import RunnableLambda
 import nltk
 from nltk.tokenize import word_tokenize
 from nltk.tag import pos_tag
-from konlpy.tag import Okt
+try:
+    from konlpy.tag import Okt
+    KONLPY_AVAILABLE = True
+    logger.info("✅ KoNLPy 사용 가능")
+except Exception as e:
+    logger.warning(f"⚠️  KoNLPy를 불러올 수 없습니다: {e}")
+    logger.warning("⚠️  KoNLPy 없이 계속 진행합니다. 한국어 형태소 분석 정확도가 낮아질 수 있습니다.")
+    KONLPY_AVAILABLE = False
+    Okt = None
 from collections import defaultdict
 import numpy as np
 from IPython.display import display, HTML
@@ -282,9 +290,16 @@ def transformed_query(content):
           content = content.replace(keyword, '')
           query_nouns.append('신입')
     # 5. Okt 형태소 분석기를 이용한 추가 명사 추출
-    okt = Okt()
-    additional_nouns = [noun for noun in okt.nouns(content) if len(noun) > 1]
-    query_nouns += additional_nouns
+    if KONLPY_AVAILABLE:
+        okt = Okt()
+        additional_nouns = [noun for noun in okt.nouns(content) if len(noun) > 1]
+        query_nouns += additional_nouns
+    else:
+        # KoNLPy 없이 간단한 토큰화 (정확도는 낮지만 작동함)
+        logger.debug("⚠️  KoNLPy 없이 간단한 토큰화 사용")
+        simple_tokens = content.split()
+        additional_nouns = [token for token in simple_tokens if len(token) > 1]
+        query_nouns += additional_nouns
     if '인도' not in query_nouns and  '인턴십' in query_nouns:
         query_nouns.append('베트남')
 
