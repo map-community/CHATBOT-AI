@@ -12,6 +12,15 @@ def create_app():
     app = Flask(__name__)
     CORS(app)
 
+    @app.route('/health', methods=['GET'])
+    def health_check():
+        """Health check endpoint for Docker"""
+        return jsonify({
+            'status': 'healthy',
+            'message': 'KNU Chatbot Server is running',
+            'version': '1.0.0'
+        }), 200
+
     @app.route('/ai/ai-response', methods=['POST'])
     def ai_response():
         try:

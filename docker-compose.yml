@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  # MongoDB 서비스
+  mongodb:
+    image: mongo:latest
+    container_name: knu-chatbot-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - chatbot-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis 서비스
+  redis:
+    image: redis:latest
+    container_name: knu-chatbot-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - chatbot-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Flask 애플리케이션
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: knu-chatbot-app
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    environment:
+      - MONGODB_URI=mongodb://mongodb:27017/
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - FLASK_ENV=development
+    volumes:
+      - ./logs:/app/logs
+      - ./src:/app/src  # 개발 시 코드 변경 실시간 반영
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - chatbot-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+# 네트워크 정의
+networks:
+  chatbot-network:
+    driver: bridge
+
+# 볼륨 정의 (데이터 영속성)
+volumes:
+  mongodb_data:
+    driver: local
+  redis_data:
+    driver: local

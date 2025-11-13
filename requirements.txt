@@ -29,7 +29,7 @@ pymongo==4.6.0
 redis==5.0.1
 
 # Korean NLP
-konlpy==0.5.2
+mecab-python3==1.0.9
 nltk==3.8.1
 
 # Utilities

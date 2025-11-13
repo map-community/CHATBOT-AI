@@ -24,14 +24,14 @@ import nltk
 from nltk.tokenize import word_tokenize
 from nltk.tag import pos_tag
 try:
-    from konlpy.tag import Okt
-    KONLPY_AVAILABLE = True
-    logger.info("✅ KoNLPy 사용 가능")
+    from konlpy.tag import Mecab
+    MECAB_AVAILABLE = True
+    logger.info("✅ Mecab 사용 가능 (30-50배 빠른 형태소 분석)")
 except Exception as e:
-    logger.warning(f"⚠️  KoNLPy를 불러올 수 없습니다: {e}")
-    logger.warning("⚠️  KoNLPy 없이 계속 진행합니다. 한국어 형태소 분석 정확도가 낮아질 수 있습니다.")
-    KONLPY_AVAILABLE = False
-    Okt = None
+    logger.warning(f"⚠️  Mecab을 불러올 수 없습니다: {e}")
+    logger.warning("⚠️  Mecab 없이 계속 진행합니다. 한국어 형태소 분석 정확도가 낮아질 수 있습니다.")
+    MECAB_AVAILABLE = False
+    Mecab = None
 from collections import defaultdict
 import numpy as np
 from IPython.display import display, HTML
@@ -289,14 +289,14 @@ def transformed_query(content):
         for keyword in keywords:
           content = content.replace(keyword, '')
           query_nouns.append('신입')
-    # 5. Okt 형태소 분석기를 이용한 추가 명사 추출
-    if KONLPY_AVAILABLE:
-        okt = Okt()
-        additional_nouns = [noun for noun in okt.nouns(content) if len(noun) > 1]
+    # 5. Mecab 형태소 분석기를 이용한 추가 명사 추출
+    if MECAB_AVAILABLE:
+        mecab = Mecab()
+        additional_nouns = [noun for noun in mecab.nouns(content) if len(noun) > 1]
         query_nouns += additional_nouns
     else:
-        # KoNLPy 없이 간단한 토큰화 (정확도는 낮지만 작동함)
-        logger.debug("⚠️  KoNLPy 없이 간단한 토큰화 사용")
+        # Mecab 없이 간단한 토큰화 (정확도는 낮지만 작동함)
+        logger.debug("⚠️  Mecab 없이 간단한 토큰화 사용")
         simple_tokens = content.split()
         additional_nouns = [token for token in simple_tokens if len(token) > 1]
         query_nouns += additional_nouns
