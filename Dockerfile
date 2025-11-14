@@ -62,8 +62,9 @@ RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/mecab.conf && ldconfig
 
 # requirements.txt 복사 및 Python 패키지 설치
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt && \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip && \
+    pip install -r requirements.txt && \
     echo "✅ Python 패키지 설치 완료!"
 
 # NLTK 데이터 다운로드
