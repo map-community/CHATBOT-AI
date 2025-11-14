@@ -73,7 +73,7 @@ $env:DOCKER_BUILDKIT=1
 docker-compose up --build -d
 ```
 
-#### Linux/Mac
+#### Mac (Apple Silicon M1/M2/M3)
 ```bash
 # BuildKit 활성화
 export DOCKER_BUILDKIT=1
@@ -82,7 +82,23 @@ export DOCKER_BUILDKIT=1
 docker-compose up --build -d
 ```
 
-**예상 빌드 시간:** 10-15분 (Mecab 컴파일 포함)
+**⚠️ Apple Silicon Mac 주의사항:**
+- Dockerfile에 `--platform=linux/amd64` 설정이 포함되어 있어 x86_64 에뮬레이션으로 실행됩니다
+- 빌드 시간이 Intel Mac보다 약간 더 걸릴 수 있습니다 (15-20분)
+- Rosetta 2가 자동으로 활성화됩니다
+
+#### Linux
+```bash
+# BuildKit 활성화
+export DOCKER_BUILDKIT=1
+
+# Docker Compose로 빌드 및 실행
+docker-compose up --build -d
+```
+
+**예상 빌드 시간:**
+- Intel/AMD (Windows/Linux/Intel Mac): 10-15분
+- Apple Silicon Mac (M1/M2/M3): 15-20분 (Mecab 컴파일 포함)
 
 ### 5. 실행 상태 확인
 
@@ -269,7 +285,44 @@ print(f'Pinecone 벡터 개수: {stats.total_vector_count}')
 
 ## 🐛 문제 해결
 
-### 1. "division by zero" 에러
+### 1. Mac에서 Mecab 설치 실패 (exit code: 1)
+
+**증상:**
+```
+failed to solve: process "/bin/sh -c echo \"📦 Mecab 설치 중…\" ... exit code: 1
+```
+
+**원인:** Apple Silicon Mac (M1/M2/M3)에서 ARM 아키텍처 호환성 문제
+
+**해결:**
+
+1. Dockerfile 첫 줄이 다음과 같은지 확인:
+   ```dockerfile
+   FROM --platform=linux/amd64 python:3.11-slim
+   ```
+
+2. Docker Desktop 설정 확인:
+   - Docker Desktop 실행
+   - Settings → Features in development
+   - "Use Rosetta for x86/amd64 emulation on Apple Silicon" 활성화 (권장)
+
+3. 빌드 재시도:
+   ```bash
+   # 기존 이미지 삭제
+   docker-compose down
+   docker system prune -a -f
+
+   # 재빌드
+   export DOCKER_BUILDKIT=1
+   docker-compose up --build
+   ```
+
+4. 그래도 실패하면 상세 로그 확인:
+   ```bash
+   docker-compose build --no-cache --progress=plain
+   ```
+
+### 2. "division by zero" 에러
 
 **원인:** 캐시가 비어있거나 초기화되지 않음
 

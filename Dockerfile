@@ -1,5 +1,5 @@
-# Python 3.11 slim 이미지 사용
-FROM python:3.11-slim
+# Python 3.11 slim 이미지 사용 (Apple Silicon Mac 호환성)
+FROM --platform=linux/amd64 python:3.11-slim
 
 # 작업 디렉토리 설정
 WORKDIR /app
