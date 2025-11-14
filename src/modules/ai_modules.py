@@ -115,6 +115,12 @@ except Exception as e:
     logger.warning("⚠️  Redis 없이 계속 진행합니다. 캐싱 기능이 비활성화됩니다.")
     redis_client = None
 
+# 전역 캐시 변수 초기화
+cached_titles = []
+cached_texts = []
+cached_urls = []
+cached_dates = []
+
 # 단어 명사화 함수.
 def transformed_query(content):
     # 중복된 단어를 제거한 명사를 담을 리스트
