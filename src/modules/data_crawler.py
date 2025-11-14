@@ -48,14 +48,16 @@ from IPython.display import display, HTML
 from rank_bm25 import BM25Okapi
 from difflib import SequenceMatcher
 from pymongo import MongoClient
+from dotenv import load_dotenv
 
-# Pinecone API 키와 인덱스 이름 선언
-#pinecone_api_key = 'cd22a6ee-0b74-4e9d-af1b-a1e83917d39e'
-#index_name = 'db1'
-pinecone_api_key='pcsk_3pp5QX_EeyfanpYE8u1G2hKkyLnfhWQMUHvdbUJeBZdULHaFMV5j67XDQwqXDUCBtFLYpt'
-index_name = 'info'
-# Upstage API 키 선언
-upstage_api_key = 'up_6hq78Et2phdvQWCMQLccIVpWJDF5R' 
+# .env 파일에서 환경변수 로드
+load_dotenv()
+
+# Pinecone API 키와 인덱스 이름 (.env에서 로드)
+pinecone_api_key = os.getenv('PINECONE_API_KEY')
+index_name = os.getenv('PINECONE_INDEX_NAME', 'info')
+# Upstage API 키 (.env에서 로드)
+upstage_api_key = os.getenv('UPSTAGE_API_KEY')
 
 
 # Pinecone API 설정 및 초기화
@@ -65,7 +67,7 @@ def get_korean_time():
     return datetime.now(pytz.timezone('Asia/Seoul'))
 
 # mongodb 연결, client로
-client = MongoClient("mongodb://localhost:27017/")
+client = MongoClient("mongodb://mongodb:27017/")
 
 db = client["knu_chatbot"]
 collection = db["notice_collection"]
@@ -765,14 +767,16 @@ from IPython.display import display, HTML
 from rank_bm25 import BM25Okapi
 from difflib import SequenceMatcher
 from pymongo import MongoClient
+from dotenv import load_dotenv
 
-# Pinecone API 키와 인덱스 이름 선언
-#pinecone_api_key = 'cd22a6ee-0b74-4e9d-af1b-a1e83917d39e'
-#index_name = 'db1'
-pinecone_api_key='pcsk_3pp5QX_EeyfanpYE8u1G2hKkyLnfhWQMUHvdbUJeBZdULHaFMV5j67XDQwqXDUCBtFLYpt'
-index_name = 'info'
-# Upstage API 키 선언
-upstage_api_key = 'up_6hq78Et2phdvQWCMQLccIVpWJDF5R'
+# .env 파일에서 환경변수 로드
+load_dotenv()
+
+# Pinecone API 키와 인덱스 이름 (.env에서 로드)
+pinecone_api_key = os.getenv('PINECONE_API_KEY')
+index_name = os.getenv('PINECONE_INDEX_NAME', 'info')
+# Upstage API 키 (.env에서 로드)
+upstage_api_key = os.getenv('UPSTAGE_API_KEY')
 
 
 # Pinecone API 설정 및 초기화
@@ -782,7 +786,7 @@ def get_korean_time():
     return datetime.now(pytz.timezone('Asia/Seoul'))
 
 # mongodb 연결, client로
-client = MongoClient("mongodb://localhost:27017/")
+client = MongoClient("mongodb://mongodb:27017/")
 
 db = client["knu_chatbot"]
 collection = db["notice_collection"]
