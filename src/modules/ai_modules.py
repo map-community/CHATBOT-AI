@@ -363,15 +363,33 @@ def fetch_titles_from_pinecone():
 def initialize_cache():
     global cached_titles, cached_texts, cached_urls, cached_dates
 
-    # Pinecone에서 데이터를 가져옴
-    cached_titles, cached_texts, cached_urls, cached_dates = fetch_titles_from_pinecone()
+    try:
+        logger.info("🔄 캐시 초기화 시작...")
 
-    # 데이터를 Redis에 저장 (직렬화, 덮어쓰기)
-    redis_client.set('pinecone_metadata', pickle.dumps((cached_titles, cached_texts, cached_urls, cached_dates)))
+        # Pinecone에서 데이터를 가져옴
+        cached_titles, cached_texts, cached_urls, cached_dates = fetch_titles_from_pinecone()
+        logger.info(f"✅ Pinecone에서 {len(cached_titles)}개 문서 메타데이터를 가져왔습니다.")
 
-    # Redis 데이터를 글로벌 변수에 로드
-    cached_data = redis_client.get('pinecone_metadata')
-    cached_titles, cached_texts, cached_urls, cached_dates = pickle.loads(cached_data)
+        # Redis에 저장 시도
+        if redis_client is not None:
+            try:
+                redis_client.set('pinecone_metadata', pickle.dumps((cached_titles, cached_texts, cached_urls, cached_dates)))
+                logger.info("✅ Redis에 캐시 데이터를 저장했습니다.")
+            except Exception as e:
+                logger.warning(f"⚠️  Redis 저장 실패 (메모리 캐시만 사용): {e}")
+        else:
+            logger.warning("⚠️  Redis 미사용 (메모리 캐시만 사용)")
+
+        logger.info(f"✅ 캐시 초기화 완료! (titles: {len(cached_titles)}, texts: {len(cached_texts)})")
+
+    except Exception as e:
+        logger.error(f"❌ 캐시 초기화 실패: {e}", exc_info=True)
+        # 에러가 발생해도 빈 리스트로 초기화하여 앱이 크래시하지 않도록 함
+        cached_titles = []
+        cached_texts = []
+        cached_urls = []
+        cached_dates = []
+        logger.warning("⚠️  캐시를 빈 상태로 초기화했습니다.")
 
                     #################################   24.11.16기준 정확도 측정완료 #####################################################
 ######################################################################################################################
