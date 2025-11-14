@@ -151,7 +151,17 @@ def extract_text_and_date_from_url(urls):
     return all_data
 
 #### 크롤링한 공지사항 정보 document_data에 저장
+print(f"\n{'='*80}")
+print(f"🌐 경북대 컴퓨터학부 공지사항 크롤링 시작")
+print(f"📋 크롤링할 URL 개수: {len(urls)}개")
+print(f"{'='*80}\n")
+print("🔄 웹 크롤링 중... (수 분 소요될 수 있습니다)\n")
+
 document_data = extract_text_and_date_from_url(urls)
+
+print(f"\n{'='*80}")
+print(f"✅ 웹 크롤링 완료! {len(document_data)}개 공지사항 수집됨")
+print(f"{'='*80}\n")
 ################################################################################################
 
 # 텍스트 분리기 초기화
@@ -703,13 +713,24 @@ for title, doc, image, date, url in seminar_data:
 
 # 밑에 코드는 초기에 한 번만 돌림. 실제 서버 돌릴 때는 사용 X
 # Dense Retrieval (Upstage 임베딩)
+print(f"\n{'='*80}")
+print(f"📊 임베딩 생성 시작: {len(texts)}개 문서")
+print(f"{'='*80}\n")
+
 embeddings = UpstageEmbeddings(
   api_key=upstage_api_key,
   model="solar-embedding-1-large-passage"  # 문서 임베딩용 모델
 ) # Upstage API 키 사용
+
+print("🔄 Upstage API로 임베딩 생성 중... (시간이 걸릴 수 있습니다)")
 dense_doc_vectors = np.array(embeddings.embed_documents(texts))  # 문서 임베딩
+print(f"✅ 임베딩 생성 완료! {len(dense_doc_vectors)}개 벡터 생성됨\n")
 
 # Pinecone에 문서 임베딩 저장 (문서 텍스트와 URL, 날짜를 메타데이터에 포함)
+print(f"{'='*80}")
+print(f"📤 Pinecone 업로드 시작: {len(dense_doc_vectors)}개 벡터")
+print(f"{'='*80}\n")
+
 for i, embedding in enumerate(dense_doc_vectors):
     metadata = {
         "title": titles[i],
@@ -717,7 +738,16 @@ for i, embedding in enumerate(dense_doc_vectors):
         "url": doc_urls[i],  # URL 메타데이터
         "date": doc_dates[i]  # 날짜 메타데이터 추가
     }
-    index.upsert([(str(i), embedding.tolist(), metadata)])  # 문서 ID, 임베딩 벡터, 메타데이터 추가# %pip install -U langchain-community
+    index.upsert([(str(i), embedding.tolist(), metadata)])  # 문서 ID, 임베딩 벡터, 메타데이터 추가
+
+    # 진행 상황 출력 (50개마다)
+    if (i + 1) % 50 == 0:
+        progress = (i + 1) / len(dense_doc_vectors) * 100
+        print(f"⏳ 진행: {i + 1}/{len(dense_doc_vectors)} ({progress:.1f}%)")
+
+print(f"\n{'='*80}")
+print(f"✅ Pinecone 업로드 완료! 총 {len(dense_doc_vectors)}개 벡터 업로드됨")
+print(f"{'='*80}\n")# %pip install -U langchain-community
 # %pip install beautifulsoup4 requests scikit-learn pinecone-client numpy langchain-upstage faiss-cpu
 # %pip install langchain
 # %pip install nltk
@@ -870,7 +900,17 @@ def extract_text_and_date_from_url(urls):
     return all_data
 
 #### 크롤링한 공지사항 정보 document_data에 저장
+print(f"\n{'='*80}")
+print(f"🌐 경북대 컴퓨터학부 공지사항 크롤링 시작")
+print(f"📋 크롤링할 URL 개수: {len(urls)}개")
+print(f"{'='*80}\n")
+print("🔄 웹 크롤링 중... (수 분 소요될 수 있습니다)\n")
+
 document_data = extract_text_and_date_from_url(urls)
+
+print(f"\n{'='*80}")
+print(f"✅ 웹 크롤링 완료! {len(document_data)}개 공지사항 수집됨")
+print(f"{'='*80}\n")
 ################################################################################################
 
 # 텍스트 분리기 초기화
@@ -1422,13 +1462,24 @@ for title, doc, image, date, url in seminar_data:
 
 # 밑에 코드는 초기에 한 번만 돌림. 실제 서버 돌릴 때는 사용 X
 # Dense Retrieval (Upstage 임베딩)
+print(f"\n{'='*80}")
+print(f"📊 임베딩 생성 시작: {len(texts)}개 문서")
+print(f"{'='*80}\n")
+
 embeddings = UpstageEmbeddings(
   api_key=upstage_api_key,
   model="solar-embedding-1-large-passage"  # 문서 임베딩용 모델
 ) # Upstage API 키 사용
+
+print("🔄 Upstage API로 임베딩 생성 중... (시간이 걸릴 수 있습니다)")
 dense_doc_vectors = np.array(embeddings.embed_documents(texts))  # 문서 임베딩
+print(f"✅ 임베딩 생성 완료! {len(dense_doc_vectors)}개 벡터 생성됨\n")
 
 # Pinecone에 문서 임베딩 저장 (문서 텍스트와 URL, 날짜를 메타데이터에 포함)
+print(f"{'='*80}")
+print(f"📤 Pinecone 업로드 시작: {len(dense_doc_vectors)}개 벡터")
+print(f"{'='*80}\n")
+
 for i, embedding in enumerate(dense_doc_vectors):
     metadata = {
         "title": titles[i],
@@ -1437,3 +1488,12 @@ for i, embedding in enumerate(dense_doc_vectors):
         "date": doc_dates[i]  # 날짜 메타데이터 추가
     }
     index.upsert([(str(i), embedding.tolist(), metadata)])  # 문서 ID, 임베딩 벡터, 메타데이터 추가
+
+    # 진행 상황 출력 (50개마다)
+    if (i + 1) % 50 == 0:
+        progress = (i + 1) / len(dense_doc_vectors) * 100
+        print(f"⏳ 진행: {i + 1}/{len(dense_doc_vectors)} ({progress:.1f}%)")
+
+print(f"\n{'='*80}")
+print(f"✅ Pinecone 업로드 완료! 총 {len(dense_doc_vectors)}개 벡터 업로드됨")
+print(f"{'='*80}\n")
