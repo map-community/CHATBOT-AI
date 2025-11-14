@@ -1285,7 +1285,9 @@ def get_ai_message(question):
     top_doc, query_noun = best_docs(question)  # 가장 유사한 문서 가져오기
     best_f_time=time.time()-best_time
     print(f"best_docs 뽑는 시간:{best_f_time}")
-    if not query_noun:
+
+    # query_noun이 없거나 top_doc이 비어있는 경우 처리
+    if not query_noun or not top_doc or len(top_doc) == 0:
         notice_url = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_1"
         not_in_notices_response = {
             "answer": "해당 질문은 공지사항에 없는 내용입니다.\n 자세한 사항은 공지사항을 살펴봐주세요.",
