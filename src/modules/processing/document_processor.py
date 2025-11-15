@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import CrawlerConfig
 from constants import EMPTY_CONTENT
 from processing.multimodal_processor import MultimodalProcessor
+from utils.logging_config import get_logger
 
 
 class CharacterTextSplitter:
@@ -227,49 +228,77 @@ class DocumentProcessor:
             - embedding_items: [(text, metadata), ...] 형식의 리스트
             - new_count: 새로 처리된 문서 개수
         """
+        logger = get_logger()
+
         if not self.enable_multimodal or self.multimodal_processor is None:
-            print("⚠️  멀티모달 처리가 비활성화되어 있습니다.")
+            logger.warning("⚠️  멀티모달 처리가 비활성화되어 있습니다.")
             return [], 0
 
         embedding_items = []
         new_count = 0
 
         for title, text, image_list, attachment_list, date, url in document_data:
-            # 중복 체크 (이미지 리스트의 첫 번째 이미지로 체크)
-            first_image = image_list[0] if image_list else None
-            if self.is_duplicate(title, first_image):
-                print(f"⏭️  중복 문서 스킵: {title}")
+            try:
+                # 중복 체크 (이미지 리스트의 첫 번째 이미지로 체크)
+                first_image = image_list[0] if image_list else None
+                if self.is_duplicate(title, first_image):
+                    logger.log_post_skipped(category, title, reason="중복")
+                    continue
+
+                new_count += 1
+
+                # 텍스트 청크로 분할
+                text_chunks = []
+                text_length = 0
+                if isinstance(text, str) and text.strip():
+                    text_chunks = self.text_splitter.split_text(text)
+                    text_length = len(text)
+                else:
+                    text_chunks = []  # 텍스트 없으면 빈 리스트
+
+                # 멀티모달 콘텐츠 생성 (이미지 OCR, 첨부파일 파싱 포함)
+                multimodal_content = self.multimodal_processor.create_multimodal_content(
+                    title=title,
+                    url=url,
+                    date=date,
+                    text_chunks=text_chunks,
+                    image_urls=image_list if image_list else [],
+                    attachment_urls=attachment_list if attachment_list else [],
+                    category=category,
+                    logger=logger
+                )
+
+                # 임베딩 아이템으로 변환
+                items = multimodal_content.to_embedding_items()
+
+                # 각 아이템에 카테고리 정보 추가
+                for text, metadata in items:
+                    metadata["category"] = category
+                    embedding_items.append((text, metadata))
+
+                # MongoDB에 처리 완료 표시
+                self.mark_as_processed(title, first_image)
+
+                # 성공 로그
+                logger.log_post_success(
+                    category=category,
+                    title=title,
+                    url=url,
+                    text_length=text_length,
+                    image_count=len(image_list) if image_list else 0,
+                    attachment_count=len(attachment_list) if attachment_list else 0,
+                    embedding_items=len(items)
+                )
+
+            except Exception as e:
+                # 실패 로그
+                logger.log_post_failure(
+                    category=category,
+                    title=title,
+                    url=url,
+                    error=str(e)
+                )
+                # 계속 진행 (한 문서 실패해도 나머지는 처리)
                 continue
-
-            new_count += 1
-
-            # 텍스트 청크로 분할
-            text_chunks = []
-            if isinstance(text, str) and text.strip():
-                text_chunks = self.text_splitter.split_text(text)
-            else:
-                text_chunks = []  # 텍스트 없으면 빈 리스트
-
-            # 멀티모달 콘텐츠 생성 (이미지 OCR, 첨부파일 파싱 포함)
-            multimodal_content = self.multimodal_processor.create_multimodal_content(
-                title=title,
-                url=url,
-                date=date,
-                text_chunks=text_chunks,
-                image_urls=image_list if image_list else [],
-                attachment_urls=attachment_list if attachment_list else []
-            )
-
-            # 임베딩 아이템으로 변환
-            items = multimodal_content.to_embedding_items()
-
-            # 각 아이템에 카테고리 정보 추가
-            for text, metadata in items:
-                metadata["category"] = category
-                embedding_items.append((text, metadata))
-
-            # MongoDB에 처리 완료 표시
-            self.mark_as_processed(title, first_image)
-            print(f"✅ 새 문서 처리 (멀티모달): {title} - {len(items)}개 임베딩 아이템")
 
         return embedding_items, new_count

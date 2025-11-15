@@ -168,12 +168,14 @@ class MultimodalProcessor:
 
         logger.info(f"MultimodalProcessor 초기화 - 이미지: {self.enable_image}, 첨부파일: {self.enable_attachment}")
 
-    def process_images(self, image_urls: List[str]) -> List[Dict]:
+    def process_images(self, image_urls: List[str], logger=None, category: str = "notice") -> List[Dict]:
         """
         이미지 리스트 처리 (OCR)
 
         Args:
             image_urls: 이미지 URL 리스트
+            logger: 커스텀 로거
+            category: 카테고리
 
         Returns:
             [{"url": "...", "ocr_text": "...", "description": "..."}, ...]
@@ -188,12 +190,17 @@ class MultimodalProcessor:
                 # 캐시 확인
                 cached = self._get_from_cache(img_url)
                 if cached:
-                    logger.info(f"✅ 캐시에서 이미지 로드: {img_url}")
                     results.append(cached)
+                    if logger:
+                        logger.log_multimodal_detail(
+                            "이미지 OCR (캐시)",
+                            img_url,
+                            success=True,
+                            detail=f"{len(cached.get('ocr_text', ''))}자"
+                        )
                     continue
 
                 # Upstage OCR API 호출
-                logger.info(f"🖼️  이미지 처리 중: {img_url}")
                 ocr_result = self.upstage_client.extract_text_from_image_url(img_url)
 
                 if ocr_result and ocr_result["text"]:
@@ -208,22 +215,42 @@ class MultimodalProcessor:
                     # 캐시에 저장
                     self._save_to_cache(img_url, content)
 
-                    logger.info(f"✅ 이미지 OCR 완료: {len(ocr_result['text'])}자")
+                    if logger:
+                        logger.log_multimodal_detail(
+                            "이미지 OCR",
+                            img_url,
+                            success=True,
+                            detail=f"{len(ocr_result['text'])}자 추출"
+                        )
                 else:
-                    logger.warning(f"⚠️  이미지에서 텍스트 추출 실패: {img_url}")
+                    if logger:
+                        logger.log_multimodal_detail(
+                            "이미지 OCR",
+                            img_url,
+                            success=False,
+                            detail="텍스트 추출 실패"
+                        )
 
             except Exception as e:
-                logger.error(f"❌ 이미지 처리 오류 ({img_url}): {e}")
+                if logger:
+                    logger.log_multimodal_detail(
+                        "이미지 OCR",
+                        img_url,
+                        success=False,
+                        detail=str(e)
+                    )
                 # 오류 발생해도 다음 이미지 계속 처리
 
         return results
 
-    def process_attachments(self, attachment_urls: List[str]) -> List[Dict]:
+    def process_attachments(self, attachment_urls: List[str], logger=None, category: str = "notice") -> List[Dict]:
         """
         첨부파일 리스트 처리 (Document Parse)
 
         Args:
             attachment_urls: 첨부파일 URL 리스트
+            logger: 커스텀 로거
+            category: 카테고리
 
         Returns:
             [{"url": "...", "type": "pdf", "text": "..."}, ...]
@@ -235,24 +262,28 @@ class MultimodalProcessor:
 
         for att_url in attachment_urls:
             try:
-                # 파일 타입 확인
-                if not self.upstage_client.is_document_url(att_url):
-                    logger.warning(f"지원하지 않는 파일 타입: {att_url}")
-                    continue
+                # 파일 타입 확인 (download.php 같은 동적 URL은 Content-Type으로 확인)
+                # is_document_url은 확장자 체크이므로 일단 시도
+                # upstage_client에서 Content-Type 기반 체크함
 
                 # 캐시 확인
                 cached = self._get_from_cache(att_url)
                 if cached:
-                    logger.info(f"✅ 캐시에서 첨부파일 로드: {att_url}")
                     results.append(cached)
+                    if logger:
+                        logger.log_multimodal_detail(
+                            "문서 파싱 (캐시)",
+                            att_url,
+                            success=True,
+                            detail=f"{cached.get('type', 'unknown')} - {len(cached.get('text', ''))}자"
+                        )
                     continue
 
                 # Upstage Document Parse API 호출
-                logger.info(f"📄 첨부파일 처리 중: {att_url}")
                 parse_result = self.upstage_client.parse_document_from_url(att_url)
 
                 if parse_result and parse_result["text"]:
-                    file_type = Path(att_url).suffix.lower()[1:]  # .pdf -> pdf
+                    file_type = Path(att_url).suffix.lower()[1:] if Path(att_url).suffix else "unknown"
 
                     content = {
                         "url": att_url,
@@ -265,12 +296,30 @@ class MultimodalProcessor:
                     # 캐시에 저장
                     self._save_to_cache(att_url, content)
 
-                    logger.info(f"✅ 첨부파일 파싱 완료: {len(parse_result['text'])}자")
+                    if logger:
+                        logger.log_multimodal_detail(
+                            "문서 파싱",
+                            att_url,
+                            success=True,
+                            detail=f"{file_type} - {len(parse_result['text'])}자 추출"
+                        )
                 else:
-                    logger.warning(f"⚠️  첨부파일 파싱 실패: {att_url}")
+                    if logger:
+                        logger.log_multimodal_detail(
+                            "문서 파싱",
+                            att_url,
+                            success=False,
+                            detail="텍스트 추출 실패"
+                        )
 
             except Exception as e:
-                logger.error(f"❌ 첨부파일 처리 오류 ({att_url}): {e}")
+                if logger:
+                    logger.log_multimodal_detail(
+                        "문서 파싱",
+                        att_url,
+                        success=False,
+                        detail=str(e)
+                    )
                 # 오류 발생해도 다음 파일 계속 처리
 
         return results
@@ -308,7 +357,9 @@ class MultimodalProcessor:
         date: str,
         text_chunks: List[str],
         image_urls: List[str],
-        attachment_urls: List[str]
+        attachment_urls: List[str],
+        category: str = "notice",
+        logger=None
     ) -> MultimodalContent:
         """
         멀티모달 콘텐츠 생성 (통합 인터페이스)
@@ -320,6 +371,8 @@ class MultimodalProcessor:
             text_chunks: 텍스트 청크 리스트
             image_urls: 이미지 URL 리스트
             attachment_urls: 첨부파일 URL 리스트
+            category: 카테고리
+            logger: 커스텀 로거 (CrawlerLogger)
 
         Returns:
             MultimodalContent 객체
@@ -332,26 +385,22 @@ class MultimodalProcessor:
 
         # 2. 이미지 처리 및 추가
         if image_urls:
-            logger.info(f"🖼️  이미지 {len(image_urls)}개 처리 시작")
-            image_contents = self.process_images(image_urls)
+            image_contents = self.process_images(image_urls, logger=logger, category=category)
             for img_content in image_contents:
                 content.add_image_content(
                     url=img_content["url"],
                     ocr_text=img_content.get("ocr_text", ""),
                     description=img_content.get("description", "")
                 )
-            logger.info(f"✅ 이미지 처리 완료: {len(image_contents)}개")
 
         # 3. 첨부파일 처리 및 추가
         if attachment_urls:
-            logger.info(f"📄 첨부파일 {len(attachment_urls)}개 처리 시작")
-            attachment_contents = self.process_attachments(attachment_urls)
+            attachment_contents = self.process_attachments(attachment_urls, logger=logger, category=category)
             for att_content in attachment_contents:
                 content.add_attachment_content(
                     url=att_content["url"],
                     file_type=att_content["type"],
                     text=att_content["text"]
                 )
-            logger.info(f"✅ 첨부파일 처리 완료: {len(attachment_contents)}개")
 
         return content
