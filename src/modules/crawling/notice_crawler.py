@@ -51,11 +51,8 @@ class NoticeCrawler(BaseCrawler):
 
             paragraphs = soup.find('div', id='bo_v_con')
             if paragraphs:
-                # 텍스트 추출
-                text_content = "\n".join([
-                    element.get_text(strip=True)
-                    for element in paragraphs.find_all(['p', 'div', 'li'])
-                ])
+                # 텍스트 추출 (get_text()로 모든 텍스트 추출)
+                text_content = paragraphs.get_text(separator='\n', strip=True)
 
                 if text_content.strip() == "":
                     text_content = ""
@@ -67,18 +64,22 @@ class NoticeCrawler(BaseCrawler):
                         # 상대 경로를 절대 경로로 변환
                         if img_src.startswith('/'):
                             img_src = f"https://cse.knu.ac.kr{img_src}"
+                        elif not img_src.startswith('http'):
+                            img_src = f"https://cse.knu.ac.kr/{img_src}"
                         image_content.append(img_src)
 
             # 첨부파일 URL 추출 (게시판 첨부파일 영역에서)
             attachment_section = soup.find('section', id='bo_v_file') or soup.find('div', class_='bo_v_file')
             if attachment_section:
-                for link in attachment_section.find_all('a', href=True):
+                for link in attachment_section.find_all('a', href=True, class_='view_file_download'):
                     href = link['href']
-                    # 다운로드 링크 필터링
-                    if 'download.php' in href or any(ext in href.lower() for ext in ['.pdf', '.docx', '.hwp', '.pptx', '.xlsx']):
+                    # 다운로드 링크만 추출 (download.php 또는 파일 확장자 포함)
+                    if 'download.php' in href or any(ext in href.lower() for ext in ['.pdf', '.docx', '.hwp', '.pptx', '.xlsx', '.doc', '.ppt', '.xls']):
                         # 상대 경로를 절대 경로로 변환
                         if href.startswith('/'):
                             href = f"https://cse.knu.ac.kr{href}"
+                        elif not href.startswith('http'):
+                            href = f"https://cse.knu.ac.kr/{href}"
                         attachment_content.append(href)
 
             # 날짜 추출
