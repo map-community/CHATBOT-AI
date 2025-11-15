@@ -44,22 +44,6 @@ logger = logging.getLogger(__name__)
 # .env 파일 로드
 load_dotenv()
 
-# 환경변수에서 API 키 읽기
-pinecone_api_key = os.getenv('PINECONE_API_KEY')
-index_name = os.getenv('PINECONE_INDEX_NAME', 'info')  # 기본값 'info'
-upstage_api_key = os.getenv('UPSTAGE_API_KEY')
-
-# API 키 검증
-if not pinecone_api_key:
-    logger.error("❌ PINECONE_API_KEY가 .env 파일에 설정되지 않았습니다!")
-    raise ValueError("PINECONE_API_KEY가 필요합니다. .env 파일을 확인하세요.")
-
-if not upstage_api_key:
-    logger.error("❌ UPSTAGE_API_KEY가 .env 파일에 설정되지 않았습니다!")
-    raise ValueError("UPSTAGE_API_KEY가 필요합니다. .env 파일을 확인하세요.")
-
-logger.info("✅ API 키를 .env 파일에서 성공적으로 로드했습니다.")
-
 # Mecab import (logger 정의 이후)
 try:
     from konlpy.tag import Mecab
@@ -71,55 +55,14 @@ except Exception as e:
     MECAB_AVAILABLE = False
     Mecab = None
 
-# Pinecone API 설정 및 초기화
-try:
-    logger.info("🔄 Pinecone에 연결 중...")
-    pc = Pinecone(api_key=pinecone_api_key)
-    index = pc.Index(index_name)
-    logger.info(f"✅ Pinecone 인덱스 '{index_name}'에 연결되었습니다.")
-except Exception as e:
-    logger.error(f"❌ Pinecone 연결 실패: {e}")
-    raise
+# StorageManager import
+from modules.storage_manager import get_storage_manager
+
+# StorageManager 싱글톤 인스턴스 가져오기
+storage = get_storage_manager()
 
 def get_korean_time():
     return datetime.now(pytz.timezone('Asia/Seoul'))
-
-# MongoDB 연결
-try:
-    logger.info("🔄 MongoDB에 연결 중...")
-    mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
-    client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
-    # 연결 테스트
-    client.admin.command('ping')
-    db = client["knu_chatbot"]
-    collection = db["notice_collection"]
-    logger.info("✅ MongoDB에 연결되었습니다.")
-except Exception as e:
-    logger.error(f"❌ MongoDB 연결 실패: {e}")
-    logger.warning("⚠️  MongoDB 없이 계속 진행합니다. 일부 기능이 제한될 수 있습니다.")
-    client = None
-    db = None
-    collection = None
-
-# Redis 연결
-try:
-    logger.info("🔄 Redis에 연결 중...")
-    redis_host = os.getenv('REDIS_HOST', 'localhost')
-    redis_port = int(os.getenv('REDIS_PORT', 6379))
-    redis_client = redis.StrictRedis(host=redis_host, port=redis_port, db=0, socket_connect_timeout=5)
-    # 연결 테스트
-    redis_client.ping()
-    logger.info("✅ Redis에 연결되었습니다.")
-except Exception as e:
-    logger.error(f"❌ Redis 연결 실패: {e}")
-    logger.warning("⚠️  Redis 없이 계속 진행합니다. 캐싱 기능이 비활성화됩니다.")
-    redis_client = None
-
-# 전역 캐시 변수 초기화
-cached_titles = []
-cached_texts = []
-cached_urls = []
-cached_dates = []
 
 # 단어 명사화 함수.
 def transformed_query(content):
@@ -333,17 +276,20 @@ def transformed_query(content):
 ###################################################################################################
 
 
-# Dense Retrieval (Upstage 임베딩)
-embeddings = UpstageEmbeddings(
-  api_key=upstage_api_key,
-  model="solar-embedding-1-large-query"  # 질문 임베딩용 모델
-) # Upstage API 키 사용
+# Dense Retrieval (Upstage 임베딩) - Lazy initialization으로 함수 내에서 생성하도록 변경
+# embeddings 객체는 필요할 때 get_embeddings() 함수를 통해 가져옵니다.
+def get_embeddings():
+    """Upstage Embeddings 객체 반환 (Lazy initialization)"""
+    return UpstageEmbeddings(
+        api_key=storage.upstage_api_key,
+        model="solar-embedding-1-large-query"  # 질문 임베딩용 모델
+    )
 # dense_doc_vectors = np.array(embeddings.embed_documents(texts))  # 문서 임베딩
 
 
 def fetch_titles_from_pinecone():
     # 메타데이터 기반 검색을 위한 임의 쿼리
-    query_results = index.query(
+    query_results = storage.pinecone_index.query(
         vector=[0] * 4096,  # Pinecone에서 사용 중인 벡터 크기에 맞게 0으로 채운 벡터
         top_k=10000,        # 충분히 큰 값으로 설정하여 모든 벡터 가져오기
         include_metadata=True  # 메타데이터 포함
@@ -361,34 +307,32 @@ def fetch_titles_from_pinecone():
 # 캐싱 데이터 초기화 함수
 
 def initialize_cache():
-    global cached_titles, cached_texts, cached_urls, cached_dates
-
     try:
         logger.info("🔄 캐시 초기화 시작...")
 
         # Pinecone에서 데이터를 가져옴
-        cached_titles, cached_texts, cached_urls, cached_dates = fetch_titles_from_pinecone()
-        logger.info(f"✅ Pinecone에서 {len(cached_titles)}개 문서 메타데이터를 가져왔습니다.")
+        storage.cached_titles, storage.cached_texts, storage.cached_urls, storage.cached_dates = fetch_titles_from_pinecone()
+        logger.info(f"✅ Pinecone에서 {len(storage.cached_titles)}개 문서 메타데이터를 가져왔습니다.")
 
         # Redis에 저장 시도
-        if redis_client is not None:
+        if storage.redis_client is not None:
             try:
-                redis_client.set('pinecone_metadata', pickle.dumps((cached_titles, cached_texts, cached_urls, cached_dates)))
+                storage.redis_client.set('pinecone_metadata', pickle.dumps((storage.cached_titles, storage.cached_texts, storage.cached_urls, storage.cached_dates)))
                 logger.info("✅ Redis에 캐시 데이터를 저장했습니다.")
             except Exception as e:
                 logger.warning(f"⚠️  Redis 저장 실패 (메모리 캐시만 사용): {e}")
         else:
             logger.warning("⚠️  Redis 미사용 (메모리 캐시만 사용)")
 
-        logger.info(f"✅ 캐시 초기화 완료! (titles: {len(cached_titles)}, texts: {len(cached_texts)})")
+        logger.info(f"✅ 캐시 초기화 완료! (titles: {len(storage.cached_titles)}, texts: {len(storage.cached_texts)})")
 
     except Exception as e:
         logger.error(f"❌ 캐시 초기화 실패: {e}", exc_info=True)
         # 에러가 발생해도 빈 리스트로 초기화하여 앱이 크래시하지 않도록 함
-        cached_titles = []
-        cached_texts = []
-        cached_urls = []
-        cached_dates = []
+        storage.cached_titles = []
+        storage.cached_texts = []
+        storage.cached_urls = []
+        storage.cached_dates = []
         logger.warning("⚠️  캐시를 빈 상태로 초기화했습니다.")
 
                     #################################   24.11.16기준 정확도 측정완료 #####################################################
@@ -468,49 +412,7 @@ def adjust_date_similarity(similarity, date_str,query_nouns):
     return similarity * weight
 
 # 사용자 질문에서 추출한 명사와 각 문서 제목에 대한 유사도를 조정하는 함수
-'''
-def adjust_similarity_scores(query_noun, title,texts,similarities):
-
-    for idx, titl in enumerate(title):
-        # 제목에 포함된 query_noun 요소의 개수를 센다
-
-        matching_noun = [noun for noun in query_noun if noun in titl]
-        if texts[idx] == "No content":
-            if "국가장학금" in titl and "국가장학금" in query_noun:
-              similarities[idx]*=5.0
-            else:
-              similarities[idx] *=1.5 # 본문이 "No content"인 경우 유사도를 높임
-        for noun in matching_noun:
-            similarities[idx] += len(noun)*0.21
-            if re.search(r'\d', noun):  # 숫자가 포함된 단어 확인
-                if noun in title:  # 본문에도 숫자 포함 단어가 있는 경우 추가 조정
-                    similarities[idx] += len(noun)*0.22
-                else:
-                    similarities[idx]+=len(noun)*0.19
-        # query_noun에 "대학원"이 없고 제목에 "대학원"이 포함된 경우 유사도를 0.1 감소
-        keywords = ['대학원', '대학원생']
-        # 조건 1: 둘 다 키워드 포함
-        if any(keyword in query_noun for keyword in keywords) and any(keyword in titl for keyword in keywords):
-            similarities[idx] += 2.0
-        # 조건 2: query_noun에 없고, title에만 키워드가 포함된 경우
-        if not any(keyword in query_noun for keyword in keywords) and any(keyword in titl for keyword in keywords):
-            similarities[idx] -= 2.0
-        if not any(keyword in query_noun for keyword in["현장", "실습", "현장실습"]) and any(keyword in titl for keyword in ["현장실습","대체","기준"]):
-            similarities[idx]-=2
-        if '외국어' in query_noun and '강좌' in query_noun and '신청' in titl:
-            similarities[idx]-=1.0
-        if "외국인" not in query_noun and "외국인" in titl:
-            similarities[idx]-=2.0
-        if texts[idx] == "No content":
-            similarities[idx] *=1.45# 본문이 "No content"인 경우 유사도를 높임
-        if '마일리지' in query_noun and '마일리지' in texts[idx]:
-            similarities[idx]+=2
-        if '인컴' in query_noun and any(keyword in titl for keyword in ['인컴','인공지능컴퓨팅']):
-          similarities[idx]+=3
-        if '신입생' in query_noun and '수강신청' in query_noun and '신입생' in titl and '수강신청' in titl:
-          similarities[idx]+=1.5
-    return similarities
-'''
+# (이전 버전은 삭제되었습니다 - 최적화된 버전만 유지)
 
 def adjust_similarity_scores(query_noun, title, texts, similarities):
     query_noun_set = set(query_noun)
@@ -808,7 +710,7 @@ def best_docs(user_question):
       query_noun=transformed_query(user_question)
       query_noun_time=time.time()-noun_time
       print(f"명사화 변환 시간 : {query_noun_time}")
-      titles_from_pinecone, texts_from_pinecone, urls_from_pinecone, dates_from_pinecone = cached_titles, cached_texts, cached_urls, cached_dates
+      titles_from_pinecone, texts_from_pinecone, urls_from_pinecone, dates_from_pinecone = storage.cached_titles, storage.cached_texts, storage.cached_urls, storage.cached_dates
       if not query_noun:
         return None,None
       #######  최근 공지사항, 채용, 세미나, 행사, 특강의 단순한 정보를 요구하는 경우를 필터링 하기 위한 매커니즘 ########
@@ -881,10 +783,11 @@ def best_docs(user_question):
       ####################################################################################################
       dense_time=time.time()
       # 1. Dense Retrieval - Text 임베딩 기반 20개 문서 추출
+      embeddings = get_embeddings()  # Lazy initialization
       query_dense_vector = np.array(embeddings.embed_query(user_question))  # 사용자 질문 임베딩
 
       # Pinecone에서 텍스트에 대한 가장 유사한 벡터 20개 추출
-      pinecone_results_text = index.query(vector=query_dense_vector.tolist(), top_k=30, include_values=False, include_metadata=True)
+      pinecone_results_text = storage.pinecone_index.query(vector=query_dense_vector.tolist(), top_k=30, include_values=False, include_metadata=True)
       pinecone_similarities_text = [res['score'] for res in pinecone_results_text['matches']]
       pinecone_docs_text = [(res['metadata'].get('title', 'No Title'),
                             res['metadata'].get('date', 'No Date'),
@@ -1201,7 +1104,7 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
     if not relevant_docs:
       return None, None
 
-    llm = ChatUpstage(api_key=upstage_api_key)
+    llm = ChatUpstage(api_key=storage.upstage_api_key)
     relevant_docs_content=format_docs(relevant_docs)
     
     qa_chain = (
@@ -1285,7 +1188,7 @@ def question_valid(question, top_docs, query_noun):
     ### 질문의 명사화: '{query_noun}'
     """
 
-    llm = ChatUpstage(api_key=upstage_api_key)
+    llm = ChatUpstage(api_key=storage.upstage_api_key)
     response = llm.invoke(prompt)
 
     if "예" in response.content.strip():
@@ -1353,19 +1256,24 @@ def get_ai_message(question):
     final_url = top_docs[0][4]
     final_image = []
 
-    record = collection.find_one({"title" : final_title})
-    if record :
-        if(isinstance(record["image_url"], list)):
-          final_image.extend(record["image_url"])
+    # MongoDB 연결 확인 후 이미지 URL 조회
+    if storage.mongo_collection is not None:
+        record = storage.mongo_collection.find_one({"title" : final_title})
+        if record :
+            if(isinstance(record["image_url"], list)):
+              final_image.extend(record["image_url"])
+            else :
+              final_image.append(record["image_url"])
         else :
-          final_image.append(record["image_url"])
-    else :
-        print("일치하는 문서 존재 X")
-        final_score = 0
-        final_title = "No content"
-        final_date = "No content"
-        final_text = "No content"
-        final_url = "No URL"
+            print("일치하는 문서 존재 X")
+            final_score = 0
+            final_title = "No content"
+            final_date = "No content"
+            final_text = "No content"
+            final_url = "No URL"
+            final_image = ["No content"]
+    else:
+        logger.warning("⚠️  MongoDB 연결 없음 - 이미지 URL 조회 불가")
         final_image = ["No content"]
     valid_f_time=time.time()-valid_time
     print(f"질문 적합도 체크하는 시간: {valid_f_time}")
