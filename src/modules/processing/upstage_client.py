@@ -63,8 +63,9 @@ class UpstageClient:
         Returns:
             {
                 "text": "추출된 텍스트",
-                "pages": [...],  # 페이지별 정보
-                "metadata": {...}
+                "html": "HTML 형식",
+                "elements": [...],  # 구조화된 요소들
+                "source_url": "..."
             }
             실패 시 None
         """
@@ -77,45 +78,70 @@ class UpstageClient:
 
             logger.info(f"📄 Document Parse 시작: {url}")
 
-            # Upstage Document Parse API 호출
-            data = {
-                "document": url,  # URL 직접 전달
-                "ocr": "auto"  # OCR 자동 활성화
-            }
+            # URL에서 파일 다운로드 후 업로드
+            try:
+                # URL에서 파일 다운로드
+                file_response = requests.get(url, timeout=30)
+                if file_response.status_code != 200:
+                    logger.error(f"파일 다운로드 실패: {url}")
+                    return None
 
-            for attempt in range(self.max_retries):
-                try:
-                    response = requests.post(
-                        self.DOCUMENT_PARSE_URL,
-                        headers=self.headers,
-                        json=data,
-                        timeout=60
-                    )
+                # Upstage Document Parse API 호출 (파일 업로드 방식)
+                files = {
+                    "document": (Path(url).name, file_response.content)
+                }
+                data = {
+                    "ocr": "auto",  # OCR 자동 활성화
+                    "model": "document-parse"
+                }
 
-                    if response.status_code == 200:
-                        result = response.json()
+                for attempt in range(self.max_retries):
+                    try:
+                        response = requests.post(
+                            self.DOCUMENT_PARSE_URL,
+                            headers=self.headers,
+                            files=files,
+                            data=data,
+                            timeout=60
+                        )
 
-                        # 텍스트 추출
-                        extracted_text = self._extract_text_from_parse_result(result)
+                        if response.status_code == 200:
+                            result = response.json()
 
-                        logger.info(f"✅ Document Parse 성공: {len(extracted_text)}자 추출")
+                            # 텍스트 추출 (실제 API 응답 구조 반영)
+                            extracted_text = result.get("content", {}).get("text", "")
 
-                        return {
-                            "text": extracted_text,
-                            "raw_result": result,
-                            "source_url": url
-                        }
-                    else:
-                        logger.warning(f"Document Parse API 오류: {response.status_code}")
+                            if not extracted_text and "elements" in result:
+                                # elements에서 텍스트 추출
+                                extracted_text = "\n".join([
+                                    elem.get("content", {}).get("text", "")
+                                    for elem in result.get("elements", [])
+                                    if elem.get("content", {}).get("text")
+                                ])
 
-                except Exception as e:
-                    if attempt < self.max_retries - 1:
-                        wait_time = 2 ** attempt  # 지수 백오프
-                        logger.warning(f"재시도 {attempt + 1}/{self.max_retries} (대기: {wait_time}초)")
-                        time.sleep(wait_time)
-                    else:
-                        logger.error(f"Document Parse 실패: {e}")
-                        raise
+                            logger.info(f"✅ Document Parse 성공: {len(extracted_text)}자 추출")
+
+                            return {
+                                "text": extracted_text,
+                                "html": result.get("content", {}).get("html", ""),
+                                "elements": result.get("elements", []),
+                                "source_url": url
+                            }
+                        else:
+                            logger.warning(f"Document Parse API 오류: {response.status_code} - {response.text[:200]}")
+
+                    except Exception as e:
+                        if attempt < self.max_retries - 1:
+                            wait_time = 2 ** attempt
+                            logger.warning(f"재시도 {attempt + 1}/{self.max_retries} (대기: {wait_time}초)")
+                            time.sleep(wait_time)
+                        else:
+                            logger.error(f"Document Parse 실패: {e}")
+                            raise
+
+            except Exception as download_error:
+                logger.error(f"파일 다운로드 오류: {download_error}")
+                return None
 
             return None
 
@@ -134,7 +160,7 @@ class UpstageClient:
             {
                 "text": "추출된 텍스트",
                 "confidence": 0.95,
-                "language": "ko"
+                "words": [...]
             }
             실패 시 None
         """
@@ -147,48 +173,65 @@ class UpstageClient:
 
             logger.info(f"🖼️  OCR 시작: {url}")
 
-            # Upstage OCR API 호출
-            data = {
-                "document": url
-            }
+            # URL에서 이미지 다운로드
+            try:
+                file_response = requests.get(url, timeout=30)
+                if file_response.status_code != 200:
+                    logger.error(f"이미지 다운로드 실패: {url}")
+                    return None
 
-            for attempt in range(self.max_retries):
-                try:
-                    response = requests.post(
-                        self.OCR_URL,
-                        headers=self.headers,
-                        json=data,
-                        timeout=30
-                    )
+                # Upstage OCR API 호출 (파일 업로드 방식)
+                files = {
+                    "document": (Path(url).name, file_response.content)
+                }
+                data = {
+                    "model": "ocr"
+                }
 
-                    if response.status_code == 200:
-                        result = response.json()
+                for attempt in range(self.max_retries):
+                    try:
+                        response = requests.post(
+                            self.DOCUMENT_PARSE_URL,  # OCR도 같은 endpoint 사용
+                            headers=self.headers,
+                            files=files,
+                            data=data,
+                            timeout=30
+                        )
 
-                        # OCR 결과에서 텍스트 추출
-                        extracted_text = self._extract_text_from_ocr_result(result)
+                        if response.status_code == 200:
+                            result = response.json()
 
-                        if extracted_text:
-                            logger.info(f"✅ OCR 성공: {len(extracted_text)}자 추출")
+                            # OCR 결과에서 텍스트 추출 (실제 API 응답 구조)
+                            extracted_text = result.get("text", "")
+                            confidence = result.get("confidence", 0.0)
 
-                            return {
-                                "text": extracted_text,
-                                "raw_result": result,
-                                "source_url": url
-                            }
+                            if extracted_text:
+                                logger.info(f"✅ OCR 성공: {len(extracted_text)}자 추출 (신뢰도: {confidence:.2%})")
+
+                                return {
+                                    "text": extracted_text,
+                                    "confidence": confidence,
+                                    "pages": result.get("pages", []),
+                                    "source_url": url
+                                }
+                            else:
+                                logger.warning("OCR 결과가 비어있음")
+                                return None
                         else:
-                            logger.warning("OCR 결과가 비어있음")
-                            return None
-                    else:
-                        logger.warning(f"OCR API 오류: {response.status_code}")
+                            logger.warning(f"OCR API 오류: {response.status_code} - {response.text[:200]}")
 
-                except Exception as e:
-                    if attempt < self.max_retries - 1:
-                        wait_time = 2 ** attempt
-                        logger.warning(f"재시도 {attempt + 1}/{self.max_retries} (대기: {wait_time}초)")
-                        time.sleep(wait_time)
-                    else:
-                        logger.error(f"OCR 실패: {e}")
-                        raise
+                    except Exception as e:
+                        if attempt < self.max_retries - 1:
+                            wait_time = 2 ** attempt
+                            logger.warning(f"재시도 {attempt + 1}/{self.max_retries} (대기: {wait_time}초)")
+                            time.sleep(wait_time)
+                        else:
+                            logger.error(f"OCR 실패: {e}")
+                            raise
+
+            except Exception as download_error:
+                logger.error(f"이미지 다운로드 오류: {download_error}")
+                return None
 
             return None
 

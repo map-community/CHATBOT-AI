@@ -2,13 +2,14 @@
 문서 처리
 크롤링된 데이터를 처리하고 중복 체크
 """
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 from pymongo import MongoClient
 from pymongo.collection import Collection
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import CrawlerConfig
+from processing.multimodal_processor import MultimodalProcessor
 
 
 class CharacterTextSplitter:
@@ -65,13 +66,17 @@ class DocumentProcessor:
         self,
         mongo_client: Optional[MongoClient] = None,
         chunk_size: int = None,
-        chunk_overlap: int = None
+        chunk_overlap: int = None,
+        multimodal_processor: Optional[MultimodalProcessor] = None,
+        enable_multimodal: bool = True
     ):
         """
         Args:
             mongo_client: MongoDB 클라이언트
             chunk_size: 텍스트 청크 크기
             chunk_overlap: 청크 간 겹침 크기
+            multimodal_processor: 멀티모달 프로세서
+            enable_multimodal: 멀티모달 처리 활성화
         """
         if mongo_client is None:
             mongo_client = MongoClient(CrawlerConfig.MONGODB_URI)
@@ -84,6 +89,13 @@ class DocumentProcessor:
         chunk_size = chunk_size or CrawlerConfig.CHUNK_SIZE
         chunk_overlap = chunk_overlap or CrawlerConfig.CHUNK_OVERLAP
         self.text_splitter = CharacterTextSplitter(chunk_size, chunk_overlap)
+
+        # 멀티모달 프로세서 초기화
+        self.enable_multimodal = enable_multimodal
+        if enable_multimodal:
+            self.multimodal_processor = multimodal_processor or MultimodalProcessor(mongo_client=mongo_client)
+        else:
+            self.multimodal_processor = None
 
     def is_duplicate(self, title: str, image_url: Optional[str] = None) -> bool:
         """
@@ -196,3 +208,61 @@ class DocumentProcessor:
             print(f"✅ 새 문서 처리: {title}")
 
         return texts, titles, doc_urls, doc_dates, image_urls, new_count
+
+    def process_documents_multimodal(
+        self,
+        document_data: List[Tuple[str, str, any, any, str, str]]
+    ) -> Tuple[List[Tuple[str, Dict]], int]:
+        """
+        멀티모달 문서 리스트 처리 (이미지 OCR, 첨부파일 파싱 포함)
+
+        Args:
+            document_data: [(title, text, image_list, attachment_list, date, url), ...] 형식의 리스트
+
+        Returns:
+            (embedding_items, new_count) 튜플
+            - embedding_items: [(text, metadata), ...] 형식의 리스트
+            - new_count: 새로 처리된 문서 개수
+        """
+        if not self.enable_multimodal or self.multimodal_processor is None:
+            print("⚠️  멀티모달 처리가 비활성화되어 있습니다.")
+            return [], 0
+
+        embedding_items = []
+        new_count = 0
+
+        for title, text, image_list, attachment_list, date, url in document_data:
+            # 중복 체크 (이미지 리스트의 첫 번째 이미지로 체크)
+            first_image = image_list[0] if image_list else None
+            if self.is_duplicate(title, first_image):
+                print(f"⏭️  중복 문서 스킵: {title}")
+                continue
+
+            new_count += 1
+
+            # 텍스트 청크로 분할
+            text_chunks = []
+            if isinstance(text, str) and text.strip():
+                text_chunks = self.text_splitter.split_text(text)
+            else:
+                text_chunks = []  # 텍스트 없으면 빈 리스트
+
+            # 멀티모달 콘텐츠 생성 (이미지 OCR, 첨부파일 파싱 포함)
+            multimodal_content = self.multimodal_processor.create_multimodal_content(
+                title=title,
+                url=url,
+                date=date,
+                text_chunks=text_chunks,
+                image_urls=image_list if image_list else [],
+                attachment_urls=attachment_list if attachment_list else []
+            )
+
+            # 임베딩 아이템으로 변환
+            items = multimodal_content.to_embedding_items()
+            embedding_items.extend(items)
+
+            # MongoDB에 처리 완료 표시
+            self.mark_as_processed(title, first_image)
+            print(f"✅ 새 문서 처리 (멀티모달): {title} - {len(items)}개 임베딩 아이템")
+
+        return embedding_items, new_count
