@@ -1,13 +1,23 @@
 """
-리팩토링된 크롤러 메인 스크립트
+크롤러 메인 실행 스크립트
 
-개선 사항:
-1. 증분 크롤링: 새 게시글만 처리
-2. 중복 제거: 크롤링 전에 중복 체크
-3. API 비용 절감: 새 문서만 임베딩 생성
-4. 클래스 기반 설계: 유지보수 편의성 향상
-5. 상태 관리: 크롤링 이력 추적
+기능:
+- 경북대 컴퓨터학부 웹사이트 크롤링 (공지사항, 채용정보, 세미나, 교수정보)
+- 증분 크롤링으로 새 게시글만 처리
+- 문서 처리 및 임베딩 생성
+- Pinecone 벡터 DB에 업로드
+
+실행 방법:
+    python run_crawler.py
+    또는
+    docker exec -it knu-chatbot-app python /app/src/modules/run_crawler.py
 """
+import sys
+from pathlib import Path
+
+# modules 디렉토리를 path에 추가
+sys.path.insert(0, str(Path(__file__).parent))
+
 from pymongo import MongoClient
 from config import CrawlerConfig
 from state import CrawlStateManager

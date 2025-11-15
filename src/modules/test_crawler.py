@@ -1,8 +1,17 @@
 """
-리팩토링된 크롤러 테스트 스크립트
+크롤러 구조 테스트 스크립트
 
-실제 크롤링 없이 구조만 테스트합니다.
+실제 크롤링 없이 모듈 구조와 임포트만 테스트합니다.
+
+실행 방법:
+    python test_crawler.py
 """
+import sys
+from pathlib import Path
+
+# modules 디렉토리를 path에 추가
+sys.path.insert(0, str(Path(__file__).parent))
+
 from pymongo import MongoClient
 from config import CrawlerConfig
 from state import CrawlStateManager
