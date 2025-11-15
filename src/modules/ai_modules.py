@@ -1,41 +1,23 @@
 import os
-import requests
-from bs4 import BeautifulSoup
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-from langchain_upstage import UpstageEmbeddings
-from concurrent.futures import ThreadPoolExecutor
-import numpy as np
-from pinecone import Pinecone
-from langchain_upstage import ChatUpstage
-from langchain import hub
-from langchain.prompts import PromptTemplate
-from langchain.schema.runnable import RunnablePassthrough
-from langchain.schema.output_parser import StrOutputParser
-from langchain.schema import Document
 import re
+import time
+import pickle
+import logging
 from datetime import datetime
-import pytz
-from langchain.schema.runnable import Runnable
-from langchain.chains import RetrievalQAWithSourcesChain, RetrievalQA
-from langchain.schema.runnable import RunnableSequence, RunnableMap
-from langchain_core.runnables import RunnableLambda
-import nltk
-from nltk.tokenize import word_tokenize
-from nltk.tag import pos_tag
 from collections import defaultdict
 import numpy as np
-from IPython.display import display, HTML
-from rank_bm25 import BM25Okapi
-# SequenceMatcher는 이제 DocumentClusterer에서 사용됨
-from pymongo import MongoClient
-from pinecone import Index
-import redis
-import pickle
-#시간 측정용
-import time
-import logging
+import pytz
 from dotenv import load_dotenv
+from pinecone import Pinecone
+from rank_bm25 import BM25Okapi
+from langchain import hub
+from langchain.prompts import PromptTemplate
+from langchain.schema import Document
+from langchain.schema.runnable import Runnable, RunnablePassthrough
+from langchain.schema.output_parser import StrOutputParser
+from langchain.schema.runnable import RunnableSequence, RunnableMap
+from langchain_core.runnables import RunnableLambda
+from langchain_upstage import UpstageEmbeddings, ChatUpstage
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -60,6 +42,12 @@ from modules.storage_manager import get_storage_manager
 
 # StorageManager 싱글톤 인스턴스 가져오기
 storage = get_storage_manager()
+
+# URL 상수
+NOTICE_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_1"
+COMPANY_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_3_b"
+SEMINAR_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_4"
+PROFESSOR_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub2_2"
 
 def get_korean_time():
     return datetime.now(pytz.timezone('Asia/Seoul'))
@@ -377,15 +365,15 @@ def best_docs(user_question):
           return None,[keyword for keyword in keys if keyword in user_question]
         if '공지사항' in query_noun:
           key=['공지사항']
-          notice_url="https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_1&wr_id="
+          notice_url = NOTICE_BASE_URL + "&wr_id="
           return_docs=find_url(notice_url,titles_from_pinecone,dates_from_pinecone,texts_from_pinecone,urls_from_pinecone,numbers)
         if '채용' in query_noun:
           key=['채용']
-          company_url="https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_3_b&wr_id="
+          company_url = COMPANY_BASE_URL + "&wr_id="
           return_docs=find_url(company_url,titles_from_pinecone,dates_from_pinecone,texts_from_pinecone,urls_from_pinecone,numbers)
         other_key = ['세미나', '행사', '특강', '강연']
         if any(keyword in query_noun for keyword in other_key):
-          seminar_url="https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_4&wr_id="
+          seminar_url = SEMINAR_BASE_URL + "&wr_id="
           key = [keyword for keyword in other_key if keyword in user_question]
           return_docs=find_url(seminar_url,titles_from_pinecone,dates_from_pinecone,texts_from_pinecone,urls_from_pinecone,numbers)
         recent_finish_time=time.time()-recent_time
@@ -641,11 +629,11 @@ def get_ai_message(question):
                 response += f"제목: {title}, 날짜: {date} \n----------------------------------------------------\n"
                 seen_urls.add(url)  # URL 추가하여 중복 방지
       if '채용' in query_noun:
-        show_url="https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_3_b&wr_id="
+        show_url = COMPANY_BASE_URL + "&wr_id="
       elif '공지사항' in query_noun:
-        show_url="https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_1&wr_id="         
+        show_url = NOTICE_BASE_URL + "&wr_id="
       else:
-        show_url="https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_4&wr_id="
+        show_url = SEMINAR_BASE_URL + "&wr_id="
 
       # 최종 data 구조 생성
       data = {
@@ -712,7 +700,7 @@ def get_ai_message(question):
         qa_chain, relevant_docs = get_answer_from_chain(top_docs, question,query_noun)
         chain_f_time=time.time()-chain_time
         print(f"chain 생성하는 시간: {chain_f_time}")
-        if final_url == "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub2_2&lang=kor" and any(keyword in query_noun for keyword in ['연락처', '전화', '번호', '전화번호']):
+        if final_url == PROFESSOR_BASE_URL + "&lang=kor" and any(keyword in query_noun for keyword in ['연락처', '전화', '번호', '전화번호']):
             data = {
                 "answer": "해당 교수님은 연락처 정보가 포함되어 있지 않습니다.\n 자세한 정보는 교수진 페이지를 참고하세요.",
                 "references": final_url,
@@ -752,7 +740,7 @@ def get_ai_message(question):
         #         return data
 
         # 공지사항에 존재하지 않을 경우
-        notice_url = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_1"
+        notice_url = NOTICE_BASE_URL
         not_in_notices_response = {
             "answer": "해당 질문은 공지사항에 없는 내용입니다.\n 자세한 사항은 공지사항을 살펴봐주세요.",
             "references": notice_url,
