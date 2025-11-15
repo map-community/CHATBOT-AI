@@ -1,41 +1,23 @@
 import os
-import requests
-from bs4 import BeautifulSoup
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-from langchain_upstage import UpstageEmbeddings
-from concurrent.futures import ThreadPoolExecutor
-import numpy as np
-from pinecone import Pinecone
-from langchain_upstage import ChatUpstage
-from langchain import hub
-from langchain.prompts import PromptTemplate
-from langchain.schema.runnable import RunnablePassthrough
-from langchain.schema.output_parser import StrOutputParser
-from langchain.schema import Document
 import re
+import time
+import pickle
+import logging
 from datetime import datetime
-import pytz
-from langchain.schema.runnable import Runnable
-from langchain.chains import RetrievalQAWithSourcesChain, RetrievalQA
-from langchain.schema.runnable import RunnableSequence, RunnableMap
-from langchain_core.runnables import RunnableLambda
-import nltk
-from nltk.tokenize import word_tokenize
-from nltk.tag import pos_tag
 from collections import defaultdict
 import numpy as np
-from IPython.display import display, HTML
-from rank_bm25 import BM25Okapi
-from difflib import SequenceMatcher
-from pymongo import MongoClient
-from pinecone import Index
-import redis
-import pickle
-#시간 측정용
-import time
-import logging
+import pytz
 from dotenv import load_dotenv
+from pinecone import Pinecone
+from rank_bm25 import BM25Okapi
+from langchain import hub
+from langchain.prompts import PromptTemplate
+from langchain.schema import Document
+from langchain.schema.runnable import Runnable, RunnablePassthrough
+from langchain.schema.output_parser import StrOutputParser
+from langchain.schema.runnable import RunnableSequence, RunnableMap
+from langchain_core.runnables import RunnableLambda
+from langchain_upstage import UpstageEmbeddings, ChatUpstage
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -43,22 +25,6 @@ logger = logging.getLogger(__name__)
 
 # .env 파일 로드
 load_dotenv()
-
-# 환경변수에서 API 키 읽기
-pinecone_api_key = os.getenv('PINECONE_API_KEY')
-index_name = os.getenv('PINECONE_INDEX_NAME', 'info')  # 기본값 'info'
-upstage_api_key = os.getenv('UPSTAGE_API_KEY')
-
-# API 키 검증
-if not pinecone_api_key:
-    logger.error("❌ PINECONE_API_KEY가 .env 파일에 설정되지 않았습니다!")
-    raise ValueError("PINECONE_API_KEY가 필요합니다. .env 파일을 확인하세요.")
-
-if not upstage_api_key:
-    logger.error("❌ UPSTAGE_API_KEY가 .env 파일에 설정되지 않았습니다!")
-    raise ValueError("UPSTAGE_API_KEY가 필요합니다. .env 파일을 확인하세요.")
-
-logger.info("✅ API 키를 .env 파일에서 성공적으로 로드했습니다.")
 
 # Mecab import (logger 정의 이후)
 try:
@@ -71,279 +37,50 @@ except Exception as e:
     MECAB_AVAILABLE = False
     Mecab = None
 
-# Pinecone API 설정 및 초기화
-try:
-    logger.info("🔄 Pinecone에 연결 중...")
-    pc = Pinecone(api_key=pinecone_api_key)
-    index = pc.Index(index_name)
-    logger.info(f"✅ Pinecone 인덱스 '{index_name}'에 연결되었습니다.")
-except Exception as e:
-    logger.error(f"❌ Pinecone 연결 실패: {e}")
-    raise
+# StorageManager import
+from modules.storage_manager import get_storage_manager
+
+# StorageManager 싱글톤 인스턴스 가져오기
+storage = get_storage_manager()
+
+# URL 상수
+NOTICE_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_1"
+COMPANY_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_3_b"
+SEMINAR_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_4"
+PROFESSOR_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub2_2"
 
 def get_korean_time():
     return datetime.now(pytz.timezone('Asia/Seoul'))
 
-# MongoDB 연결
-try:
-    logger.info("🔄 MongoDB에 연결 중...")
-    mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
-    client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
-    # 연결 테스트
-    client.admin.command('ping')
-    db = client["knu_chatbot"]
-    collection = db["notice_collection"]
-    logger.info("✅ MongoDB에 연결되었습니다.")
-except Exception as e:
-    logger.error(f"❌ MongoDB 연결 실패: {e}")
-    logger.warning("⚠️  MongoDB 없이 계속 진행합니다. 일부 기능이 제한될 수 있습니다.")
-    client = None
-    db = None
-    collection = None
-
-# Redis 연결
-try:
-    logger.info("🔄 Redis에 연결 중...")
-    redis_host = os.getenv('REDIS_HOST', 'localhost')
-    redis_port = int(os.getenv('REDIS_PORT', 6379))
-    redis_client = redis.StrictRedis(host=redis_host, port=redis_port, db=0, socket_connect_timeout=5)
-    # 연결 테스트
-    redis_client.ping()
-    logger.info("✅ Redis에 연결되었습니다.")
-except Exception as e:
-    logger.error(f"❌ Redis 연결 실패: {e}")
-    logger.warning("⚠️  Redis 없이 계속 진행합니다. 캐싱 기능이 비활성화됩니다.")
-    redis_client = None
-
-# 전역 캐시 변수 초기화
-cached_titles = []
-cached_texts = []
-cached_urls = []
-cached_dates = []
-
-# 단어 명사화 함수.
+# 단어 명사화 함수 (리팩토링됨 - QueryTransformer 사용)
 def transformed_query(content):
-    # 중복된 단어를 제거한 명사를 담을 리스트
-    query_nouns = []
+    """
+    질문을 명사 키워드 리스트로 변환
 
-    # 1. 숫자와 특정 단어가 결합된 패턴 추출 (예: '2024학년도', '1월' 등)
-    pattern = r'\d+(?:학년도|년|학년|월|일|학기|시|분|초|기|개|차)?'
-    number_matches = re.findall(pattern, content)
-    query_nouns += number_matches
-    # 추출된 단어를 content에서 제거
-    for match in number_matches:
-        content = content.replace(match, '')
+    Args:
+        content: 사용자 질문 (원문)
 
-
-    # 1. 영어 단어를 단독으로 또는 한글과 결합된 경우 추출 (영어만 추출)
-    english_pattern = r'[a-zA-Z]+'
-    english_matches = re.findall(english_pattern, content)
-
-    # 대문자로 변환 후 query_nouns에 추가
-    english_matches_upper = [match.upper() for match in english_matches]
-    query_nouns += english_matches_upper
-
-    # content에서 영어 단어 제거
-    for match in english_matches:
-        content = re.sub(rf'\b{re.escape(match)}\b', '', content)
-
-    if '시간표' in content:
-        content=content.replace('시간표','')
-    if 'EXIT' in query_nouns:
-        query_nouns.append('출구')
-    if any(keyword in content for keyword in ['벤처아카데미','벤처아카데미']):
-      query_nouns.append("벤처아카데미")
-    if '군' in content:
-        query_nouns.append('군')
-    if '인컴' in content:
-        query_nouns.append('인공지능컴퓨팅')
-    if '인공' in content and '지능' in content and '컴퓨팅' in content:
-        query_nouns.append('인공지능컴퓨팅')
-    if '학부생' in content:
-        query_nouns.append('학부생')
-    ## 직원 E9호관 있는거 추가하려고함.
-    if '공대' in content:
-        query_nouns.append('E')
-    if '설명회' in content:
-        query_nouns.append('설명회')
-    if '컴학' in content:
-        query_nouns.append('컴퓨터학부')
-    if '컴퓨터' in content and '비전' in content:
-        query_nouns.append('컴퓨터비전')
-        content = content.replace('컴퓨터 비전', '컴퓨터비전')
-        content = content.replace('컴퓨터비전', '')
-    if '컴퓨터' in content and '학부' in content:
-        query_nouns.append('컴퓨터학부')
-        content = content.replace('컴퓨터 학부', '컴퓨터학부')
-        content = content.replace('컴퓨터학부', '')
-    if '선발' in content:
-        content=content.replace('선발','')
-    if '차' in content:
-        query_nouns.append('차')
-    if '국가 장학금' in content:
-        query_nouns.append('국가장학금')
-        content=content.replace('국가 장학금','')
-    if '종프' in content:
-        query_nouns.append('종합설계프로젝트')
-    if '종합설계프로젝트' in content:
-        query_nouns.append('종합설계프로젝트')
-    if '대회' in content:
-        query_nouns.append('경진대회')
-        content=content.replace('대회','')
-    if '튜터' in content:
-        query_nouns.append('TUTOR')
-        content = content.replace('튜터', '')  # '튜터' 제거
-    if '탑싯' in content:
-        query_nouns.append('TOPCIT')
-        content=content.replace('탑싯','')
-    if '시험' in content:
-        query_nouns.append('시험')
-    if '하계' in content:
-        query_nouns.append('여름')
-        query_nouns.append('하계')
-    if '동계' in content:
-        query_nouns.append('겨울')
-        query_nouns.append('동계')
-    if '겨울' in content:
-        query_nouns.append('겨울')
-        query_nouns.append('동계')
-    if '여름' in content:
-        query_nouns.append('여름')
-        query_nouns.append('하계')
-    if '성인지' in content:
-        query_nouns.append('성인지')
-    if '첨성인' in content:
-        query_nouns.append('첨성인')
-    if '글솦' in content:
-        query_nouns.append('글솝')
-    if '수꾸' in content:
-        query_nouns.append('수강꾸러미')
-    if '장학금' in content:
-        query_nouns.append('장학생')
-        query_nouns.append('장학')
-    if '장학생' in content:
-        query_nouns.append('장학금')
-        query_nouns.append('장학')
-    if '대해' in content:
-        content=content.replace('대해','')
-    if '에이빅' in content:
-        query_nouns.append('에이빅')
-        query_nouns.append('ABEEK')
-        content=content.replace('에이빅','')
-    if '선이수' in content:
-        query_nouns.append('선이수')
-        content=content.replace('선이수','')
-    if '선후수' in content:
-        query_nouns.append('선이수')
-        content=content.replace('선후수','')
-    if '학자금' in content:
-        query_nouns.append('학자금')
-        content=content.replace('학자금','')
-    if  any(keyword in content for keyword in ['오픈 소스','오픈소스']):
-        query_nouns.append('오픈소스')
-        content=content.replace('오픈 소스','')
-        content=content.replace('오픈소스','')
-    if any(keyword in content for keyword in ['군','군대']) and '휴학' in content:
-        query_nouns.append('군')
-        query_nouns.append('군휴학')
-        query_nouns.append('군입대')
-    if '카테캠' in content:
-        query_nouns.append('카카오')
-        query_nouns.append('테크')
-        query_nouns.append('캠퍼스')
-    re_keyword = ['재이수', '재 이수', '재 수강', '재수강']
-    # 각 키워드를 빈 문자열로 치환
-    if any(key in content for key in re_keyword):
-      for keyword in re_keyword:
-        query_nouns.append('재이수')
-        content = content.replace(keyword, '')
-    if '과목' in content:
-        query_nouns.append('강의')
-    if '강의' in content:
-        query_nouns.append('과목')
-        query_nouns.append('강좌')
-    if '강좌' in content:
-        query_nouns.append('강좌')
-        contnet=content.replace('강좌','')
-    if '외국어' in content:
-        query_nouns.append('외국어') 
-        contnet=content.replace('외국어','')
-    if '부' in content and '전공' in content:
-        query_nouns.append('부전공') 
-    if '수꾸' in content:
-        query_nouns.append('수강꾸러미')
-    if '계절' in content and '학기' in content:
-        query_nouns.append('수업')
-    if '채용' in content and any(keyword in content for keyword in ['모집','공고']):
-        if '모집' in content:
-          content=content.replace('모집','')
-        if '공고' in content:
-          content=content.replace('공고','')
-    # 비슷한 의미 모두 추가 (세미나)
-    related_keywords = ['세미나','특강', '강연']
-    if any(keyword in content for keyword in related_keywords):
-        for keyword in related_keywords:
-            query_nouns.append(keyword)
-    # "공지", "사항", "공지사항"을 query_nouns에서 '공지사항'이라고 고정하고 나머지 부분 삭제
-    keywords=['공지','사항','공지사항']
-    if any(keyword in content for keyword in keywords):
-      # 키워드 제거
-      for keyword in keywords:
-          content = content.replace(keyword, '')
-          query_nouns.append('공지사항')
-
-    keywords=['사원','신입사원']
-    if any(keyword in content for keyword in keywords):
-        for keyword in keywords:
-          content = content.replace(keyword, '')
-          query_nouns.append('신입')
-    # 5. Mecab 형태소 분석기를 이용한 추가 명사 추출
-    if MECAB_AVAILABLE:
-        mecab = Mecab()
-        additional_nouns = [noun for noun in mecab.nouns(content) if len(noun) > 1]
-        query_nouns += additional_nouns
-    else:
-        # Mecab 없이 간단한 토큰화 (정확도는 낮지만 작동함)
-        logger.debug("⚠️  Mecab 없이 간단한 토큰화 사용")
-        simple_tokens = content.split()
-        additional_nouns = [token for token in simple_tokens if len(token) > 1]
-        query_nouns += additional_nouns
-    if '인도' not in query_nouns and  '인턴십' in query_nouns:
-        query_nouns.append('베트남')
-
-    # 6. "수강" 단어와 관련된 키워드 결합 추가
-    if '수강' in content:
-        related_keywords = ['변경', '신청', '정정', '취소','꾸러미']
-        for keyword in related_keywords:
-            if keyword in content:
-                # '수강'과 결합하여 새로운 키워드 추가
-                combined_keyword = '수강' + keyword
-                query_nouns.append(combined_keyword)
-                if ('수강' in query_nouns):
-                  query_nouns.remove('수강')
-                for keyword in related_keywords:
-                  if keyword in query_nouns:
-                    query_nouns.remove(keyword)
-    # 최종 명사 리스트에서 중복된 단어 제거
-    if '꾸러미' in content and '수강신청' in query_nouns:
-      query_nouns.append('신청')
-
-    query_nouns = list(set(query_nouns))
-    return query_nouns
+    Returns:
+        List[str]: 추출된 명사 키워드 리스트
+    """
+    return storage.query_transformer.transform(content)
 ###################################################################################################
 
 
-# Dense Retrieval (Upstage 임베딩)
-embeddings = UpstageEmbeddings(
-  api_key=upstage_api_key,
-  model="solar-embedding-1-large-query"  # 질문 임베딩용 모델
-) # Upstage API 키 사용
+# Dense Retrieval (Upstage 임베딩) - Lazy initialization으로 함수 내에서 생성하도록 변경
+# embeddings 객체는 필요할 때 get_embeddings() 함수를 통해 가져옵니다.
+def get_embeddings():
+    """Upstage Embeddings 객체 반환 (Lazy initialization)"""
+    return UpstageEmbeddings(
+        api_key=storage.upstage_api_key,
+        model="solar-embedding-1-large-query"  # 질문 임베딩용 모델
+    )
 # dense_doc_vectors = np.array(embeddings.embed_documents(texts))  # 문서 임베딩
 
 
 def fetch_titles_from_pinecone():
     # 메타데이터 기반 검색을 위한 임의 쿼리
-    query_results = index.query(
+    query_results = storage.pinecone_index.query(
         vector=[0] * 4096,  # Pinecone에서 사용 중인 벡터 크기에 맞게 0으로 채운 벡터
         top_k=10000,        # 충분히 큰 값으로 설정하여 모든 벡터 가져오기
         include_metadata=True  # 메타데이터 포함
@@ -361,34 +98,80 @@ def fetch_titles_from_pinecone():
 # 캐싱 데이터 초기화 함수
 
 def initialize_cache():
-    global cached_titles, cached_texts, cached_urls, cached_dates
-
     try:
         logger.info("🔄 캐시 초기화 시작...")
 
         # Pinecone에서 데이터를 가져옴
-        cached_titles, cached_texts, cached_urls, cached_dates = fetch_titles_from_pinecone()
-        logger.info(f"✅ Pinecone에서 {len(cached_titles)}개 문서 메타데이터를 가져왔습니다.")
+        storage.cached_titles, storage.cached_texts, storage.cached_urls, storage.cached_dates = fetch_titles_from_pinecone()
+        logger.info(f"✅ Pinecone에서 {len(storage.cached_titles)}개 문서 메타데이터를 가져왔습니다.")
+
+        # BM25Retriever 초기화
+        from modules.retrieval import (
+            BM25Retriever,
+            DenseRetriever,
+            DocumentCombiner,
+            DocumentClusterer
+        )
+
+        bm25_retriever = BM25Retriever(
+            titles=storage.cached_titles,
+            texts=storage.cached_texts,
+            urls=storage.cached_urls,
+            dates=storage.cached_dates,
+            query_transformer=transformed_query,
+            similarity_adjuster=adjust_similarity_scores,
+            k1=1.5,
+            b=0.75
+        )
+        storage.set_bm25_retriever(bm25_retriever)
+
+        # DenseRetriever 초기화
+        dense_retriever = DenseRetriever(
+            embeddings_factory=get_embeddings,
+            pinecone_index=storage.pinecone_index,
+            date_adjuster=adjust_date_similarity,
+            similarity_scale=3.26,
+            noun_weight=0.20,
+            digit_weight=0.24
+        )
+        storage.set_dense_retriever(dense_retriever)
+
+        # DocumentCombiner 초기화
+        document_combiner = DocumentCombiner(
+            keyword_filter=last_filter_keyword,
+            date_adjuster=adjust_date_similarity
+        )
+        storage.set_document_combiner(document_combiner)
+
+        # DocumentClusterer 초기화
+        document_clusterer = DocumentClusterer(
+            date_parser=parse_date_change_korea_time,
+            similarity_threshold=0.89
+        )
+        storage.set_document_clusterer(document_clusterer)
+
+        # QueryTransformer와 KeywordFilter는 StorageManager 초기화 시 자동 생성됨
+        # (여기서는 재설정하지 않음)
 
         # Redis에 저장 시도
-        if redis_client is not None:
+        if storage.redis_client is not None:
             try:
-                redis_client.set('pinecone_metadata', pickle.dumps((cached_titles, cached_texts, cached_urls, cached_dates)))
+                storage.redis_client.set('pinecone_metadata', pickle.dumps((storage.cached_titles, storage.cached_texts, storage.cached_urls, storage.cached_dates)))
                 logger.info("✅ Redis에 캐시 데이터를 저장했습니다.")
             except Exception as e:
                 logger.warning(f"⚠️  Redis 저장 실패 (메모리 캐시만 사용): {e}")
         else:
             logger.warning("⚠️  Redis 미사용 (메모리 캐시만 사용)")
 
-        logger.info(f"✅ 캐시 초기화 완료! (titles: {len(cached_titles)}, texts: {len(cached_texts)})")
+        logger.info(f"✅ 캐시 초기화 완료! (titles: {len(storage.cached_titles)}, texts: {len(storage.cached_texts)})")
 
     except Exception as e:
         logger.error(f"❌ 캐시 초기화 실패: {e}", exc_info=True)
         # 에러가 발생해도 빈 리스트로 초기화하여 앱이 크래시하지 않도록 함
-        cached_titles = []
-        cached_texts = []
-        cached_urls = []
-        cached_dates = []
+        storage.cached_titles = []
+        storage.cached_texts = []
+        storage.cached_urls = []
+        storage.cached_dates = []
         logger.warning("⚠️  캐시를 빈 상태로 초기화했습니다.")
 
                     #################################   24.11.16기준 정확도 측정완료 #####################################################
@@ -468,49 +251,7 @@ def adjust_date_similarity(similarity, date_str,query_nouns):
     return similarity * weight
 
 # 사용자 질문에서 추출한 명사와 각 문서 제목에 대한 유사도를 조정하는 함수
-'''
-def adjust_similarity_scores(query_noun, title,texts,similarities):
-
-    for idx, titl in enumerate(title):
-        # 제목에 포함된 query_noun 요소의 개수를 센다
-
-        matching_noun = [noun for noun in query_noun if noun in titl]
-        if texts[idx] == "No content":
-            if "국가장학금" in titl and "국가장학금" in query_noun:
-              similarities[idx]*=5.0
-            else:
-              similarities[idx] *=1.5 # 본문이 "No content"인 경우 유사도를 높임
-        for noun in matching_noun:
-            similarities[idx] += len(noun)*0.21
-            if re.search(r'\d', noun):  # 숫자가 포함된 단어 확인
-                if noun in title:  # 본문에도 숫자 포함 단어가 있는 경우 추가 조정
-                    similarities[idx] += len(noun)*0.22
-                else:
-                    similarities[idx]+=len(noun)*0.19
-        # query_noun에 "대학원"이 없고 제목에 "대학원"이 포함된 경우 유사도를 0.1 감소
-        keywords = ['대학원', '대학원생']
-        # 조건 1: 둘 다 키워드 포함
-        if any(keyword in query_noun for keyword in keywords) and any(keyword in titl for keyword in keywords):
-            similarities[idx] += 2.0
-        # 조건 2: query_noun에 없고, title에만 키워드가 포함된 경우
-        if not any(keyword in query_noun for keyword in keywords) and any(keyword in titl for keyword in keywords):
-            similarities[idx] -= 2.0
-        if not any(keyword in query_noun for keyword in["현장", "실습", "현장실습"]) and any(keyword in titl for keyword in ["현장실습","대체","기준"]):
-            similarities[idx]-=2
-        if '외국어' in query_noun and '강좌' in query_noun and '신청' in titl:
-            similarities[idx]-=1.0
-        if "외국인" not in query_noun and "외국인" in titl:
-            similarities[idx]-=2.0
-        if texts[idx] == "No content":
-            similarities[idx] *=1.45# 본문이 "No content"인 경우 유사도를 높임
-        if '마일리지' in query_noun and '마일리지' in texts[idx]:
-            similarities[idx]+=2
-        if '인컴' in query_noun and any(keyword in titl for keyword in ['인컴','인공지능컴퓨팅']):
-          similarities[idx]+=3
-        if '신입생' in query_noun and '수강신청' in query_noun and '신입생' in titl and '수강신청' in titl:
-          similarities[idx]+=1.5
-    return similarities
-'''
+# (이전 버전은 삭제되었습니다 - 최적화된 버전만 유지)
 
 def adjust_similarity_scores(query_noun, title, texts, similarities):
     query_noun_set = set(query_noun)
@@ -540,237 +281,20 @@ def adjust_similarity_scores(query_noun, title, texts, similarities):
 
 #############################################################################################
 
-def last_filter_keyword(DOCS,query_noun,user_question):
-        # 필터링에 사용할 키워드 리스트
-        Final_best=DOCS
-        # 키워드가 포함된 경우 유사도를 조정하고, 유사도 기준으로 내림차순 정렬
-        for idx, doc in enumerate(DOCS):
-            score, title, date, text, url = doc
-            if not any(keyword in query_noun for keyword in["현장", "실습", "현장실습"]) and any(keyword in title for keyword in ["현장실습","대체","기준"]):
-              score-=1.0
-            # wr_id 뒤에 오는 숫자 추출
-            target_numbers = [27510, 27047, 27614, 27246, 25900, 27553, 25896, 28183,27807,25817,25804]
+# 키워드 필터링 함수 (리팩토링됨 - KeywordFilter 사용)
+def last_filter_keyword(DOCS, query_noun, user_question):
+    """
+    키워드 기반 문서 필터링
 
-            match = re.search(r"wr_id=(\d+)", url)
-            if match:
-                extracted_number = int(match.group(1))
-                # 숫자가 target_numbers에 포함되면 score 증가
-                if extracted_number in target_numbers:
-                    if any(keyword in query_noun for keyword in ['에이빅','ABEEK']) and any(keyword in text for keyword in ['에이빅','ABEEK']):
-                        if extracted_number==27047:
-                           score+=0.3
-                        else:
-                           score+=1.5
-                    else:
-                        if '폐강' not in query_noun:
-                          score+=0.8
-                        if '계절' in query_noun:
-                            score-=2.0
-                        if '전과' in query_noun:
-                          score-=1.0
-                        if '유예' in query_noun and '학사' in query_noun and extracted_number==28183:
-                          score+=0.45
-            if '기념' in query_noun and '기념' in title and url=="https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_4&wr_id=354":
-              score+=0.5
-            if '스탬프' not in query_noun and '스탬프' in title:
-              score-=0.5
-            if '기말' in query_noun and '기말' in title:
-                score+=1.0
-            if '중간' in query_noun and '중간' in title:
-                score+=1.0
-            if '졸업' in query_noun and '졸업' not in title and '포트폴리오' in query_noun and '포트폴리오' in title:
-              score-=1.0
-            if '졸업' in query_noun and '포트폴리오' in title and '졸업' in title and '포트폴리오' in query_noun:
-              score+=1.0
-            if 'TUTOR' in title and 'TUTOR' not in query_noun:
-                score-=1.0
-            class_word = ['신청', '취소', '변경']
-            for keyword in class_word:
-              if keyword in query_noun and '계절' in query_noun and keyword in title:
-                  score += 1.3
-                  break
-            if '자퇴' in title and '자퇴' in query_noun:
-                score+=1.0
-            if '전과' in title and '전과' in query_noun:
-              score+=1.0
-            if '조기' in title and '조기' not in query_noun:
-              score-=0.5    
-            if '수강' in title:
-              if url=="https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_1&wr_id=28180":
-                score-=3.0
-              if any(keyword in query_noun for keyword in ['폐강','재이수']):
-                if '폐강' in query_noun and any(keyword in title for keyword in ['신청', '정정']):
-                  score+=2.0
-                else:
-                  score+=0.8  
-                if '재이수' in query_noun:
-                  if '꾸러미' in title:
-                    score+=1.0
-                  elif '신청' in title:
-                    score+=2.0
-                  else:
-                    score+=1.5
-            if '설문' not in query_noun and '설문' in title:
-                score-=0.5
-            if any(keyword in query_noun for keyword in ['군','군대']) and '군' in title:
-              if '학점' in title and '학점' not in query_noun:
-                score-=1.0
-              else:
-                score+=1.5
-            if '군' not in query_noun and '군' in title:
-              score-=1.0
-            if '복학' in query_noun and '복학' in title:
-                score+=1.0
-            if '휴학' in query_noun and '휴학' in title:
-                score+=1.0
-            if '카카오' in title and '카카오' in query_noun:
-                score+=0.6
-            if '설계' in title:
-                score-=0.4
-            if '오픈소스' in query_noun and '오픈소스' in title:
-                score+=0.5
-            if 'SDG' in query_noun and 'SDG' in title:
-                score+=2.9
-            if any(keyword in query_noun for keyword in ['인턴','인턴십'])  and any(keyword in query_noun for keyword in ['인도','베트남']):
-                score+=1.0
-            if any(keyword in title for keyword in ['수요','조사']) and not any(keyword in query_noun for keyword in ['수요','조사']):
-                score-=0.6
-            if '여름' in query_noun and any(keyword in title for keyword in['겨울',"동계"]):
-                score-=1.0
-            if '겨울' in query_noun and any(keyword in title for keyword in['하계',"여름"]):
-                score-=1.0
-            if '여름' in query_noun and any(keyword in title for keyword in['하계',"여름"]):
-                score+=0.7
-                if '벤처아카데미' in query_noun:
-                  score+=2.0
-            if '겨울' in query_noun and any(keyword in title for keyword in['겨울',"동계"]):
-                score+=0.7
-                if '벤처아카데미' in query_noun:
-                  score+=2.0
- 
-            if '1학기' in query_noun and '1학기' in title:
-                score+=1.0
-            if '2학기' in query_noun and '2학기' in title:
-                score+=1.0
-            if '1학기' in query_noun and '2학기' in title:
-                score-=1.0
-            if '2학기' in query_noun and '1학기' in title:
-                score-=1.0
-            if any(keyword in text for keyword in ['종프','종합설계프로젝트']) and any(keyword in user_question for keyword in ['종프','종합설계프로젝트']):
-                score+=0.7
-                if '설명회' in query_noun and '설명회' in title:
-                  score+=0.7
-                else:
-                  score-=1.0
-            if '부전공' in query_noun and '부전공' in title:
-                score+=1.0
-            if any(keyword in query_noun for keyword in ['복전','복수','복수전공']) and  any(keyword in title for keyword in ['복수']):
-                score+=0.7
-            if not any(keyword in query_noun for keyword in ['복전','복수','복수전공']) and any(keyword in title for keyword in ['복수']):
-                score-=1.4
-            if any(keyword in title for keyword in ['심컴','심화컴퓨터전공','심화 컴퓨터공학','심화컴퓨터공학']):
-              if any(keyword in user_question for keyword in['심컴','심화컴퓨터전공']):
-                score+=0.7
-              else:
-                if not "컴퓨터비전" in query_noun:
-                  score-=0.7
-            elif any(keyword in title for keyword in ['글로벌소프트웨어전공','글로벌SW전공','글로벌소프트웨어융합전공','글솝','글솦']):
-              if any(keyword in user_question for keyword in ['글로벌소프트웨어융합전공','글로벌소프트웨어전공','글로벌SW전공','글솝','글솦']):
-                score+=0.7
-              else:
-                score-=0.8
-            elif any(keyword in title for keyword in['인컴','인공지능컴퓨팅']):
-              if any(keyword in user_question for keyword in ['인컴','인공지능컴퓨팅']):
-                score+=0.7
-                if url=="https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_1&wr_id=27553":
-                  score+=1.0
-              else:
-                score-=0.8
-            if any(keyword in user_question for keyword in ['벤처','아카데미']) and any(keyword in title for keyword in ['벤처아카데미','벤처스타트업아카데미','벤처스타트업']):
-                if any(keyword in user_question for keyword in ['스타트업']) and any(keyword in title for keyword in ['스타트업']):
-                  score+=0.5
-                elif not any(keyword in user_question for keyword in ['스타트업']) and any(keyword in title for keyword in ['벤처스타트업아카데미','벤처스타트업아카데미','스타트업','스타트','벤처스타트업']):
-                  score-=2.5
-                else:
-                  score+=2.0
-            if any(keyword in text for keyword in ['계약학과', '대학원', '타대학원']) and not any(keyword in query_noun for keyword in ['계약학과', '대학원', '타대학원']):
-                score -= 0.8  # 유사도 점수를 0.4 낮추기
-            keywords = ['대학원', '대학원생']
+    Args:
+        DOCS: 문서 리스트 [(score, title, date, text, url), ...]
+        query_noun: 검색 질문의 명사 리스트
+        user_question: 원본 질문
 
-            # 조건 1: 둘 다 키워드 포함
-            if any(keyword in query_noun for keyword in keywords) and any(keyword in title for keyword in keywords):
-                score += 2.0
-            # 조건 2: query_noun에 없고, title에만 키워드가 포함된 경우
-            elif not any(keyword in query_noun for keyword in keywords) and any(keyword in title for keyword in keywords):
-                if '학부생' in query_noun and '연구' in query_noun:
-                  score+=1.0
-                else:
-                  score -= 2.0
-            if any(keyword in query_noun for keyword in ['대학원','대학원생']) and any (keyword in title for keyword in ['대학원','대학원생']):
-                score+=2.0
-
-            if any(keyword in user_question for keyword in ['담당','업무','일','근무','관련']) and any(keyword in query_noun for keyword in ['직원','선생','선생님']):
-                if url!= "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub2_5&lang=kor":
-                    score-=3.0
-                else:
-                    score+=1.0
-                    # IT와 E 모두 처리
-                    for keyword in ['IT', 'E']:
-                        if keyword in query_noun:
-                            # 'IT'의 경우 숫자 4, 5 / 'E'의 경우 숫자 9 확인
-                            valid_numbers = ['4', '5'] if keyword == 'IT' else ['9']
-                            building_number = [num for num in query_noun if num in valid_numbers]
-                            if building_number:
-                                # IT4, IT5, E9 형식으로 결합
-                                combined_building = f"{keyword}{building_number[0]}"
-                                # 텍스트에 해당 건물 정보가 있는지 확인
-                                if combined_building in text:
-                                    score += 0.5  # 정확히 매칭된 경우 가중치 부여
-                                else:
-                                    score -= 0.8  # 매칭 실패 시 패널티
-                    if '대학원' in query_noun:
-                      if not any(keyword in query_noun for keyword in ['지원','계약']) and any(keyword in text for keyword in ['지원','계약']):
-                        score-=0.8
-                      else:
-                        score+=0.5
-
-
-
-            if (any(keyword in query_noun for keyword in ['담당','업무','일','근무']) or any(keyword in query_noun for keyword in ['직원','교수','선생','선생님'])) and date=="작성일24-01-01 00:00":
-                ### 종프 팀과제 담당 교수 누구야와 같은 질문인데 엉뚱하게 파인콘에서 직원이 유사도 높게 측정된 경우를 방지하기 위함.
-                if (any(keys in query_noun for keys in ['교수'])):
-                  check=0
-                  compare_url="https://cse.knu.ac.kr/bbs/board.php?bo_table=sub2_5&lang=kor" ## 직원에 해당하는 URL임.
-                  if compare_url==url:
-                    check=1
-                  if check==0:
-                    score+=0.5
-                  else:
-                    score-=0.9 ###직원이니까 유사도 나가라..
-                else:
-                  score+=4.0
-
-            if not any(keys in query_noun for keys in['교수']) and any(keys in title for keys in ['담당교수','교수']):
-              score-=0.7
-
-            match = re.search(r"(?<![\[\(])\b수강\w*\b(?![\]\)])", title)
-            if match:
-                full_keyword = match.group(0)
-                # query_nouns에 포함 여부 확인
-                if full_keyword not in query_noun:
-                  match = re.search(r"wr_id=(\d+)", url)
-                  if match:
-                      extracted_number = int(match.group(1))
-                      if extracted_number in target_numbers:
-                          score-=0.2
-                      else:
-                          score-=0.7
-                else:
-                  score+=0.8
-            # 조정된 유사도 점수를 사용하여 다시 리스트에 저장
-            Final_best[idx] = (score, title, date, text,  url)
-            #print(Final_best[idx])
-        return Final_best
+    Returns:
+        List[Tuple]: 필터링된 문서 리스트 (유사도 조정됨)
+    """
+    return storage.keyword_filter.filter(DOCS, query_noun, user_question)
 
 #################################################################################################
 
@@ -808,7 +332,7 @@ def best_docs(user_question):
       query_noun=transformed_query(user_question)
       query_noun_time=time.time()-noun_time
       print(f"명사화 변환 시간 : {query_noun_time}")
-      titles_from_pinecone, texts_from_pinecone, urls_from_pinecone, dates_from_pinecone = cached_titles, cached_texts, cached_urls, cached_dates
+      titles_from_pinecone, texts_from_pinecone, urls_from_pinecone, dates_from_pinecone = storage.cached_titles, storage.cached_texts, storage.cached_urls, storage.cached_dates
       if not query_noun:
         return None,None
       #######  최근 공지사항, 채용, 세미나, 행사, 특강의 단순한 정보를 요구하는 경우를 필터링 하기 위한 매커니즘 ########
@@ -834,15 +358,15 @@ def best_docs(user_question):
           return None,[keyword for keyword in keys if keyword in user_question]
         if '공지사항' in query_noun:
           key=['공지사항']
-          notice_url="https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_1&wr_id="
+          notice_url = NOTICE_BASE_URL + "&wr_id="
           return_docs=find_url(notice_url,titles_from_pinecone,dates_from_pinecone,texts_from_pinecone,urls_from_pinecone,numbers)
         if '채용' in query_noun:
           key=['채용']
-          company_url="https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_3_b&wr_id="
+          company_url = COMPANY_BASE_URL + "&wr_id="
           return_docs=find_url(company_url,titles_from_pinecone,dates_from_pinecone,texts_from_pinecone,urls_from_pinecone,numbers)
         other_key = ['세미나', '행사', '특강', '강연']
         if any(keyword in query_noun for keyword in other_key):
-          seminar_url="https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_4&wr_id="
+          seminar_url = SEMINAR_BASE_URL + "&wr_id="
           key = [keyword for keyword in other_key if keyword in user_question]
           return_docs=find_url(seminar_url,titles_from_pinecone,dates_from_pinecone,texts_from_pinecone,urls_from_pinecone,numbers)
         recent_finish_time=time.time()-recent_time
@@ -853,70 +377,25 @@ def best_docs(user_question):
 
       remove_noticement = ['제일','가장','공고', '공지사항','필독','첨부파일','수업','컴학','상위','관련']
 
-      bm_title_time=time.time()
-      tokenized_titles = [transformed_query(title) for title in titles_from_pinecone]
-
-      # 기존과 동일한 파라미터를 사용하고 있는지 확인
-      bm25_titles = BM25Okapi(tokenized_titles, k1=1.5, b=0.75)  # 기존 파라미터 확인
-
-      title_question_similarities = bm25_titles.get_scores(query_noun)  # 제목과 사용자 질문 간의 유사도
-      title_question_similarities /= 24
-      
-
-      adjusted_similarities = adjust_similarity_scores(query_noun, titles_from_pinecone,texts_from_pinecone, title_question_similarities)
-      # 유사도 기준 상위 15개 문서 선택
-      top_20_titles_idx = np.argsort(title_question_similarities)[-25:][::-1]
-
-       # 결과 출력
-      # print("최종 정렬된 BM25 문서:")
-      # for idx in top_20_titles_idx:  # top_20_titles_idx에서 각 인덱스를 가져옴
-      #     print(f"  제목: {titles[idx]}")
-      #     print(f"  유사도: {title_question_similarities[idx]}")
-      #     print(f" URL: {doc_urls[idx]}")
-      #     print("-" * 50)
-
-      Bm25_best_docs = [(titles_from_pinecone[i], dates_from_pinecone[i], texts_from_pinecone[i], urls_from_pinecone[i]) for i in top_20_titles_idx]
-      bm_title_f_time=time.time()-bm_title_time
+      # BM25 검색 (리팩토링됨 - BM25Retriever 사용)
+      bm_title_time = time.time()
+      Bm25_best_docs, adjusted_similarities = storage.bm25_retriever.search(
+          query_nouns=query_noun,
+          top_k=25,
+          normalize_factor=24.0
+      )
+      bm_title_f_time = time.time() - bm_title_time
       print(f"bm25 문서 뽑는시간: {bm_title_f_time}")
       ####################################################################################################
-      dense_time=time.time()
-      # 1. Dense Retrieval - Text 임베딩 기반 20개 문서 추출
-      query_dense_vector = np.array(embeddings.embed_query(user_question))  # 사용자 질문 임베딩
-
-      # Pinecone에서 텍스트에 대한 가장 유사한 벡터 20개 추출
-      pinecone_results_text = index.query(vector=query_dense_vector.tolist(), top_k=30, include_values=False, include_metadata=True)
-      pinecone_similarities_text = [res['score'] for res in pinecone_results_text['matches']]
-      pinecone_docs_text = [(res['metadata'].get('title', 'No Title'),
-                            res['metadata'].get('date', 'No Date'),
-                            res['metadata'].get('text', ''),
-                            res['metadata'].get('url', 'No URL')) for res in pinecone_results_text['matches']]
-
-     
-      pinecone_time=time.time()-dense_time
+      # Dense Retrieval (리팩토링됨 - DenseRetriever 사용)
+      dense_time = time.time()
+      combine_dense_docs = storage.dense_retriever.search(
+          user_question=user_question,
+          query_nouns=query_noun,
+          top_k=30
+      )
+      pinecone_time = time.time() - dense_time
       print(f"파인콘에서 top k 뽑는데 걸리는 시간 {pinecone_time}")
-
-      #####파인콘으로 구한  문서 추출 방식 결합하기.
-      combine_dense_docs = []
-
-      # 1. 본문 기반 문서를 combine_dense_docs에 먼저 추가
-      for idx, text_doc in enumerate(pinecone_docs_text):
-          text_similarity = pinecone_similarities_text[idx]*3.26
-          text_similarity=adjust_date_similarity(text_similarity,text_doc[1],query_noun)
-          matching_noun = [noun for noun in query_noun if noun in text_doc[2]]
-
-          # # 본문에 포함된 명사 수 기반으로 유사도 조정
-          for noun in matching_noun:
-              text_similarity += len(noun)*0.20
-              if re.search(r'\d', noun):  # 숫자가 포함된 단어 확인
-                  if noun in text_doc[2]:  # 본문에도 숫자 포함 단어가 있는 경우 추가 조정
-                      text_similarity += len(noun)*0.24
-                  else:
-                      text_similarity+=len(noun)*0.20
-          combine_dense_docs.append((text_similarity, text_doc))
-
-      ####query_noun에 포함된 키워드로 유사도를 보정
-      # 유사도 기준으로 내림차순 정렬
-      combine_dense_docs.sort(key=lambda x: x[0], reverse=True)
 
       # ## 결과 출력
       # print("\n통합된 파인콘문서 유사도:")
@@ -929,214 +408,33 @@ def best_docs(user_question):
       #################################################3#################################################3
       #####################################################################################################3
 
-      # Step 1: combine_dense_docs에 제목, 본문, 날짜, URL을 미리 저장
-
-      # combine_dense_doc는 (유사도, 제목, 본문 내용, 날짜, URL) 형식으로 데이터를 저장합니다.
-      combine_dense_doc = []
-      combine_time=time.time()
-      # combine_dense_docs의 내부 구조에 맞게 두 단계로 분해
-      for score, (title, date, text, url) in combine_dense_docs:
-          combine_dense_doc.append((score, title, text, date, url))
-        
-      combine_dense_doc=last_filter_keyword(combine_dense_doc,query_noun,user_question)
-      # Step 2: combine_dense_docs와 BM25 결과 합치기
-      final_best_docs = []
-
-      # combine_dense_docs와 BM25 결과를 합쳐서 처리
-      for score, title, text, date, url in combine_dense_doc:
-          matched = False
-          for bm25_doc in Bm25_best_docs:
-              if bm25_doc[0] == title:  # 제목이 일치하면 유사도를 합산
-                  combined_similarity = score + adjusted_similarities[titles_from_pinecone.index(bm25_doc[0])]
-                  final_best_docs.append((combined_similarity, bm25_doc[0], bm25_doc[1], bm25_doc[2], bm25_doc[3]))
-                  matched = True
-                  break
-          if not matched:
-
-              # 제목이 일치하지 않으면 combine_dense_docs에서만 유사도 사용
-              final_best_docs.append((score,title, date, text, url))
-
-
-      # 제목이 일치하지 않는 BM25 문서도 추가
-      for bm25_doc in Bm25_best_docs:
-          matched = False
-          for score, title, text, date, url in combine_dense_doc:
-              if bm25_doc[0] == title and bm25_doc[2]==text:  # 제목이 일치하면 matched = True로 처리됨
-                  matched = True
-                  break
-          if not matched:
-              # 제목이 일치하지 않으면 BM25 문서만 final_best_docs에 추가
-              combined_similarity = adjusted_similarities[titles_from_pinecone.index(bm25_doc[0])]  # BM25 유사도 가져오기
-              combined_similarity= adjust_date_similarity(combined_similarity,bm25_doc[1],query_noun)
-              final_best_docs.append((combined_similarity, bm25_doc[0], bm25_doc[1], bm25_doc[2], bm25_doc[3]))
-      final_best_docs.sort(key=lambda x: x[0], reverse=True)
-      final_best_docs=final_best_docs[:20]
-
-
-      # print("\n\n\n\n필터링 전 최종문서 (유사도 큰 순):")
-      # for idx, (scor, titl, dat, tex, ur, image_ur) in enumerate(final_best_docs):
-      #     print(f"순위 {idx+1}: 제목: {titl}, 유사도: {scor},본문 {len(tex)} 날짜: {dat}, URL: {ur}")
-      #     print("-" * 50)
-      
-      final_best_docs=last_filter_keyword(final_best_docs,query_noun,user_question)
-      final_best_docs.sort(key=lambda x: x[0], reverse=True)
-      combine_f_time=time.time()-combine_time
+      # BM25와 Dense Retrieval 결과 결합 (리팩토링됨 - DocumentCombiner 사용)
+      combine_time = time.time()
+      final_best_docs = storage.document_combiner.combine(
+          dense_results=combine_dense_docs,
+          bm25_results=Bm25_best_docs,
+          bm25_similarities=adjusted_similarities,
+          titles_from_pinecone=titles_from_pinecone,
+          query_nouns=query_noun,
+          user_question=user_question,
+          top_k=20
+      )
+      combine_f_time = time.time() - combine_time
       print(f"Bm25랑 pinecone 결합 시간: {combine_f_time}")
-      # print("\n\n\n\n중간필터 최종문서 (유사도 큰 순):")
-      # for idx, (scor, titl, dat, tex, ur, image_ur) in enumerate(final_best_docs):
-      #     print(f"순위 {idx+1}: 제목: {titl}, 유사도: {scor},본문 {len(tex)} 날짜: {dat}, URL: {ur}")
-      #     print("-" * 50)
-
-      def cluster_documents_by_similarity(docs, threshold=0.89):
-          clusters = []
-
-          for doc in docs:
-              title = doc[1]
-              added_to_cluster = False
-              # 기존 클러스터와 비교
-              for cluster in clusters:
-                  # 첫 번째 문서의 제목과 현재 문서의 제목을 비교해 유사도를 계산
-                  cluster_title = cluster[0][1]
-                  similarity = SequenceMatcher(None, cluster_title, title).ratio()
-                  # 유사도가 threshold 이상이면 해당 클러스터에 추가
-                  if similarity >= threshold:
-                      #print(f"{doc[0]} {cluster[0][0]}  {title} {cluster_title}")
-                      cluster_date=parse_date_change_korea_time(cluster[0][2])
-                      doc_in_date=parse_date_change_korea_time(doc[2])
-                      compare_date=abs(cluster_date-doc_in_date).days
-                      if cluster_title==title or(-doc[0]+cluster[0][0]<0.6 and cluster[0][3]!=doc[2] and compare_date<60):
-                        cluster.append(doc)
-                      added_to_cluster = True
-                      break
-
-              # 유사한 클러스터가 없으면 새로운 클러스터 생성
-              if not added_to_cluster:
-                  clusters.append([doc])
-
-          return clusters
-
-      # Step 1: Cluster documents by similarity
-      cluster_time=time.time()
-      clusters = cluster_documents_by_similarity(final_best_docs)
-      # print(clusters[0])
-      # print(clusters[1])
-      # 날짜 형식을 datetime 객체로 변환하는 함수
-      def parse_date(date_str):
-          # '작성일'을 제거하고 공백을 제거한 뒤 날짜 형식으로 변환
-          clean_date_str = date_str.replace("작성일", "").strip()
-          return datetime.strptime(clean_date_str, "%y-%m-%d %H:%M")
-      # Step 2: Compare cluster[0] cluster[1] top similarity and check condition
-      top_0_cluster_similar=clusters[0][0][0]
-      top_1_cluster_similar=clusters[1][0][0]
-      keywords = ["최근", "최신", "현재", "지금"]
-      #print(f"{top_0_cluster_similar} {top_1_cluster_similar}")
-      if (top_0_cluster_similar-top_1_cluster_similar<=0.3): ## 질문이 모호했다는 의미일 수 있음.. (예를 들면 수강신청 언제야? 인데 구체적으로 1학기인지, 2학기인지, 겨울, 여름인지 모르게..)
-          # 날짜를 비교해 더 최근 날짜를 가진 클러스터 선택
-          #조금더 세밀하게 들어가자면?
-          #print("세밀하게..")
-          if (any(keyword in word for word in query_noun for keyword in keywords) or top_0_cluster_similar-clusters[len(clusters)-1][0][0]<=0.3):
-            #print("최근이거나 뽑은 문서들이 유사도 0.3이내")
-            if (top_0_cluster_similar-clusters[len(clusters)-1][0][0]<=0.3):
-              #print("최근이면서 뽑은 문서들이 유사도 0.3이내 real")
-              sorted_cluster=sorted(clusters, key=lambda doc: doc[0][2], reverse=True)
-              sorted_cluster=sorted_cluster[0]
-            else:
-              #print("최근이면서 뽑은 문서들이 유사도 0.3이상")
-              if (top_0_cluster_similar-top_1_cluster_similar<=0.3):
-                #print("최근이면서 뽑은 두문서의 유사도 0.3이하이라서 두 문서로 줄임")
-                date1 = parse_date_change_korea_time(clusters[0][0][2])
-                date2 = parse_date_change_korea_time(clusters[1][0][2])
-                result_date=(date1-date2).days
-                if result_date<0:
-                  result_docs=clusters[1]
-                else:
-                  result_docs=clusters[0]
-                sorted_cluster = sorted(result_docs, key=lambda doc: doc[2], reverse=True)
-
-              else:
-                sorted_cluster=sorted(clusters, key=lambda doc: doc[0][0], reverse=True)
-                sorted_cluster=sorted_cluster[0]
-          else:
-           # print("두 클러스터로 판단해보자..")
-            if (top_0_cluster_similar-top_1_cluster_similar<=0.1):
-             # print("진짜 차이가 없는듯..?")
-              date1 =parse_date_change_korea_time(clusters[0][0][2])
-              date2 = parse_date_change_korea_time(clusters[1][0][2])
-              result_date=(date1-date2).days
-              if result_date<0:
-                #print("두번째 클러스터가 더 크네..?")
-                result_docs=clusters[1]
-              else:
-                #print("첫번째 클러스터가 더 크네..?")
-                result_docs=clusters[0]
-              sorted_cluster = sorted(result_docs, key=lambda doc: doc[2], reverse=True)
-            else:
-              #print("에이 그래도 유사도 차이가 있긴하네..")
-              result_docs=clusters[0]
-              sorted_cluster=sorted(result_docs,key=lambda doc: doc[0],reverse=True)
-      else: #질문이 모호하지 않을 가능성 업업
-          number_pattern = r"\d"
-          period_word=["여름","겨울"]
-          if (any(keyword in word for word in query_noun for keyword in keywords) or not any(re.search(number_pattern, word) for word in query_noun) or not any(key in word for word in query_noun for key in period_word)):
-              #print("최근 최신이라는 말 드가거나 2가지 모호한 판단 기준")
-              if (any(re.search(number_pattern, word) for word in query_noun) or any(key in word for word in query_noun for key in period_word)):
-                #print("최신인줄 알았지만 유사도순..")
-                result_docs=clusters[0]
-                num=0
-                for doc in result_docs:
-                  if re.search(r'\d+차', doc[1]):
-                    num+=1
-                if num>1:
-                  sorted_cluster=sorted(result_docs,key=lambda doc:doc[2],reverse=True)
-                else:
-                  sorted_cluster=sorted(result_docs,key=lambda doc:doc[0],reverse=True)
-              else:
-                #print("너는 그냥 최신순이 맞는거여..")
-                result_docs=clusters[0]
-                sorted_cluster=sorted(result_docs,key=lambda doc: doc[2],reverse=True)
-          else:
-            #print("진짜 유사도순대로")
-            result_docs=clusters[0]
-            sorted_cluster = sorted(clusters[0], key=lambda doc: doc[0], reverse=True)
-      cluster_f_time=time.time()-cluster_time
+      # 문서 클러스터링 및 최적 클러스터 선택 (리팩토링됨 - DocumentClusterer 사용)
+      cluster_time = time.time()
+      final_cluster, count = storage.document_clusterer.cluster_and_select(
+          documents=final_best_docs,
+          query_nouns=query_noun,
+          all_titles=titles_from_pinecone,
+          all_dates=dates_from_pinecone,
+          all_texts=texts_from_pinecone,
+          all_urls=urls_from_pinecone
+      )
+      cluster_f_time = time.time() - cluster_time
       print(f"cluster로 문서 추출하는 시간:{cluster_f_time}")
-      # print("\n\n\n\nadd_similar넣기전 상위 문서 (유사도 및 날짜 기준 정렬):")
-      # for idx, (scor, titl, dat, tex, ur, image_ur) in enumerate(sorted_cluster):
-      #     print(f"순위 {idx+1}: 제목: {titl}, 유사도: {scor}, 날짜: {dat}, URL: {ur} 내용: {len(tex)}   이미지{len(image_ur)}")
-      #     print("-" * 50)
-      # print("\n\n\n")
 
-      def organize_documents_v2(sorted_cluster, titles, doc_dates, texts, doc_urls):
-          # 첫 번째 문서를 기준으로 초기 설정
-          top_doc = sorted_cluster[0]
-          top_title = top_doc[1]
-
-          # new_sorted_cluster 초기화 및 첫 번째 문서와 동일한 제목을 가진 문서들을 모두 추가
-          new_sorted_cluster = []
-          # titles에서 top_title과 같은 제목을 가진 모든 문서를 new_sorted_cluster에 추가
-          count=0
-          for i, title in enumerate(titles):
-              if title == top_title:
-                  new_similar=top_doc[0]
-                  count+=1
-                  new_doc = (top_doc[0], titles[i], doc_dates[i], texts[i], doc_urls[i])
-                  new_sorted_cluster.append(new_doc)
-          for i in range(count-1):
-            fix_similar=list(new_sorted_cluster[i])
-            fix_similar[0]=fix_similar[0]+0.2*count
-            new_sorted_cluster[i]=tuple(fix_similar)
-          # sorted_cluster에서 new_sorted_cluster에 없는 제목만 추가
-          for doc in sorted_cluster:
-              doc_title = doc[1]
-              # 이미 new_sorted_cluster에 추가된 제목은 제외
-              if doc_title != top_title:
-                  new_sorted_cluster.append(doc)
-
-          return new_sorted_cluster,count
-
-      # 예시 사용
-      final_cluster,count = organize_documents_v2(sorted_cluster, titles_from_pinecone, dates_from_pinecone, texts_from_pinecone, urls_from_pinecone)
-      return final_cluster[:count], query_noun
+      return final_cluster, query_noun
 
 prompt_template = """당신은 경북대학교 컴퓨터학부 공지사항을 전달하는 직원이고, 사용자의 질문에 대해 올바른 공지사항의 내용을 참조하여 정확하게 전달해야 할 의무가 있습니다.
 현재 한국 시간: {current_time}
@@ -1201,7 +499,7 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
     if not relevant_docs:
       return None, None
 
-    llm = ChatUpstage(api_key=upstage_api_key)
+    llm = ChatUpstage(api_key=storage.upstage_api_key)
     relevant_docs_content=format_docs(relevant_docs)
     
     qa_chain = (
@@ -1285,7 +583,7 @@ def question_valid(question, top_docs, query_noun):
     ### 질문의 명사화: '{query_noun}'
     """
 
-    llm = ChatUpstage(api_key=upstage_api_key)
+    llm = ChatUpstage(api_key=storage.upstage_api_key)
     response = llm.invoke(prompt)
 
     if "예" in response.content.strip():
@@ -1324,11 +622,11 @@ def get_ai_message(question):
                 response += f"제목: {title}, 날짜: {date} \n----------------------------------------------------\n"
                 seen_urls.add(url)  # URL 추가하여 중복 방지
       if '채용' in query_noun:
-        show_url="https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_3_b&wr_id="
+        show_url = COMPANY_BASE_URL + "&wr_id="
       elif '공지사항' in query_noun:
-        show_url="https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_1&wr_id="         
+        show_url = NOTICE_BASE_URL + "&wr_id="
       else:
-        show_url="https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_4&wr_id="
+        show_url = SEMINAR_BASE_URL + "&wr_id="
 
       # 최종 data 구조 생성
       data = {
@@ -1353,19 +651,24 @@ def get_ai_message(question):
     final_url = top_docs[0][4]
     final_image = []
 
-    record = collection.find_one({"title" : final_title})
-    if record :
-        if(isinstance(record["image_url"], list)):
-          final_image.extend(record["image_url"])
+    # MongoDB 연결 확인 후 이미지 URL 조회
+    if storage.mongo_collection is not None:
+        record = storage.mongo_collection.find_one({"title" : final_title})
+        if record :
+            if(isinstance(record["image_url"], list)):
+              final_image.extend(record["image_url"])
+            else :
+              final_image.append(record["image_url"])
         else :
-          final_image.append(record["image_url"])
-    else :
-        print("일치하는 문서 존재 X")
-        final_score = 0
-        final_title = "No content"
-        final_date = "No content"
-        final_text = "No content"
-        final_url = "No URL"
+            print("일치하는 문서 존재 X")
+            final_score = 0
+            final_title = "No content"
+            final_date = "No content"
+            final_text = "No content"
+            final_url = "No URL"
+            final_image = ["No content"]
+    else:
+        logger.warning("⚠️  MongoDB 연결 없음 - 이미지 URL 조회 불가")
         final_image = ["No content"]
     valid_f_time=time.time()-valid_time
     print(f"질문 적합도 체크하는 시간: {valid_f_time}")
@@ -1390,7 +693,7 @@ def get_ai_message(question):
         qa_chain, relevant_docs = get_answer_from_chain(top_docs, question,query_noun)
         chain_f_time=time.time()-chain_time
         print(f"chain 생성하는 시간: {chain_f_time}")
-        if final_url == "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub2_2&lang=kor" and any(keyword in query_noun for keyword in ['연락처', '전화', '번호', '전화번호']):
+        if final_url == PROFESSOR_BASE_URL + "&lang=kor" and any(keyword in query_noun for keyword in ['연락처', '전화', '번호', '전화번호']):
             data = {
                 "answer": "해당 교수님은 연락처 정보가 포함되어 있지 않습니다.\n 자세한 정보는 교수진 페이지를 참고하세요.",
                 "references": final_url,
@@ -1430,7 +733,7 @@ def get_ai_message(question):
         #         return data
 
         # 공지사항에 존재하지 않을 경우
-        notice_url = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_1"
+        notice_url = NOTICE_BASE_URL
         not_in_notices_response = {
             "answer": "해당 질문은 공지사항에 없는 내용입니다.\n 자세한 사항은 공지사항을 살펴봐주세요.",
             "references": notice_url,
