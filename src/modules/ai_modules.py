@@ -314,6 +314,20 @@ def initialize_cache():
         storage.cached_titles, storage.cached_texts, storage.cached_urls, storage.cached_dates = fetch_titles_from_pinecone()
         logger.info(f"✅ Pinecone에서 {len(storage.cached_titles)}개 문서 메타데이터를 가져왔습니다.")
 
+        # BM25Retriever 초기화
+        from modules.retrieval import BM25Retriever
+        bm25_retriever = BM25Retriever(
+            titles=storage.cached_titles,
+            texts=storage.cached_texts,
+            urls=storage.cached_urls,
+            dates=storage.cached_dates,
+            query_transformer=transformed_query,
+            similarity_adjuster=adjust_similarity_scores,
+            k1=1.5,
+            b=0.75
+        )
+        storage.set_bm25_retriever(bm25_retriever)
+
         # Redis에 저장 시도
         if storage.redis_client is not None:
             try:
@@ -755,30 +769,14 @@ def best_docs(user_question):
 
       remove_noticement = ['제일','가장','공고', '공지사항','필독','첨부파일','수업','컴학','상위','관련']
 
-      bm_title_time=time.time()
-      tokenized_titles = [transformed_query(title) for title in titles_from_pinecone]
-
-      # 기존과 동일한 파라미터를 사용하고 있는지 확인
-      bm25_titles = BM25Okapi(tokenized_titles, k1=1.5, b=0.75)  # 기존 파라미터 확인
-
-      title_question_similarities = bm25_titles.get_scores(query_noun)  # 제목과 사용자 질문 간의 유사도
-      title_question_similarities /= 24
-      
-
-      adjusted_similarities = adjust_similarity_scores(query_noun, titles_from_pinecone,texts_from_pinecone, title_question_similarities)
-      # 유사도 기준 상위 15개 문서 선택
-      top_20_titles_idx = np.argsort(title_question_similarities)[-25:][::-1]
-
-       # 결과 출력
-      # print("최종 정렬된 BM25 문서:")
-      # for idx in top_20_titles_idx:  # top_20_titles_idx에서 각 인덱스를 가져옴
-      #     print(f"  제목: {titles[idx]}")
-      #     print(f"  유사도: {title_question_similarities[idx]}")
-      #     print(f" URL: {doc_urls[idx]}")
-      #     print("-" * 50)
-
-      Bm25_best_docs = [(titles_from_pinecone[i], dates_from_pinecone[i], texts_from_pinecone[i], urls_from_pinecone[i]) for i in top_20_titles_idx]
-      bm_title_f_time=time.time()-bm_title_time
+      # BM25 검색 (리팩토링됨 - BM25Retriever 사용)
+      bm_title_time = time.time()
+      Bm25_best_docs, adjusted_similarities = storage.bm25_retriever.search(
+          query_nouns=query_noun,
+          top_k=25,
+          normalize_factor=24.0
+      )
+      bm_title_f_time = time.time() - bm_title_time
       print(f"bm25 문서 뽑는시간: {bm_title_f_time}")
       ####################################################################################################
       dense_time=time.time()

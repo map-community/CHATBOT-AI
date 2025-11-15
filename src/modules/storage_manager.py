@@ -65,6 +65,9 @@ class StorageManager:
         self.cached_urls = []
         self.cached_dates = []
 
+        # Retriever 인스턴스 (캐시 초기화 후 생성됨)
+        self._bm25_retriever = None
+
         self._initialized = True
         logger.info("✅ StorageManager 초기화 완료 (연결은 아직 시작되지 않음)")
 
@@ -160,6 +163,18 @@ class StorageManager:
                 logger.warning("⚠️  Redis 없이 계속 진행합니다. 캐싱 기능이 비활성화됩니다.")
                 self._redis_client = None
         return self._redis_client
+
+    @property
+    def bm25_retriever(self):
+        """BM25Retriever 인스턴스 (캐시 초기화 후 사용 가능)"""
+        if self._bm25_retriever is None:
+            logger.warning("⚠️  BM25Retriever가 아직 초기화되지 않았습니다. initialize_cache()를 먼저 호출하세요.")
+        return self._bm25_retriever
+
+    def set_bm25_retriever(self, retriever):
+        """BM25Retriever 인스턴스 설정 (initialize_cache에서 호출)"""
+        self._bm25_retriever = retriever
+        logger.info("✅ BM25Retriever 인스턴스 설정 완료")
 
     def close_all_connections(self):
         """모든 연결 종료"""
