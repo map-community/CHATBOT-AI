@@ -89,7 +89,7 @@ def main():
             notice_data = notice_crawler.crawl_urls(notice_urls)
 
             # 멀티모달 문서 처리 (중복 체크, OCR, 첨부파일 파싱 포함)
-            embedding_items, new_count = document_processor.process_documents_multimodal(notice_data)
+            embedding_items, new_count = document_processor.process_documents_multimodal(notice_data, category="notice")
 
             all_embedding_items.extend(embedding_items)
 
@@ -120,7 +120,7 @@ def main():
             job_urls = job_crawler.generate_urls(crawl_range)
             job_data = job_crawler.crawl_urls(job_urls)
 
-            embedding_items, new_count = document_processor.process_documents_multimodal(job_data)
+            embedding_items, new_count = document_processor.process_documents_multimodal(job_data, category="job")
 
             all_embedding_items.extend(embedding_items)
 
@@ -150,7 +150,7 @@ def main():
             seminar_urls = seminar_crawler.generate_urls(crawl_range)
             seminar_data = seminar_crawler.crawl_urls(seminar_urls)
 
-            embedding_items, new_count = document_processor.process_documents_multimodal(seminar_data)
+            embedding_items, new_count = document_processor.process_documents_multimodal(seminar_data, category="seminar")
 
             all_embedding_items.extend(embedding_items)
 
@@ -182,7 +182,7 @@ def main():
     combined_professor_data = professor_data + guest_professor_data + staff_data
 
     # 멀티모달 문서 처리
-    embedding_items, new_count = document_processor.process_documents_multimodal(combined_professor_data)
+    embedding_items, new_count = document_processor.process_documents_multimodal(combined_professor_data, category="professor")
 
     all_embedding_items.extend(embedding_items)
 

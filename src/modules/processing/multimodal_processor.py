@@ -69,7 +69,8 @@ class MultimodalContent:
         items = []
 
         # 1. 텍스트 청크
-        for chunk in self.text_chunks:
+        total_text_chunks = len(self.text_chunks)
+        for idx, chunk in enumerate(self.text_chunks):
             items.append((
                 chunk,
                 {
@@ -77,11 +78,14 @@ class MultimodalContent:
                     "url": self.url,
                     "date": self.date,
                     "content_type": "text",
+                    "chunk_index": idx,
+                    "total_chunks": total_text_chunks,
+                    "source": "original_post"  # 원본 게시글
                 }
             ))
 
         # 2. 이미지 OCR 결과
-        for img in self.image_contents:
+        for idx, img in enumerate(self.image_contents):
             if img["ocr_text"]:
                 # OCR 텍스트를 임베딩
                 combined_text = f"[이미지 텍스트]\n{img['ocr_text']}"
@@ -97,12 +101,14 @@ class MultimodalContent:
                         "url": self.url,
                         "date": self.date,
                         "content_type": "image",
-                        "image_url": img["url"]
+                        "image_url": img["url"],
+                        "image_index": idx,
+                        "source": "image_ocr"  # OCR 결과
                     }
                 ))
 
         # 3. 첨부파일 내용
-        for att in self.attachment_contents:
+        for idx, att in enumerate(self.attachment_contents):
             if att["text"]:
                 items.append((
                     f"[첨부파일: {att['type'].upper()}]\n{att['text']}",
@@ -112,7 +118,9 @@ class MultimodalContent:
                         "date": self.date,
                         "content_type": "attachment",
                         "attachment_url": att["url"],
-                        "attachment_type": att["type"]
+                        "attachment_type": att["type"],
+                        "attachment_index": idx,
+                        "source": "document_parse"  # Document Parse 결과
                     }
                 ))
 

@@ -211,13 +211,15 @@ class DocumentProcessor:
 
     def process_documents_multimodal(
         self,
-        document_data: List[Tuple[str, str, any, any, str, str]]
+        document_data: List[Tuple[str, str, any, any, str, str]],
+        category: str = "notice"
     ) -> Tuple[List[Tuple[str, Dict]], int]:
         """
         멀티모달 문서 리스트 처리 (이미지 OCR, 첨부파일 파싱 포함)
 
         Args:
             document_data: [(title, text, image_list, attachment_list, date, url), ...] 형식의 리스트
+            category: 게시판 카테고리 (notice, job, seminar, professor 등)
 
         Returns:
             (embedding_items, new_count) 튜플
@@ -259,7 +261,11 @@ class DocumentProcessor:
 
             # 임베딩 아이템으로 변환
             items = multimodal_content.to_embedding_items()
-            embedding_items.extend(items)
+
+            # 각 아이템에 카테고리 정보 추가
+            for text, metadata in items:
+                metadata["category"] = category
+                embedding_items.append((text, metadata))
 
             # MongoDB에 처리 완료 표시
             self.mark_as_processed(title, first_image)
