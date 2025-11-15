@@ -315,7 +315,8 @@ def initialize_cache():
         logger.info(f"✅ Pinecone에서 {len(storage.cached_titles)}개 문서 메타데이터를 가져왔습니다.")
 
         # BM25Retriever 초기화
-        from modules.retrieval import BM25Retriever
+        from modules.retrieval import BM25Retriever, DenseRetriever
+
         bm25_retriever = BM25Retriever(
             titles=storage.cached_titles,
             texts=storage.cached_texts,
@@ -327,6 +328,17 @@ def initialize_cache():
             b=0.75
         )
         storage.set_bm25_retriever(bm25_retriever)
+
+        # DenseRetriever 초기화
+        dense_retriever = DenseRetriever(
+            embeddings_factory=get_embeddings,
+            pinecone_index=storage.pinecone_index,
+            date_adjuster=adjust_date_similarity,
+            similarity_scale=3.26,
+            noun_weight=0.20,
+            digit_weight=0.24
+        )
+        storage.set_dense_retriever(dense_retriever)
 
         # Redis에 저장 시도
         if storage.redis_client is not None:
@@ -779,45 +791,15 @@ def best_docs(user_question):
       bm_title_f_time = time.time() - bm_title_time
       print(f"bm25 문서 뽑는시간: {bm_title_f_time}")
       ####################################################################################################
-      dense_time=time.time()
-      # 1. Dense Retrieval - Text 임베딩 기반 20개 문서 추출
-      embeddings = get_embeddings()  # Lazy initialization
-      query_dense_vector = np.array(embeddings.embed_query(user_question))  # 사용자 질문 임베딩
-
-      # Pinecone에서 텍스트에 대한 가장 유사한 벡터 20개 추출
-      pinecone_results_text = storage.pinecone_index.query(vector=query_dense_vector.tolist(), top_k=30, include_values=False, include_metadata=True)
-      pinecone_similarities_text = [res['score'] for res in pinecone_results_text['matches']]
-      pinecone_docs_text = [(res['metadata'].get('title', 'No Title'),
-                            res['metadata'].get('date', 'No Date'),
-                            res['metadata'].get('text', ''),
-                            res['metadata'].get('url', 'No URL')) for res in pinecone_results_text['matches']]
-
-     
-      pinecone_time=time.time()-dense_time
+      # Dense Retrieval (리팩토링됨 - DenseRetriever 사용)
+      dense_time = time.time()
+      combine_dense_docs = storage.dense_retriever.search(
+          user_question=user_question,
+          query_nouns=query_noun,
+          top_k=30
+      )
+      pinecone_time = time.time() - dense_time
       print(f"파인콘에서 top k 뽑는데 걸리는 시간 {pinecone_time}")
-
-      #####파인콘으로 구한  문서 추출 방식 결합하기.
-      combine_dense_docs = []
-
-      # 1. 본문 기반 문서를 combine_dense_docs에 먼저 추가
-      for idx, text_doc in enumerate(pinecone_docs_text):
-          text_similarity = pinecone_similarities_text[idx]*3.26
-          text_similarity=adjust_date_similarity(text_similarity,text_doc[1],query_noun)
-          matching_noun = [noun for noun in query_noun if noun in text_doc[2]]
-
-          # # 본문에 포함된 명사 수 기반으로 유사도 조정
-          for noun in matching_noun:
-              text_similarity += len(noun)*0.20
-              if re.search(r'\d', noun):  # 숫자가 포함된 단어 확인
-                  if noun in text_doc[2]:  # 본문에도 숫자 포함 단어가 있는 경우 추가 조정
-                      text_similarity += len(noun)*0.24
-                  else:
-                      text_similarity+=len(noun)*0.20
-          combine_dense_docs.append((text_similarity, text_doc))
-
-      ####query_noun에 포함된 키워드로 유사도를 보정
-      # 유사도 기준으로 내림차순 정렬
-      combine_dense_docs.sort(key=lambda x: x[0], reverse=True)
 
       # ## 결과 출력
       # print("\n통합된 파인콘문서 유사도:")
