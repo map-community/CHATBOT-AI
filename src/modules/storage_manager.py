@@ -71,6 +71,10 @@ class StorageManager:
         self._document_combiner = None
         self._document_clusterer = None
 
+        # Preprocessing 인스턴스
+        self._query_transformer = None
+        self._keyword_filter = None
+
         self._initialized = True
         logger.info("✅ StorageManager 초기화 완료 (연결은 아직 시작되지 않음)")
 
@@ -214,6 +218,30 @@ class StorageManager:
         """DocumentClusterer 인스턴스 설정 (initialize_cache에서 호출)"""
         self._document_clusterer = clusterer
         logger.info("✅ DocumentClusterer 인스턴스 설정 완료")
+
+    @property
+    def query_transformer(self):
+        """QueryTransformer 인스턴스 (초기화 후 사용 가능)"""
+        if self._query_transformer is None:
+            logger.warning("⚠️  QueryTransformer가 아직 초기화되지 않았습니다.")
+        return self._query_transformer
+
+    def set_query_transformer(self, transformer):
+        """QueryTransformer 인스턴스 설정"""
+        self._query_transformer = transformer
+        logger.info("✅ QueryTransformer 인스턴스 설정 완료")
+
+    @property
+    def keyword_filter(self):
+        """KeywordFilter 인스턴스 (초기화 후 사용 가능)"""
+        if self._keyword_filter is None:
+            logger.warning("⚠️  KeywordFilter가 아직 초기화되지 않았습니다.")
+        return self._keyword_filter
+
+    def set_keyword_filter(self, filter_instance):
+        """KeywordFilter 인스턴스 설정"""
+        self._keyword_filter = filter_instance
+        logger.info("✅ KeywordFilter 인스턴스 설정 완료")
 
     def close_all_connections(self):
         """모든 연결 종료"""

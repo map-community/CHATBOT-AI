@@ -64,215 +64,18 @@ storage = get_storage_manager()
 def get_korean_time():
     return datetime.now(pytz.timezone('Asia/Seoul'))
 
-# 단어 명사화 함수.
+# 단어 명사화 함수 (리팩토링됨 - QueryTransformer 사용)
 def transformed_query(content):
-    # 중복된 단어를 제거한 명사를 담을 리스트
-    query_nouns = []
+    """
+    질문을 명사 키워드 리스트로 변환
 
-    # 1. 숫자와 특정 단어가 결합된 패턴 추출 (예: '2024학년도', '1월' 등)
-    pattern = r'\d+(?:학년도|년|학년|월|일|학기|시|분|초|기|개|차)?'
-    number_matches = re.findall(pattern, content)
-    query_nouns += number_matches
-    # 추출된 단어를 content에서 제거
-    for match in number_matches:
-        content = content.replace(match, '')
+    Args:
+        content: 사용자 질문 (원문)
 
-
-    # 1. 영어 단어를 단독으로 또는 한글과 결합된 경우 추출 (영어만 추출)
-    english_pattern = r'[a-zA-Z]+'
-    english_matches = re.findall(english_pattern, content)
-
-    # 대문자로 변환 후 query_nouns에 추가
-    english_matches_upper = [match.upper() for match in english_matches]
-    query_nouns += english_matches_upper
-
-    # content에서 영어 단어 제거
-    for match in english_matches:
-        content = re.sub(rf'\b{re.escape(match)}\b', '', content)
-
-    if '시간표' in content:
-        content=content.replace('시간표','')
-    if 'EXIT' in query_nouns:
-        query_nouns.append('출구')
-    if any(keyword in content for keyword in ['벤처아카데미','벤처아카데미']):
-      query_nouns.append("벤처아카데미")
-    if '군' in content:
-        query_nouns.append('군')
-    if '인컴' in content:
-        query_nouns.append('인공지능컴퓨팅')
-    if '인공' in content and '지능' in content and '컴퓨팅' in content:
-        query_nouns.append('인공지능컴퓨팅')
-    if '학부생' in content:
-        query_nouns.append('학부생')
-    ## 직원 E9호관 있는거 추가하려고함.
-    if '공대' in content:
-        query_nouns.append('E')
-    if '설명회' in content:
-        query_nouns.append('설명회')
-    if '컴학' in content:
-        query_nouns.append('컴퓨터학부')
-    if '컴퓨터' in content and '비전' in content:
-        query_nouns.append('컴퓨터비전')
-        content = content.replace('컴퓨터 비전', '컴퓨터비전')
-        content = content.replace('컴퓨터비전', '')
-    if '컴퓨터' in content and '학부' in content:
-        query_nouns.append('컴퓨터학부')
-        content = content.replace('컴퓨터 학부', '컴퓨터학부')
-        content = content.replace('컴퓨터학부', '')
-    if '선발' in content:
-        content=content.replace('선발','')
-    if '차' in content:
-        query_nouns.append('차')
-    if '국가 장학금' in content:
-        query_nouns.append('국가장학금')
-        content=content.replace('국가 장학금','')
-    if '종프' in content:
-        query_nouns.append('종합설계프로젝트')
-    if '종합설계프로젝트' in content:
-        query_nouns.append('종합설계프로젝트')
-    if '대회' in content:
-        query_nouns.append('경진대회')
-        content=content.replace('대회','')
-    if '튜터' in content:
-        query_nouns.append('TUTOR')
-        content = content.replace('튜터', '')  # '튜터' 제거
-    if '탑싯' in content:
-        query_nouns.append('TOPCIT')
-        content=content.replace('탑싯','')
-    if '시험' in content:
-        query_nouns.append('시험')
-    if '하계' in content:
-        query_nouns.append('여름')
-        query_nouns.append('하계')
-    if '동계' in content:
-        query_nouns.append('겨울')
-        query_nouns.append('동계')
-    if '겨울' in content:
-        query_nouns.append('겨울')
-        query_nouns.append('동계')
-    if '여름' in content:
-        query_nouns.append('여름')
-        query_nouns.append('하계')
-    if '성인지' in content:
-        query_nouns.append('성인지')
-    if '첨성인' in content:
-        query_nouns.append('첨성인')
-    if '글솦' in content:
-        query_nouns.append('글솝')
-    if '수꾸' in content:
-        query_nouns.append('수강꾸러미')
-    if '장학금' in content:
-        query_nouns.append('장학생')
-        query_nouns.append('장학')
-    if '장학생' in content:
-        query_nouns.append('장학금')
-        query_nouns.append('장학')
-    if '대해' in content:
-        content=content.replace('대해','')
-    if '에이빅' in content:
-        query_nouns.append('에이빅')
-        query_nouns.append('ABEEK')
-        content=content.replace('에이빅','')
-    if '선이수' in content:
-        query_nouns.append('선이수')
-        content=content.replace('선이수','')
-    if '선후수' in content:
-        query_nouns.append('선이수')
-        content=content.replace('선후수','')
-    if '학자금' in content:
-        query_nouns.append('학자금')
-        content=content.replace('학자금','')
-    if  any(keyword in content for keyword in ['오픈 소스','오픈소스']):
-        query_nouns.append('오픈소스')
-        content=content.replace('오픈 소스','')
-        content=content.replace('오픈소스','')
-    if any(keyword in content for keyword in ['군','군대']) and '휴학' in content:
-        query_nouns.append('군')
-        query_nouns.append('군휴학')
-        query_nouns.append('군입대')
-    if '카테캠' in content:
-        query_nouns.append('카카오')
-        query_nouns.append('테크')
-        query_nouns.append('캠퍼스')
-    re_keyword = ['재이수', '재 이수', '재 수강', '재수강']
-    # 각 키워드를 빈 문자열로 치환
-    if any(key in content for key in re_keyword):
-      for keyword in re_keyword:
-        query_nouns.append('재이수')
-        content = content.replace(keyword, '')
-    if '과목' in content:
-        query_nouns.append('강의')
-    if '강의' in content:
-        query_nouns.append('과목')
-        query_nouns.append('강좌')
-    if '강좌' in content:
-        query_nouns.append('강좌')
-        contnet=content.replace('강좌','')
-    if '외국어' in content:
-        query_nouns.append('외국어') 
-        contnet=content.replace('외국어','')
-    if '부' in content and '전공' in content:
-        query_nouns.append('부전공') 
-    if '수꾸' in content:
-        query_nouns.append('수강꾸러미')
-    if '계절' in content and '학기' in content:
-        query_nouns.append('수업')
-    if '채용' in content and any(keyword in content for keyword in ['모집','공고']):
-        if '모집' in content:
-          content=content.replace('모집','')
-        if '공고' in content:
-          content=content.replace('공고','')
-    # 비슷한 의미 모두 추가 (세미나)
-    related_keywords = ['세미나','특강', '강연']
-    if any(keyword in content for keyword in related_keywords):
-        for keyword in related_keywords:
-            query_nouns.append(keyword)
-    # "공지", "사항", "공지사항"을 query_nouns에서 '공지사항'이라고 고정하고 나머지 부분 삭제
-    keywords=['공지','사항','공지사항']
-    if any(keyword in content for keyword in keywords):
-      # 키워드 제거
-      for keyword in keywords:
-          content = content.replace(keyword, '')
-          query_nouns.append('공지사항')
-
-    keywords=['사원','신입사원']
-    if any(keyword in content for keyword in keywords):
-        for keyword in keywords:
-          content = content.replace(keyword, '')
-          query_nouns.append('신입')
-    # 5. Mecab 형태소 분석기를 이용한 추가 명사 추출
-    if MECAB_AVAILABLE:
-        mecab = Mecab()
-        additional_nouns = [noun for noun in mecab.nouns(content) if len(noun) > 1]
-        query_nouns += additional_nouns
-    else:
-        # Mecab 없이 간단한 토큰화 (정확도는 낮지만 작동함)
-        logger.debug("⚠️  Mecab 없이 간단한 토큰화 사용")
-        simple_tokens = content.split()
-        additional_nouns = [token for token in simple_tokens if len(token) > 1]
-        query_nouns += additional_nouns
-    if '인도' not in query_nouns and  '인턴십' in query_nouns:
-        query_nouns.append('베트남')
-
-    # 6. "수강" 단어와 관련된 키워드 결합 추가
-    if '수강' in content:
-        related_keywords = ['변경', '신청', '정정', '취소','꾸러미']
-        for keyword in related_keywords:
-            if keyword in content:
-                # '수강'과 결합하여 새로운 키워드 추가
-                combined_keyword = '수강' + keyword
-                query_nouns.append(combined_keyword)
-                if ('수강' in query_nouns):
-                  query_nouns.remove('수강')
-                for keyword in related_keywords:
-                  if keyword in query_nouns:
-                    query_nouns.remove(keyword)
-    # 최종 명사 리스트에서 중복된 단어 제거
-    if '꾸러미' in content and '수강신청' in query_nouns:
-      query_nouns.append('신청')
-
-    query_nouns = list(set(query_nouns))
-    return query_nouns
+    Returns:
+        List[str]: 추출된 명사 키워드 리스트
+    """
+    return storage.query_transformer.transform(content)
 ###################################################################################################
 
 
@@ -358,6 +161,16 @@ def initialize_cache():
             similarity_threshold=0.89
         )
         storage.set_document_clusterer(document_clusterer)
+
+        # QueryTransformer 초기화
+        from modules.preprocessing import QueryTransformer, KeywordFilter
+
+        query_transformer = QueryTransformer(use_mecab=MECAB_AVAILABLE)
+        storage.set_query_transformer(query_transformer)
+
+        # KeywordFilter 초기화
+        keyword_filter = KeywordFilter()
+        storage.set_keyword_filter(keyword_filter)
 
         # Redis에 저장 시도
         if storage.redis_client is not None:
@@ -487,237 +300,20 @@ def adjust_similarity_scores(query_noun, title, texts, similarities):
 
 #############################################################################################
 
-def last_filter_keyword(DOCS,query_noun,user_question):
-        # 필터링에 사용할 키워드 리스트
-        Final_best=DOCS
-        # 키워드가 포함된 경우 유사도를 조정하고, 유사도 기준으로 내림차순 정렬
-        for idx, doc in enumerate(DOCS):
-            score, title, date, text, url = doc
-            if not any(keyword in query_noun for keyword in["현장", "실습", "현장실습"]) and any(keyword in title for keyword in ["현장실습","대체","기준"]):
-              score-=1.0
-            # wr_id 뒤에 오는 숫자 추출
-            target_numbers = [27510, 27047, 27614, 27246, 25900, 27553, 25896, 28183,27807,25817,25804]
+# 키워드 필터링 함수 (리팩토링됨 - KeywordFilter 사용)
+def last_filter_keyword(DOCS, query_noun, user_question):
+    """
+    키워드 기반 문서 필터링
 
-            match = re.search(r"wr_id=(\d+)", url)
-            if match:
-                extracted_number = int(match.group(1))
-                # 숫자가 target_numbers에 포함되면 score 증가
-                if extracted_number in target_numbers:
-                    if any(keyword in query_noun for keyword in ['에이빅','ABEEK']) and any(keyword in text for keyword in ['에이빅','ABEEK']):
-                        if extracted_number==27047:
-                           score+=0.3
-                        else:
-                           score+=1.5
-                    else:
-                        if '폐강' not in query_noun:
-                          score+=0.8
-                        if '계절' in query_noun:
-                            score-=2.0
-                        if '전과' in query_noun:
-                          score-=1.0
-                        if '유예' in query_noun and '학사' in query_noun and extracted_number==28183:
-                          score+=0.45
-            if '기념' in query_noun and '기념' in title and url=="https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_4&wr_id=354":
-              score+=0.5
-            if '스탬프' not in query_noun and '스탬프' in title:
-              score-=0.5
-            if '기말' in query_noun and '기말' in title:
-                score+=1.0
-            if '중간' in query_noun and '중간' in title:
-                score+=1.0
-            if '졸업' in query_noun and '졸업' not in title and '포트폴리오' in query_noun and '포트폴리오' in title:
-              score-=1.0
-            if '졸업' in query_noun and '포트폴리오' in title and '졸업' in title and '포트폴리오' in query_noun:
-              score+=1.0
-            if 'TUTOR' in title and 'TUTOR' not in query_noun:
-                score-=1.0
-            class_word = ['신청', '취소', '변경']
-            for keyword in class_word:
-              if keyword in query_noun and '계절' in query_noun and keyword in title:
-                  score += 1.3
-                  break
-            if '자퇴' in title and '자퇴' in query_noun:
-                score+=1.0
-            if '전과' in title and '전과' in query_noun:
-              score+=1.0
-            if '조기' in title and '조기' not in query_noun:
-              score-=0.5    
-            if '수강' in title:
-              if url=="https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_1&wr_id=28180":
-                score-=3.0
-              if any(keyword in query_noun for keyword in ['폐강','재이수']):
-                if '폐강' in query_noun and any(keyword in title for keyword in ['신청', '정정']):
-                  score+=2.0
-                else:
-                  score+=0.8  
-                if '재이수' in query_noun:
-                  if '꾸러미' in title:
-                    score+=1.0
-                  elif '신청' in title:
-                    score+=2.0
-                  else:
-                    score+=1.5
-            if '설문' not in query_noun and '설문' in title:
-                score-=0.5
-            if any(keyword in query_noun for keyword in ['군','군대']) and '군' in title:
-              if '학점' in title and '학점' not in query_noun:
-                score-=1.0
-              else:
-                score+=1.5
-            if '군' not in query_noun and '군' in title:
-              score-=1.0
-            if '복학' in query_noun and '복학' in title:
-                score+=1.0
-            if '휴학' in query_noun and '휴학' in title:
-                score+=1.0
-            if '카카오' in title and '카카오' in query_noun:
-                score+=0.6
-            if '설계' in title:
-                score-=0.4
-            if '오픈소스' in query_noun and '오픈소스' in title:
-                score+=0.5
-            if 'SDG' in query_noun and 'SDG' in title:
-                score+=2.9
-            if any(keyword in query_noun for keyword in ['인턴','인턴십'])  and any(keyword in query_noun for keyword in ['인도','베트남']):
-                score+=1.0
-            if any(keyword in title for keyword in ['수요','조사']) and not any(keyword in query_noun for keyword in ['수요','조사']):
-                score-=0.6
-            if '여름' in query_noun and any(keyword in title for keyword in['겨울',"동계"]):
-                score-=1.0
-            if '겨울' in query_noun and any(keyword in title for keyword in['하계',"여름"]):
-                score-=1.0
-            if '여름' in query_noun and any(keyword in title for keyword in['하계',"여름"]):
-                score+=0.7
-                if '벤처아카데미' in query_noun:
-                  score+=2.0
-            if '겨울' in query_noun and any(keyword in title for keyword in['겨울',"동계"]):
-                score+=0.7
-                if '벤처아카데미' in query_noun:
-                  score+=2.0
- 
-            if '1학기' in query_noun and '1학기' in title:
-                score+=1.0
-            if '2학기' in query_noun and '2학기' in title:
-                score+=1.0
-            if '1학기' in query_noun and '2학기' in title:
-                score-=1.0
-            if '2학기' in query_noun and '1학기' in title:
-                score-=1.0
-            if any(keyword in text for keyword in ['종프','종합설계프로젝트']) and any(keyword in user_question for keyword in ['종프','종합설계프로젝트']):
-                score+=0.7
-                if '설명회' in query_noun and '설명회' in title:
-                  score+=0.7
-                else:
-                  score-=1.0
-            if '부전공' in query_noun and '부전공' in title:
-                score+=1.0
-            if any(keyword in query_noun for keyword in ['복전','복수','복수전공']) and  any(keyword in title for keyword in ['복수']):
-                score+=0.7
-            if not any(keyword in query_noun for keyword in ['복전','복수','복수전공']) and any(keyword in title for keyword in ['복수']):
-                score-=1.4
-            if any(keyword in title for keyword in ['심컴','심화컴퓨터전공','심화 컴퓨터공학','심화컴퓨터공학']):
-              if any(keyword in user_question for keyword in['심컴','심화컴퓨터전공']):
-                score+=0.7
-              else:
-                if not "컴퓨터비전" in query_noun:
-                  score-=0.7
-            elif any(keyword in title for keyword in ['글로벌소프트웨어전공','글로벌SW전공','글로벌소프트웨어융합전공','글솝','글솦']):
-              if any(keyword in user_question for keyword in ['글로벌소프트웨어융합전공','글로벌소프트웨어전공','글로벌SW전공','글솝','글솦']):
-                score+=0.7
-              else:
-                score-=0.8
-            elif any(keyword in title for keyword in['인컴','인공지능컴퓨팅']):
-              if any(keyword in user_question for keyword in ['인컴','인공지능컴퓨팅']):
-                score+=0.7
-                if url=="https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_1&wr_id=27553":
-                  score+=1.0
-              else:
-                score-=0.8
-            if any(keyword in user_question for keyword in ['벤처','아카데미']) and any(keyword in title for keyword in ['벤처아카데미','벤처스타트업아카데미','벤처스타트업']):
-                if any(keyword in user_question for keyword in ['스타트업']) and any(keyword in title for keyword in ['스타트업']):
-                  score+=0.5
-                elif not any(keyword in user_question for keyword in ['스타트업']) and any(keyword in title for keyword in ['벤처스타트업아카데미','벤처스타트업아카데미','스타트업','스타트','벤처스타트업']):
-                  score-=2.5
-                else:
-                  score+=2.0
-            if any(keyword in text for keyword in ['계약학과', '대학원', '타대학원']) and not any(keyword in query_noun for keyword in ['계약학과', '대학원', '타대학원']):
-                score -= 0.8  # 유사도 점수를 0.4 낮추기
-            keywords = ['대학원', '대학원생']
+    Args:
+        DOCS: 문서 리스트 [(score, title, date, text, url), ...]
+        query_noun: 검색 질문의 명사 리스트
+        user_question: 원본 질문
 
-            # 조건 1: 둘 다 키워드 포함
-            if any(keyword in query_noun for keyword in keywords) and any(keyword in title for keyword in keywords):
-                score += 2.0
-            # 조건 2: query_noun에 없고, title에만 키워드가 포함된 경우
-            elif not any(keyword in query_noun for keyword in keywords) and any(keyword in title for keyword in keywords):
-                if '학부생' in query_noun and '연구' in query_noun:
-                  score+=1.0
-                else:
-                  score -= 2.0
-            if any(keyword in query_noun for keyword in ['대학원','대학원생']) and any (keyword in title for keyword in ['대학원','대학원생']):
-                score+=2.0
-
-            if any(keyword in user_question for keyword in ['담당','업무','일','근무','관련']) and any(keyword in query_noun for keyword in ['직원','선생','선생님']):
-                if url!= "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub2_5&lang=kor":
-                    score-=3.0
-                else:
-                    score+=1.0
-                    # IT와 E 모두 처리
-                    for keyword in ['IT', 'E']:
-                        if keyword in query_noun:
-                            # 'IT'의 경우 숫자 4, 5 / 'E'의 경우 숫자 9 확인
-                            valid_numbers = ['4', '5'] if keyword == 'IT' else ['9']
-                            building_number = [num for num in query_noun if num in valid_numbers]
-                            if building_number:
-                                # IT4, IT5, E9 형식으로 결합
-                                combined_building = f"{keyword}{building_number[0]}"
-                                # 텍스트에 해당 건물 정보가 있는지 확인
-                                if combined_building in text:
-                                    score += 0.5  # 정확히 매칭된 경우 가중치 부여
-                                else:
-                                    score -= 0.8  # 매칭 실패 시 패널티
-                    if '대학원' in query_noun:
-                      if not any(keyword in query_noun for keyword in ['지원','계약']) and any(keyword in text for keyword in ['지원','계약']):
-                        score-=0.8
-                      else:
-                        score+=0.5
-
-
-
-            if (any(keyword in query_noun for keyword in ['담당','업무','일','근무']) or any(keyword in query_noun for keyword in ['직원','교수','선생','선생님'])) and date=="작성일24-01-01 00:00":
-                ### 종프 팀과제 담당 교수 누구야와 같은 질문인데 엉뚱하게 파인콘에서 직원이 유사도 높게 측정된 경우를 방지하기 위함.
-                if (any(keys in query_noun for keys in ['교수'])):
-                  check=0
-                  compare_url="https://cse.knu.ac.kr/bbs/board.php?bo_table=sub2_5&lang=kor" ## 직원에 해당하는 URL임.
-                  if compare_url==url:
-                    check=1
-                  if check==0:
-                    score+=0.5
-                  else:
-                    score-=0.9 ###직원이니까 유사도 나가라..
-                else:
-                  score+=4.0
-
-            if not any(keys in query_noun for keys in['교수']) and any(keys in title for keys in ['담당교수','교수']):
-              score-=0.7
-
-            match = re.search(r"(?<![\[\(])\b수강\w*\b(?![\]\)])", title)
-            if match:
-                full_keyword = match.group(0)
-                # query_nouns에 포함 여부 확인
-                if full_keyword not in query_noun:
-                  match = re.search(r"wr_id=(\d+)", url)
-                  if match:
-                      extracted_number = int(match.group(1))
-                      if extracted_number in target_numbers:
-                          score-=0.2
-                      else:
-                          score-=0.7
-                else:
-                  score+=0.8
-            # 조정된 유사도 점수를 사용하여 다시 리스트에 저장
-            Final_best[idx] = (score, title, date, text,  url)
-            #print(Final_best[idx])
-        return Final_best
+    Returns:
+        List[Tuple]: 필터링된 문서 리스트 (유사도 조정됨)
+    """
+    return storage.keyword_filter.filter(DOCS, query_noun, user_question)
 
 #################################################################################################
 
