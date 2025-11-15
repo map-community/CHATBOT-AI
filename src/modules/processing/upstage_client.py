@@ -22,11 +22,9 @@ class UpstageClient:
     - Vision: 이미지 설명 생성 (향후 추가 가능)
     """
 
-    # Upstage Document Parse API
-    DOCUMENT_PARSE_URL = "https://api.upstage.ai/v1/document-ai/document-parse"
-
-    # Upstage OCR API
-    OCR_URL = "https://api.upstage.ai/v1/document-ai/ocr"
+    # Upstage Document Digitization API (통합 엔드포인트)
+    # Document Parse와 OCR 모두 이 엔드포인트 사용, model 파라미터로 구분
+    API_URL = "https://api.upstage.ai/v1/document-digitization"
 
     # 지원 파일 타입
     SUPPORTED_DOCUMENT_TYPES = {
@@ -91,14 +89,13 @@ class UpstageClient:
                     "document": (Path(url).name, file_response.content)
                 }
                 data = {
-                    "ocr": "auto",  # OCR 자동 활성화
-                    "model": "document-parse"
+                    "ocr": "auto"  # OCR 자동 활성화 (PDF 내장 텍스트 우선, 필요시 OCR)
                 }
 
                 for attempt in range(self.max_retries):
                     try:
                         response = requests.post(
-                            self.DOCUMENT_PARSE_URL,
+                            self.API_URL,
                             headers=self.headers,
                             files=files,
                             data=data,
@@ -108,22 +105,14 @@ class UpstageClient:
                         if response.status_code == 200:
                             result = response.json()
 
-                            # 텍스트 추출 (실제 API 응답 구조 반영)
-                            extracted_text = result.get("content", {}).get("text", "")
-
-                            if not extracted_text and "elements" in result:
-                                # elements에서 텍스트 추출
-                                extracted_text = "\n".join([
-                                    elem.get("content", {}).get("text", "")
-                                    for elem in result.get("elements", [])
-                                    if elem.get("content", {}).get("text")
-                                ])
+                            # 텍스트 추출 (pages 구조 사용)
+                            extracted_text = self._extract_text_from_pages(result)
 
                             logger.info(f"✅ Document Parse 성공: {len(extracted_text)}자 추출")
 
                             return {
                                 "text": extracted_text,
-                                "html": result.get("content", {}).get("html", ""),
+                                "pages": result.get("pages", []),
                                 "elements": result.get("elements", []),
                                 "source_url": url
                             }
@@ -181,55 +170,28 @@ class UpstageClient:
                     return None
 
                 # Upstage OCR API 호출 (파일 업로드 방식)
-                # OCR도 document-parse 모델 사용 (이미지 파일 업로드 시 자동 OCR)
+                # 이미지 파일은 document-digitization API로 자동 OCR 처리
                 files = {
                     "document": (Path(url).name, file_response.content)
                 }
-                data = {
-                    "ocr": "force"  # 이미지에 대해 OCR 강제 실행
-                }
+                # 이미지 파일을 보내면 자동으로 OCR 처리됨 (별도 파라미터 불필요)
+                data = {}
 
                 for attempt in range(self.max_retries):
                     try:
                         response = requests.post(
-                            self.DOCUMENT_PARSE_URL,  # OCR도 같은 endpoint 사용
+                            self.API_URL,
                             headers=self.headers,
                             files=files,
-                            data=data,
+                            data=data if data else None,
                             timeout=30
                         )
 
                         if response.status_code == 200:
                             result = response.json()
 
-                            # OCR 결과에서 텍스트 추출 (document-parse API 응답 구조)
-                            extracted_text = ""
-
-                            # content.text에서 추출
-                            if "content" in result:
-                                if isinstance(result["content"], dict):
-                                    extracted_text = result["content"].get("text", "")
-                                elif isinstance(result["content"], str):
-                                    extracted_text = result["content"]
-
-                            # 또는 elements에서 추출
-                            if not extracted_text and "elements" in result:
-                                texts = []
-                                for elem in result.get("elements", []):
-                                    if isinstance(elem, dict) and "content" in elem:
-                                        if isinstance(elem["content"], dict):
-                                            text = elem["content"].get("text", "")
-                                        elif isinstance(elem["content"], str):
-                                            text = elem["content"]
-                                        else:
-                                            text = ""
-                                        if text:
-                                            texts.append(text)
-                                extracted_text = "\n".join(texts)
-
-                            # 또는 text 필드에서 직접 추출
-                            if not extracted_text:
-                                extracted_text = result.get("text", "")
+                            # OCR 결과에서 텍스트 추출 (pages 구조 사용)
+                            extracted_text = self._extract_text_from_pages(result)
 
                             if extracted_text:
                                 logger.info(f"✅ OCR 성공: {len(extracted_text)}자 추출")
@@ -265,59 +227,51 @@ class UpstageClient:
             logger.error(f"이미지 OCR 중 오류: {url} - {e}")
             return None
 
-    def _extract_text_from_parse_result(self, result: Dict) -> str:
-        """Document Parse API 결과에서 텍스트 추출"""
-        try:
-            # Upstage Document Parse 응답 구조에 따라 조정 필요
-            if "content" in result:
-                if isinstance(result["content"], str):
-                    return result["content"]
-                elif isinstance(result["content"], dict) and "text" in result["content"]:
-                    return result["content"]["text"]
+    def _extract_text_from_pages(self, result: Dict) -> str:
+        """
+        Upstage API 응답에서 텍스트 추출 (pages 구조 사용)
 
-            # 페이지별 텍스트 합치기
-            if "pages" in result:
-                texts = []
-                for page in result["pages"]:
-                    if "text" in page:
-                        texts.append(page["text"])
+        응답 구조:
+        {
+            "pages": [
+                {
+                    "id": 1,
+                    "text": "페이지 텍스트...",
+                    ...
+                }
+            ]
+        }
+        """
+        try:
+            texts = []
+
+            # pages 배열에서 텍스트 추출
+            for page in result.get("pages", []):
+                if isinstance(page, dict):
+                    page_text = page.get("text", "")
+                    if page_text:
+                        texts.append(page_text)
+
+            if texts:
                 return "\n\n".join(texts)
 
-            # 기타 구조
+            # Fallback: content.text 시도
+            if "content" in result:
+                content = result["content"]
+                if isinstance(content, dict):
+                    return content.get("text", "")
+                elif isinstance(content, str):
+                    return content
+
+            # Fallback: text 필드 직접 시도
             if "text" in result:
                 return result["text"]
 
-            logger.warning("Document Parse 결과에서 텍스트를 찾을 수 없음")
+            logger.warning("응답에서 텍스트를 찾을 수 없음")
             return ""
 
         except Exception as e:
             logger.error(f"텍스트 추출 오류: {e}")
-            return ""
-
-    def _extract_text_from_ocr_result(self, result: Dict) -> str:
-        """OCR API 결과에서 텍스트 추출"""
-        try:
-            # Upstage OCR 응답 구조에 따라 조정 필요
-            if "text" in result:
-                return result["text"]
-
-            # 페이지별/블록별 텍스트 합치기
-            if "pages" in result:
-                texts = []
-                for page in result["pages"]:
-                    if "text" in page:
-                        texts.append(page["text"])
-                    elif "blocks" in page:
-                        for block in page["blocks"]:
-                            if "text" in block:
-                                texts.append(block["text"])
-                return "\n".join(texts)
-
-            logger.warning("OCR 결과에서 텍스트를 찾을 수 없음")
-            return ""
-
-        except Exception as e:
-            logger.error(f"OCR 텍스트 추출 오류: {e}")
             return ""
 
     def is_document_url(self, url: str) -> bool:
