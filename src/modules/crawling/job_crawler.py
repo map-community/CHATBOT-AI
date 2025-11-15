@@ -59,16 +59,44 @@ class JobCrawler(BaseCrawler):
                 if text_content.strip() == "":
                     text_content = ""
 
-                # 이미지 URL 추출
+                # 이미지 URL 추출 (원본 이미지 우선)
                 for img in paragraphs.find_all('img'):
-                    img_src = img.get('src')
-                    if img_src:
+                    img_url = None
+
+                    # 1. 부모 <a> 태그에서 원본 이미지 링크 찾기
+                    parent_link = img.find_parent('a')
+                    if parent_link and parent_link.get('href'):
+                        href = parent_link['href']
+                        # 이미지 파일인지 확인
+                        if any(ext in href.lower() for ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']):
+                            img_url = href
+
+                    # 2. data-original 속성 확인 (lazy loading)
+                    if not img_url and img.get('data-original'):
+                        img_url = img.get('data-original')
+
+                    # 3. src 속성에서 썸네일 패턴 제거
+                    if not img_url and img.get('src'):
+                        src = img.get('src')
+                        # thumb- 접두사 제거 시도
+                        if '/thumb-' in src:
+                            # thumb-파일명__크기정보.확장자 → 파일명.확장자 패턴 제거
+                            # 예: thumb-abc__1234_1350x6875.png → abc.jpg로 추정하지 않고 건너뜀
+                            # 대신 원본을 찾을 수 없으면 썸네일이라도 사용
+                            img_url = src
+                        else:
+                            img_url = src
+
+                    if img_url:
                         # 상대 경로를 절대 경로로 변환
-                        if img_src.startswith('/'):
-                            img_src = f"https://cse.knu.ac.kr{img_src}"
-                        elif not img_src.startswith('http'):
-                            img_src = f"https://cse.knu.ac.kr/{img_src}"
-                        image_content.append(img_src)
+                        if img_url.startswith('/'):
+                            img_url = f"https://cse.knu.ac.kr{img_url}"
+                        elif not img_url.startswith('http'):
+                            img_url = f"https://cse.knu.ac.kr/{img_url}"
+
+                        # thumb- URL은 원본을 못 찾은 경우만 추가 (일단 제외)
+                        if '/thumb-' not in img_url:
+                            image_content.append(img_url)
 
             # 첨부파일 URL 추출
             attachment_section = soup.find('section', id='bo_v_file') or soup.find('div', class_='bo_v_file')

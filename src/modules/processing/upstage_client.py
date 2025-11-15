@@ -181,11 +181,12 @@ class UpstageClient:
                     return None
 
                 # Upstage OCR API 호출 (파일 업로드 방식)
+                # OCR도 document-parse 모델 사용 (이미지 파일 업로드 시 자동 OCR)
                 files = {
                     "document": (Path(url).name, file_response.content)
                 }
                 data = {
-                    "model": "ocr"
+                    "ocr": "force"  # 이미지에 대해 OCR 강제 실행
                 }
 
                 for attempt in range(self.max_retries):
@@ -201,16 +202,41 @@ class UpstageClient:
                         if response.status_code == 200:
                             result = response.json()
 
-                            # OCR 결과에서 텍스트 추출 (실제 API 응답 구조)
-                            extracted_text = result.get("text", "")
-                            confidence = result.get("confidence", 0.0)
+                            # OCR 결과에서 텍스트 추출 (document-parse API 응답 구조)
+                            extracted_text = ""
+
+                            # content.text에서 추출
+                            if "content" in result:
+                                if isinstance(result["content"], dict):
+                                    extracted_text = result["content"].get("text", "")
+                                elif isinstance(result["content"], str):
+                                    extracted_text = result["content"]
+
+                            # 또는 elements에서 추출
+                            if not extracted_text and "elements" in result:
+                                texts = []
+                                for elem in result.get("elements", []):
+                                    if isinstance(elem, dict) and "content" in elem:
+                                        if isinstance(elem["content"], dict):
+                                            text = elem["content"].get("text", "")
+                                        elif isinstance(elem["content"], str):
+                                            text = elem["content"]
+                                        else:
+                                            text = ""
+                                        if text:
+                                            texts.append(text)
+                                extracted_text = "\n".join(texts)
+
+                            # 또는 text 필드에서 직접 추출
+                            if not extracted_text:
+                                extracted_text = result.get("text", "")
 
                             if extracted_text:
-                                logger.info(f"✅ OCR 성공: {len(extracted_text)}자 추출 (신뢰도: {confidence:.2%})")
+                                logger.info(f"✅ OCR 성공: {len(extracted_text)}자 추출")
 
                                 return {
                                     "text": extracted_text,
-                                    "confidence": confidence,
+                                    "confidence": result.get("confidence", 1.0),
                                     "pages": result.get("pages", []),
                                     "source_url": url
                                 }
