@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import CrawlerConfig
+from utils import korean_to_iso8601
 
 
 class ProfessorCrawler(BaseCrawler):
@@ -82,8 +83,8 @@ class ProfessorCrawler(BaseCrawler):
 
                 text_content = f"{title}, {contact_number}, {email}"
 
-                # 날짜와 URL 설정
-                date = "작성일24-01-01 00:00"
+                # 날짜와 URL 설정 (교수 정보는 기준일로 통일)
+                date = korean_to_iso8601("작성일24-01-01 00:00")
 
                 prof_url_element = professor.find("a")
                 prof_url = prof_url_element["href"] if prof_url_element else "Unknown URL"
@@ -173,8 +174,8 @@ class GuestProfessorCrawler(BaseCrawler):
                 # 텍스트 내용 조합
                 text_content = f"성함(이름):{title}, 연구실(장소):{contact_place}, 이메일:{email}"
 
-                # 날짜와 URL 설정
-                date = "작성일24-01-01 00:00"
+                # 날짜와 URL 설정 (교수 정보는 기준일로 통일)
+                date = korean_to_iso8601("작성일24-01-01 00:00")
                 prof_url = self.base_url
 
                 # 데이터 추가 (이미지를 리스트로, 첨부파일은 빈 리스트)
@@ -265,8 +266,8 @@ class StaffCrawler(BaseCrawler):
                 # 텍스트 내용 조합
                 text_content = f"성함(이름):{title}, 연락처(전화번호):{contact_number}, 사무실(장소):{contact_place}, 이메일:{email}, 담당업무:{role}"
 
-                # 날짜와 URL 설정
-                date = "작성일24-01-01 00:00"
+                # 날짜와 URL 설정 (교수 정보는 기준일로 통일)
+                date = korean_to_iso8601("작성일24-01-01 00:00")
                 staff_url = self.base_url
 
                 # 데이터 추가 (이미지를 리스트로, 첨부파일은 빈 리스트)

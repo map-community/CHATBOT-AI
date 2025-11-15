@@ -177,14 +177,44 @@ def initialize_cache():
                     #################################   24.11.16기준 정확도 측정완료 #####################################################
 ######################################################################################################################
 
-# 날짜를 파싱하는 함수
+# 날짜를 파싱하는 함수 (하위 호환성 유지)
+# 이제는 utils.date_utils.parse_date_change_korea_time 사용 권장
 
 def parse_date_change_korea_time(date_str):
-    clean_date_str = date_str.replace("작성일", "").strip()
-    naive_date = datetime.strptime(clean_date_str, "%y-%m-%d %H:%M")
-    # 한국 시간대 추가
-    korea_timezone = pytz.timezone('Asia/Seoul')
-    return korea_timezone.localize(naive_date)
+    """
+    날짜 문자열을 datetime 객체로 변환
+    ISO 8601 형식과 레거시 한국어 형식 모두 지원
+
+    Args:
+        date_str: ISO 8601 형식 또는 "작성일25-10-17 15:48" 형식
+
+    Returns:
+        datetime 객체 (한국 시간대)
+    """
+    # 빈 문자열이면 None
+    if not date_str:
+        return None
+
+    try:
+        # 먼저 ISO 8601 형식 시도 (새 형식)
+        dt = datetime.fromisoformat(date_str)
+        # 시간대가 없으면 한국 시간대 추가
+        if dt.tzinfo is None:
+            korea_timezone = pytz.timezone('Asia/Seoul')
+            return korea_timezone.localize(dt)
+        return dt
+    except (ValueError, TypeError):
+        pass
+
+    try:
+        # 레거시 한국어 형식 시도 (하위 호환성)
+        clean_date_str = date_str.replace("작성일", "").strip()
+        naive_date = datetime.strptime(clean_date_str, "%y-%m-%d %H:%M")
+        # 한국 시간대 추가
+        korea_timezone = pytz.timezone('Asia/Seoul')
+        return korea_timezone.localize(naive_date)
+    except (ValueError, TypeError):
+        return None
 
 
 def calculate_weight_by_days_difference(post_date, current_date, query_nouns):

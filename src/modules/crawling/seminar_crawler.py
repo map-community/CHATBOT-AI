@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import CrawlerConfig
+from utils import korean_to_iso8601
+from constants import UNKNOWN_DATE
 
 
 class SeminarCrawler(BaseCrawler):
@@ -84,7 +86,10 @@ class SeminarCrawler(BaseCrawler):
 
             # 날짜 추출
             date_element = soup.select_one("strong.if_date")
-            date = date_element.get_text(strip=True) if date_element else "Unknown Date"
+            date_raw = date_element.get_text(strip=True) if date_element else ""
+
+            # 한국어 날짜 형식을 ISO 8601로 변환
+            date = korean_to_iso8601(date_raw) if date_raw else UNKNOWN_DATE
 
             return title, text_content, image_content, attachment_content, date, url
 

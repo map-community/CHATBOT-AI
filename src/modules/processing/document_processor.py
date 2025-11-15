@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import CrawlerConfig
+from constants import EMPTY_CONTENT
 from processing.multimodal_processor import MultimodalProcessor
 
 
@@ -110,7 +111,7 @@ class DocumentProcessor:
         """
         query = {"title": title}
 
-        if image_url and image_url != "No content":
+        if image_url and image_url != EMPTY_CONTENT:
             query["image_url"] = image_url
 
         return self.collection.find_one(query) is not None
@@ -128,7 +129,7 @@ class DocumentProcessor:
         """
         temp_data = {
             "title": title,
-            "image_url": image_url if image_url else "No content"
+            "image_url": image_url if image_url else EMPTY_CONTENT
         }
 
         if not self.is_duplicate(title, image_url):
@@ -183,12 +184,12 @@ class DocumentProcessor:
                 if image:
                     image_urls.extend([image] * len(split_texts))
                 else:
-                    image_urls.extend(["No content"] * len(split_texts))
-                    image = "No content"
+                    image_urls.extend([EMPTY_CONTENT] * len(split_texts))
+                    image = EMPTY_CONTENT
 
             # 텍스트는 없고 이미지만 있는 경우
             elif image:
-                texts.append("No content")
+                texts.append(EMPTY_CONTENT)
                 titles.append(title)
                 doc_urls.append(url)
                 doc_dates.append(date)
@@ -196,12 +197,12 @@ class DocumentProcessor:
 
             # 텍스트와 이미지 모두 없는 경우
             else:
-                texts.append("No content")
+                texts.append(EMPTY_CONTENT)
                 titles.append(title)
                 doc_urls.append(url)
                 doc_dates.append(date)
-                image_urls.append("No content")
-                image = "No content"
+                image_urls.append(EMPTY_CONTENT)
+                image = EMPTY_CONTENT
 
             # MongoDB에 처리 완료 표시
             self.mark_as_processed(title, image)

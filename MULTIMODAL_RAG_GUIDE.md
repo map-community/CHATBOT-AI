@@ -27,7 +27,7 @@
     # 기본 정보
     "title": "2025학년도 컴퓨터학부 발전기금...",
     "url": "https://cse.knu.ac.kr/bbs/...",
-    "date": "작성일25-10-17 15:48",
+    "date": "2025-10-17T15:48:00+09:00",  # ISO 8601 형식 (한국 시간대)
     "text": "실제 텍스트 내용",
 
     # 분류 정보
@@ -223,7 +223,105 @@ Pinecone 벡터 DB 저장
 2. **멀티모달 데이터 구축**: `python run_crawler.py`
 3. **RAG 시스템 연동**: 검색 시 메타데이터 활용
 
+## 날짜 형식 개선 (ISO 8601)
+
+### 이전 형식의 문제점
+
+```python
+# 기존 날짜 형식
+"date": "작성일25-10-17 15:48"
+```
+
+**문제점**:
+- ❌ 한국어 접두사 "작성일" 포함
+- ❌ 2자리 연도 (25 = 2025? 1925?)
+- ❌ 표준 형식 아님 (ISO 8601 미준수)
+- ❌ 타임존 정보 없음
+- ❌ Pinecone에서 날짜 범위 필터링 불가
+- ❌ 매 쿼리마다 파싱 오버헤드 발생
+
+### 새로운 형식 (ISO 8601)
+
+```python
+# 개선된 날짜 형식
+"date": "2025-10-17T15:48:00+09:00"
+```
+
+**개선 효과**:
+- ✅ 국제 표준 ISO 8601 준수
+- ✅ 4자리 연도로 명확성 확보
+- ✅ 타임존 정보 포함 (+09:00 = 한국 시간)
+- ✅ Pinecone 메타데이터 필터링 가능
+- ✅ 파싱 오버헤드 감소
+- ✅ 다양한 라이브러리와 호환
+
+### 활용 예시
+
+#### Pinecone 날짜 범위 검색
+```python
+from datetime import datetime, timedelta
+
+# 최근 7일간 공지사항 검색
+now = datetime.now()
+week_ago = now - timedelta(days=7)
+
+filter = {
+    "category": "notice",
+    "date": {"$gte": week_ago.isoformat()}
+}
+
+results = index.query(
+    vector=embedding,
+    filter=filter,
+    top_k=10
+)
+```
+
+#### 날짜 기반 정렬
+```python
+# ISO 8601 형식은 문자열 정렬만으로도 시간순 정렬 가능
+dates = [
+    "2025-01-15T10:00:00+09:00",
+    "2025-10-17T15:48:00+09:00",
+    "2024-12-31T23:59:59+09:00"
+]
+dates.sort()  # 자동으로 시간순 정렬
+```
+
+### 유틸리티 함수
+
+새로운 날짜 유틸리티 모듈 제공:
+
+```python
+from utils import korean_to_iso8601, calculate_days_diff
+
+# 한국어 날짜 -> ISO 8601 변환
+iso_date = korean_to_iso8601("작성일25-10-17 15:48")
+# => "2025-10-17T15:48:00+09:00"
+
+# 날짜 차이 계산
+days = calculate_days_diff("2025-10-17T15:48:00+09:00")
+# => 현재로부터 며칠 전/후인지 계산
+```
+
+### 하위 호환성
+
+기존 코드와의 호환성을 위해 `ai_modules.py`의 `parse_date_change_korea_time()` 함수가 두 형식 모두 지원:
+
+```python
+from ai_modules import parse_date_change_korea_time
+
+# ISO 8601 형식 파싱
+dt1 = parse_date_change_korea_time("2025-10-17T15:48:00+09:00")
+
+# 레거시 한국어 형식 파싱 (하위 호환)
+dt2 = parse_date_change_korea_time("작성일25-10-17 15:48")
+
+# 둘 다 동일한 datetime 객체 반환
+```
+
 ---
 
 **작성일**: 2025-01-15
-**버전**: 1.0 (멀티모달 RAG)
+**최종 수정**: 2025-01-15
+**버전**: 1.1 (멀티모달 RAG + ISO 8601 날짜 형식)
