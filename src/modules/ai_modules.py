@@ -27,7 +27,7 @@ from collections import defaultdict
 import numpy as np
 from IPython.display import display, HTML
 from rank_bm25 import BM25Okapi
-from difflib import SequenceMatcher
+# SequenceMatcher는 이제 DocumentClusterer에서 사용됨
 from pymongo import MongoClient
 from pinecone import Index
 import redis
@@ -315,7 +315,12 @@ def initialize_cache():
         logger.info(f"✅ Pinecone에서 {len(storage.cached_titles)}개 문서 메타데이터를 가져왔습니다.")
 
         # BM25Retriever 초기화
-        from modules.retrieval import BM25Retriever, DenseRetriever
+        from modules.retrieval import (
+            BM25Retriever,
+            DenseRetriever,
+            DocumentCombiner,
+            DocumentClusterer
+        )
 
         bm25_retriever = BM25Retriever(
             titles=storage.cached_titles,
@@ -339,6 +344,20 @@ def initialize_cache():
             digit_weight=0.24
         )
         storage.set_dense_retriever(dense_retriever)
+
+        # DocumentCombiner 초기화
+        document_combiner = DocumentCombiner(
+            keyword_filter=last_filter_keyword,
+            date_adjuster=adjust_date_similarity
+        )
+        storage.set_document_combiner(document_combiner)
+
+        # DocumentClusterer 초기화
+        document_clusterer = DocumentClusterer(
+            date_parser=parse_date_change_korea_time,
+            similarity_threshold=0.89
+        )
+        storage.set_document_clusterer(document_clusterer)
 
         # Redis에 저장 시도
         if storage.redis_client is not None:
@@ -812,214 +831,33 @@ def best_docs(user_question):
       #################################################3#################################################3
       #####################################################################################################3
 
-      # Step 1: combine_dense_docs에 제목, 본문, 날짜, URL을 미리 저장
-
-      # combine_dense_doc는 (유사도, 제목, 본문 내용, 날짜, URL) 형식으로 데이터를 저장합니다.
-      combine_dense_doc = []
-      combine_time=time.time()
-      # combine_dense_docs의 내부 구조에 맞게 두 단계로 분해
-      for score, (title, date, text, url) in combine_dense_docs:
-          combine_dense_doc.append((score, title, text, date, url))
-        
-      combine_dense_doc=last_filter_keyword(combine_dense_doc,query_noun,user_question)
-      # Step 2: combine_dense_docs와 BM25 결과 합치기
-      final_best_docs = []
-
-      # combine_dense_docs와 BM25 결과를 합쳐서 처리
-      for score, title, text, date, url in combine_dense_doc:
-          matched = False
-          for bm25_doc in Bm25_best_docs:
-              if bm25_doc[0] == title:  # 제목이 일치하면 유사도를 합산
-                  combined_similarity = score + adjusted_similarities[titles_from_pinecone.index(bm25_doc[0])]
-                  final_best_docs.append((combined_similarity, bm25_doc[0], bm25_doc[1], bm25_doc[2], bm25_doc[3]))
-                  matched = True
-                  break
-          if not matched:
-
-              # 제목이 일치하지 않으면 combine_dense_docs에서만 유사도 사용
-              final_best_docs.append((score,title, date, text, url))
-
-
-      # 제목이 일치하지 않는 BM25 문서도 추가
-      for bm25_doc in Bm25_best_docs:
-          matched = False
-          for score, title, text, date, url in combine_dense_doc:
-              if bm25_doc[0] == title and bm25_doc[2]==text:  # 제목이 일치하면 matched = True로 처리됨
-                  matched = True
-                  break
-          if not matched:
-              # 제목이 일치하지 않으면 BM25 문서만 final_best_docs에 추가
-              combined_similarity = adjusted_similarities[titles_from_pinecone.index(bm25_doc[0])]  # BM25 유사도 가져오기
-              combined_similarity= adjust_date_similarity(combined_similarity,bm25_doc[1],query_noun)
-              final_best_docs.append((combined_similarity, bm25_doc[0], bm25_doc[1], bm25_doc[2], bm25_doc[3]))
-      final_best_docs.sort(key=lambda x: x[0], reverse=True)
-      final_best_docs=final_best_docs[:20]
-
-
-      # print("\n\n\n\n필터링 전 최종문서 (유사도 큰 순):")
-      # for idx, (scor, titl, dat, tex, ur, image_ur) in enumerate(final_best_docs):
-      #     print(f"순위 {idx+1}: 제목: {titl}, 유사도: {scor},본문 {len(tex)} 날짜: {dat}, URL: {ur}")
-      #     print("-" * 50)
-      
-      final_best_docs=last_filter_keyword(final_best_docs,query_noun,user_question)
-      final_best_docs.sort(key=lambda x: x[0], reverse=True)
-      combine_f_time=time.time()-combine_time
+      # BM25와 Dense Retrieval 결과 결합 (리팩토링됨 - DocumentCombiner 사용)
+      combine_time = time.time()
+      final_best_docs = storage.document_combiner.combine(
+          dense_results=combine_dense_docs,
+          bm25_results=Bm25_best_docs,
+          bm25_similarities=adjusted_similarities,
+          titles_from_pinecone=titles_from_pinecone,
+          query_nouns=query_noun,
+          user_question=user_question,
+          top_k=20
+      )
+      combine_f_time = time.time() - combine_time
       print(f"Bm25랑 pinecone 결합 시간: {combine_f_time}")
-      # print("\n\n\n\n중간필터 최종문서 (유사도 큰 순):")
-      # for idx, (scor, titl, dat, tex, ur, image_ur) in enumerate(final_best_docs):
-      #     print(f"순위 {idx+1}: 제목: {titl}, 유사도: {scor},본문 {len(tex)} 날짜: {dat}, URL: {ur}")
-      #     print("-" * 50)
-
-      def cluster_documents_by_similarity(docs, threshold=0.89):
-          clusters = []
-
-          for doc in docs:
-              title = doc[1]
-              added_to_cluster = False
-              # 기존 클러스터와 비교
-              for cluster in clusters:
-                  # 첫 번째 문서의 제목과 현재 문서의 제목을 비교해 유사도를 계산
-                  cluster_title = cluster[0][1]
-                  similarity = SequenceMatcher(None, cluster_title, title).ratio()
-                  # 유사도가 threshold 이상이면 해당 클러스터에 추가
-                  if similarity >= threshold:
-                      #print(f"{doc[0]} {cluster[0][0]}  {title} {cluster_title}")
-                      cluster_date=parse_date_change_korea_time(cluster[0][2])
-                      doc_in_date=parse_date_change_korea_time(doc[2])
-                      compare_date=abs(cluster_date-doc_in_date).days
-                      if cluster_title==title or(-doc[0]+cluster[0][0]<0.6 and cluster[0][3]!=doc[2] and compare_date<60):
-                        cluster.append(doc)
-                      added_to_cluster = True
-                      break
-
-              # 유사한 클러스터가 없으면 새로운 클러스터 생성
-              if not added_to_cluster:
-                  clusters.append([doc])
-
-          return clusters
-
-      # Step 1: Cluster documents by similarity
-      cluster_time=time.time()
-      clusters = cluster_documents_by_similarity(final_best_docs)
-      # print(clusters[0])
-      # print(clusters[1])
-      # 날짜 형식을 datetime 객체로 변환하는 함수
-      def parse_date(date_str):
-          # '작성일'을 제거하고 공백을 제거한 뒤 날짜 형식으로 변환
-          clean_date_str = date_str.replace("작성일", "").strip()
-          return datetime.strptime(clean_date_str, "%y-%m-%d %H:%M")
-      # Step 2: Compare cluster[0] cluster[1] top similarity and check condition
-      top_0_cluster_similar=clusters[0][0][0]
-      top_1_cluster_similar=clusters[1][0][0]
-      keywords = ["최근", "최신", "현재", "지금"]
-      #print(f"{top_0_cluster_similar} {top_1_cluster_similar}")
-      if (top_0_cluster_similar-top_1_cluster_similar<=0.3): ## 질문이 모호했다는 의미일 수 있음.. (예를 들면 수강신청 언제야? 인데 구체적으로 1학기인지, 2학기인지, 겨울, 여름인지 모르게..)
-          # 날짜를 비교해 더 최근 날짜를 가진 클러스터 선택
-          #조금더 세밀하게 들어가자면?
-          #print("세밀하게..")
-          if (any(keyword in word for word in query_noun for keyword in keywords) or top_0_cluster_similar-clusters[len(clusters)-1][0][0]<=0.3):
-            #print("최근이거나 뽑은 문서들이 유사도 0.3이내")
-            if (top_0_cluster_similar-clusters[len(clusters)-1][0][0]<=0.3):
-              #print("최근이면서 뽑은 문서들이 유사도 0.3이내 real")
-              sorted_cluster=sorted(clusters, key=lambda doc: doc[0][2], reverse=True)
-              sorted_cluster=sorted_cluster[0]
-            else:
-              #print("최근이면서 뽑은 문서들이 유사도 0.3이상")
-              if (top_0_cluster_similar-top_1_cluster_similar<=0.3):
-                #print("최근이면서 뽑은 두문서의 유사도 0.3이하이라서 두 문서로 줄임")
-                date1 = parse_date_change_korea_time(clusters[0][0][2])
-                date2 = parse_date_change_korea_time(clusters[1][0][2])
-                result_date=(date1-date2).days
-                if result_date<0:
-                  result_docs=clusters[1]
-                else:
-                  result_docs=clusters[0]
-                sorted_cluster = sorted(result_docs, key=lambda doc: doc[2], reverse=True)
-
-              else:
-                sorted_cluster=sorted(clusters, key=lambda doc: doc[0][0], reverse=True)
-                sorted_cluster=sorted_cluster[0]
-          else:
-           # print("두 클러스터로 판단해보자..")
-            if (top_0_cluster_similar-top_1_cluster_similar<=0.1):
-             # print("진짜 차이가 없는듯..?")
-              date1 =parse_date_change_korea_time(clusters[0][0][2])
-              date2 = parse_date_change_korea_time(clusters[1][0][2])
-              result_date=(date1-date2).days
-              if result_date<0:
-                #print("두번째 클러스터가 더 크네..?")
-                result_docs=clusters[1]
-              else:
-                #print("첫번째 클러스터가 더 크네..?")
-                result_docs=clusters[0]
-              sorted_cluster = sorted(result_docs, key=lambda doc: doc[2], reverse=True)
-            else:
-              #print("에이 그래도 유사도 차이가 있긴하네..")
-              result_docs=clusters[0]
-              sorted_cluster=sorted(result_docs,key=lambda doc: doc[0],reverse=True)
-      else: #질문이 모호하지 않을 가능성 업업
-          number_pattern = r"\d"
-          period_word=["여름","겨울"]
-          if (any(keyword in word for word in query_noun for keyword in keywords) or not any(re.search(number_pattern, word) for word in query_noun) or not any(key in word for word in query_noun for key in period_word)):
-              #print("최근 최신이라는 말 드가거나 2가지 모호한 판단 기준")
-              if (any(re.search(number_pattern, word) for word in query_noun) or any(key in word for word in query_noun for key in period_word)):
-                #print("최신인줄 알았지만 유사도순..")
-                result_docs=clusters[0]
-                num=0
-                for doc in result_docs:
-                  if re.search(r'\d+차', doc[1]):
-                    num+=1
-                if num>1:
-                  sorted_cluster=sorted(result_docs,key=lambda doc:doc[2],reverse=True)
-                else:
-                  sorted_cluster=sorted(result_docs,key=lambda doc:doc[0],reverse=True)
-              else:
-                #print("너는 그냥 최신순이 맞는거여..")
-                result_docs=clusters[0]
-                sorted_cluster=sorted(result_docs,key=lambda doc: doc[2],reverse=True)
-          else:
-            #print("진짜 유사도순대로")
-            result_docs=clusters[0]
-            sorted_cluster = sorted(clusters[0], key=lambda doc: doc[0], reverse=True)
-      cluster_f_time=time.time()-cluster_time
+      # 문서 클러스터링 및 최적 클러스터 선택 (리팩토링됨 - DocumentClusterer 사용)
+      cluster_time = time.time()
+      final_cluster, count = storage.document_clusterer.cluster_and_select(
+          documents=final_best_docs,
+          query_nouns=query_noun,
+          all_titles=titles_from_pinecone,
+          all_dates=dates_from_pinecone,
+          all_texts=texts_from_pinecone,
+          all_urls=urls_from_pinecone
+      )
+      cluster_f_time = time.time() - cluster_time
       print(f"cluster로 문서 추출하는 시간:{cluster_f_time}")
-      # print("\n\n\n\nadd_similar넣기전 상위 문서 (유사도 및 날짜 기준 정렬):")
-      # for idx, (scor, titl, dat, tex, ur, image_ur) in enumerate(sorted_cluster):
-      #     print(f"순위 {idx+1}: 제목: {titl}, 유사도: {scor}, 날짜: {dat}, URL: {ur} 내용: {len(tex)}   이미지{len(image_ur)}")
-      #     print("-" * 50)
-      # print("\n\n\n")
 
-      def organize_documents_v2(sorted_cluster, titles, doc_dates, texts, doc_urls):
-          # 첫 번째 문서를 기준으로 초기 설정
-          top_doc = sorted_cluster[0]
-          top_title = top_doc[1]
-
-          # new_sorted_cluster 초기화 및 첫 번째 문서와 동일한 제목을 가진 문서들을 모두 추가
-          new_sorted_cluster = []
-          # titles에서 top_title과 같은 제목을 가진 모든 문서를 new_sorted_cluster에 추가
-          count=0
-          for i, title in enumerate(titles):
-              if title == top_title:
-                  new_similar=top_doc[0]
-                  count+=1
-                  new_doc = (top_doc[0], titles[i], doc_dates[i], texts[i], doc_urls[i])
-                  new_sorted_cluster.append(new_doc)
-          for i in range(count-1):
-            fix_similar=list(new_sorted_cluster[i])
-            fix_similar[0]=fix_similar[0]+0.2*count
-            new_sorted_cluster[i]=tuple(fix_similar)
-          # sorted_cluster에서 new_sorted_cluster에 없는 제목만 추가
-          for doc in sorted_cluster:
-              doc_title = doc[1]
-              # 이미 new_sorted_cluster에 추가된 제목은 제외
-              if doc_title != top_title:
-                  new_sorted_cluster.append(doc)
-
-          return new_sorted_cluster,count
-
-      # 예시 사용
-      final_cluster,count = organize_documents_v2(sorted_cluster, titles_from_pinecone, dates_from_pinecone, texts_from_pinecone, urls_from_pinecone)
-      return final_cluster[:count], query_noun
+      return final_cluster, query_noun
 
 prompt_template = """당신은 경북대학교 컴퓨터학부 공지사항을 전달하는 직원이고, 사용자의 질문에 대해 올바른 공지사항의 내용을 참조하여 정확하게 전달해야 할 의무가 있습니다.
 현재 한국 시간: {current_time}

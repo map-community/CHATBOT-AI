@@ -68,6 +68,8 @@ class StorageManager:
         # Retriever 인스턴스 (캐시 초기화 후 생성됨)
         self._bm25_retriever = None
         self._dense_retriever = None
+        self._document_combiner = None
+        self._document_clusterer = None
 
         self._initialized = True
         logger.info("✅ StorageManager 초기화 완료 (연결은 아직 시작되지 않음)")
@@ -188,6 +190,30 @@ class StorageManager:
         """DenseRetriever 인스턴스 설정 (initialize_cache에서 호출)"""
         self._dense_retriever = retriever
         logger.info("✅ DenseRetriever 인스턴스 설정 완료")
+
+    @property
+    def document_combiner(self):
+        """DocumentCombiner 인스턴스 (캐시 초기화 후 사용 가능)"""
+        if self._document_combiner is None:
+            logger.warning("⚠️  DocumentCombiner가 아직 초기화되지 않았습니다. initialize_cache()를 먼저 호출하세요.")
+        return self._document_combiner
+
+    def set_document_combiner(self, combiner):
+        """DocumentCombiner 인스턴스 설정 (initialize_cache에서 호출)"""
+        self._document_combiner = combiner
+        logger.info("✅ DocumentCombiner 인스턴스 설정 완료")
+
+    @property
+    def document_clusterer(self):
+        """DocumentClusterer 인스턴스 (캐시 초기화 후 사용 가능)"""
+        if self._document_clusterer is None:
+            logger.warning("⚠️  DocumentClusterer가 아직 초기화되지 않았습니다. initialize_cache()를 먼저 호출하세요.")
+        return self._document_clusterer
+
+    def set_document_clusterer(self, clusterer):
+        """DocumentClusterer 인스턴스 설정 (initialize_cache에서 호출)"""
+        self._document_clusterer = clusterer
+        logger.info("✅ DocumentClusterer 인스턴스 설정 완료")
 
     def close_all_connections(self):
         """모든 연결 종료"""
