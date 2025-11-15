@@ -71,12 +71,27 @@ class StorageManager:
         self._document_combiner = None
         self._document_clusterer = None
 
-        # Preprocessing 인스턴스
+        # Preprocessing 인스턴스 (즉시 초기화 - DB 연결 불필요)
         self._query_transformer = None
         self._keyword_filter = None
+        self._initialize_preprocessing_modules()
 
         self._initialized = True
         logger.info("✅ StorageManager 초기화 완료 (연결은 아직 시작되지 않음)")
+
+    def _initialize_preprocessing_modules(self):
+        """전처리 모듈 초기화 (DB 연결 불필요)"""
+        try:
+            from modules.preprocessing import QueryTransformer, KeywordFilter
+
+            self._query_transformer = QueryTransformer(use_mecab=True)
+            logger.info("✅ QueryTransformer 초기화 완료")
+
+            self._keyword_filter = KeywordFilter()
+            logger.info("✅ KeywordFilter 초기화 완료")
+        except Exception as e:
+            logger.error(f"❌ 전처리 모듈 초기화 실패: {e}", exc_info=True)
+            # 실패해도 None으로 유지하여 나중에 재시도 가능하도록
 
     @property
     def pinecone_api_key(self) -> str:
@@ -221,27 +236,27 @@ class StorageManager:
 
     @property
     def query_transformer(self):
-        """QueryTransformer 인스턴스 (초기화 후 사용 가능)"""
+        """QueryTransformer 인스턴스 (StorageManager 초기화 시 자동 생성)"""
         if self._query_transformer is None:
-            logger.warning("⚠️  QueryTransformer가 아직 초기화되지 않았습니다.")
+            logger.error("❌ QueryTransformer 초기화 실패! preprocessing 모듈을 확인하세요.")
         return self._query_transformer
 
     def set_query_transformer(self, transformer):
-        """QueryTransformer 인스턴스 설정"""
+        """QueryTransformer 인스턴스 재설정 (일반적으로 불필요)"""
         self._query_transformer = transformer
-        logger.info("✅ QueryTransformer 인스턴스 설정 완료")
+        logger.info("✅ QueryTransformer 인스턴스 재설정 완료")
 
     @property
     def keyword_filter(self):
-        """KeywordFilter 인스턴스 (초기화 후 사용 가능)"""
+        """KeywordFilter 인스턴스 (StorageManager 초기화 시 자동 생성)"""
         if self._keyword_filter is None:
-            logger.warning("⚠️  KeywordFilter가 아직 초기화되지 않았습니다.")
+            logger.error("❌ KeywordFilter 초기화 실패! preprocessing 모듈을 확인하세요.")
         return self._keyword_filter
 
     def set_keyword_filter(self, filter_instance):
-        """KeywordFilter 인스턴스 설정"""
+        """KeywordFilter 인스턴스 재설정 (일반적으로 불필요)"""
         self._keyword_filter = filter_instance
-        logger.info("✅ KeywordFilter 인스턴스 설정 완료")
+        logger.info("✅ KeywordFilter 인스턴스 재설정 완료")
 
     def close_all_connections(self):
         """모든 연결 종료"""

@@ -150,15 +150,8 @@ def initialize_cache():
         )
         storage.set_document_clusterer(document_clusterer)
 
-        # QueryTransformer 초기화
-        from modules.preprocessing import QueryTransformer, KeywordFilter
-
-        query_transformer = QueryTransformer(use_mecab=MECAB_AVAILABLE)
-        storage.set_query_transformer(query_transformer)
-
-        # KeywordFilter 초기화
-        keyword_filter = KeywordFilter()
-        storage.set_keyword_filter(keyword_filter)
+        # QueryTransformer와 KeywordFilter는 StorageManager 초기화 시 자동 생성됨
+        # (여기서는 재설정하지 않음)
 
         # Redis에 저장 시도
         if storage.redis_client is not None:
