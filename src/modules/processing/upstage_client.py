@@ -123,6 +123,7 @@ class UpstageClient:
                     "document": (filename, file_response.content)
                 }
                 data = {
+                    "model": "document-parse",  # 필수!
                     "ocr": "auto"  # OCR 자동 활성화 (PDF 내장 텍스트 우선, 필요시 OCR)
                 }
 
@@ -141,11 +142,9 @@ class UpstageClient:
 
                             # 디버깅: API 응답 구조 로깅
                             logger.info(f"📊 Document Parse API 응답 키: {list(result.keys())}")
-                            if "pages" in result and len(result["pages"]) > 0:
-                                logger.info(f"📊 첫 페이지 키: {list(result['pages'][0].keys())}")
 
-                            # 텍스트 추출 (pages 구조 사용)
-                            extracted_text = self._extract_text_from_pages(result)
+                            # 텍스트 추출 (공식 문서 응답 구조 사용)
+                            extracted_text = self._extract_text_from_response(result)
 
                             if extracted_text:
                                 logger.info(f"✅ Document Parse 성공: {len(extracted_text)}자 추출")
@@ -154,7 +153,7 @@ class UpstageClient:
 
                             return {
                                 "text": extracted_text,
-                                "pages": result.get("pages", []),
+                                "html": result.get("content", {}).get("html", ""),
                                 "elements": result.get("elements", []),
                                 "source_url": url
                             }
@@ -239,12 +238,13 @@ class UpstageClient:
                 logger.info(f"🖼️  이미지 다운로드 성공: {filename} ({content_type}, {content_length} bytes)")
 
                 # Upstage OCR API 호출 (파일 업로드 방식)
-                # 이미지 파일은 document-digitization API로 자동 OCR 처리
+                # 이미지도 document-parse 모델로 처리 (자동 OCR)
                 files = {
                     "document": (filename, file_response.content)
                 }
-                # 이미지 파일을 보내면 자동으로 OCR 처리됨 (별도 파라미터 불필요)
-                data = {}
+                data = {
+                    "model": "document-parse"  # 필수! 이미지도 document-parse 사용
+                }
 
                 for attempt in range(self.max_retries):
                     try:
@@ -261,19 +261,17 @@ class UpstageClient:
 
                             # 디버깅: API 응답 구조 로깅
                             logger.info(f"📊 OCR API 응답 키: {list(result.keys())}")
-                            if "pages" in result and len(result["pages"]) > 0:
-                                logger.info(f"📊 첫 페이지 키: {list(result['pages'][0].keys())}")
 
-                            # OCR 결과에서 텍스트 추출 (pages 구조 사용)
-                            extracted_text = self._extract_text_from_pages(result)
+                            # OCR 결과에서 텍스트 추출 (공식 문서 응답 구조 사용)
+                            extracted_text = self._extract_text_from_response(result)
 
                             if extracted_text:
                                 logger.info(f"✅ OCR 성공: {len(extracted_text)}자 추출")
 
                                 return {
                                     "text": extracted_text,
-                                    "confidence": result.get("confidence", 1.0),
-                                    "pages": result.get("pages", []),
+                                    "html": result.get("content", {}).get("html", ""),
+                                    "elements": result.get("elements", []),
                                     "source_url": url
                                 }
                             else:
@@ -302,43 +300,52 @@ class UpstageClient:
             logger.error(f"이미지 OCR 중 오류: {url} - {e}")
             return None
 
-    def _extract_text_from_pages(self, result: Dict) -> str:
+    def _extract_text_from_response(self, result: Dict) -> str:
         """
-        Upstage API 응답에서 텍스트 추출 (pages 구조 사용)
+        Upstage Document Parse API 응답에서 텍스트 추출
 
-        응답 구조:
+        공식 문서 응답 구조:
         {
-            "pages": [
+            "content": {
+                "html": "<h1>...</h1>",
+                "markdown": "...",
+                "text": "..."
+            },
+            "elements": [
                 {
-                    "id": 1,
-                    "text": "페이지 텍스트...",
-                    ...
+                    "category": "heading1",
+                    "content": {
+                        "html": "<h1>...</h1>",
+                        "text": "..."
+                    }
                 }
             ]
         }
         """
         try:
-            texts = []
-
-            # pages 배열에서 텍스트 추출
-            for page in result.get("pages", []):
-                if isinstance(page, dict):
-                    page_text = page.get("text", "")
-                    if page_text:
-                        texts.append(page_text)
-
-            if texts:
-                return "\n\n".join(texts)
-
-            # Fallback: content.text 시도
+            # 1. content.text 우선 (전체 텍스트)
             if "content" in result:
                 content = result["content"]
                 if isinstance(content, dict):
-                    return content.get("text", "")
-                elif isinstance(content, str):
-                    return content
+                    text = content.get("text", "")
+                    if text:
+                        return text
 
-            # Fallback: text 필드 직접 시도
+            # 2. elements에서 텍스트 추출
+            if "elements" in result:
+                texts = []
+                for element in result.get("elements", []):
+                    if isinstance(element, dict) and "content" in element:
+                        elem_content = element["content"]
+                        if isinstance(elem_content, dict):
+                            elem_text = elem_content.get("text", "")
+                            if elem_text:
+                                texts.append(elem_text)
+
+                if texts:
+                    return "\n\n".join(texts)
+
+            # 3. Fallback: 최상위 text 필드
             if "text" in result:
                 return result["text"]
 
