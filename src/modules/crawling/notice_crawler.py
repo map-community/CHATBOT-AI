@@ -19,7 +19,7 @@ class NoticeCrawler(BaseCrawler):
             base_url=CrawlerConfig.BASE_URLS['notice']
         )
 
-    def extract_from_url(self, url: str) -> Optional[Tuple[str, str, any, str, str]]:
+    def extract_from_url(self, url: str) -> Optional[Tuple[str, str, any, any, str, str]]:
         """
         공지사항 URL에서 데이터 추출
 
@@ -27,7 +27,7 @@ class NoticeCrawler(BaseCrawler):
             url: 크롤링할 URL
 
         Returns:
-            (title, text, image_list, date, url) 튜플
+            (title, text, image_list, attachment_list, date, url) 튜플
         """
         try:
             response = self.fetch_with_retry(url)
@@ -47,6 +47,7 @@ class NoticeCrawler(BaseCrawler):
             # 본문 텍스트 추출
             text_content = ""
             image_content = []
+            attachment_content = []
 
             paragraphs = soup.find('div', id='bo_v_con')
             if paragraphs:
@@ -63,13 +64,28 @@ class NoticeCrawler(BaseCrawler):
                 for img in paragraphs.find_all('img'):
                     img_src = img.get('src')
                     if img_src:
+                        # 상대 경로를 절대 경로로 변환
+                        if img_src.startswith('/'):
+                            img_src = f"https://cse.knu.ac.kr{img_src}"
                         image_content.append(img_src)
+
+            # 첨부파일 URL 추출 (게시판 첨부파일 영역에서)
+            attachment_section = soup.find('section', id='bo_v_file') or soup.find('div', class_='bo_v_file')
+            if attachment_section:
+                for link in attachment_section.find_all('a', href=True):
+                    href = link['href']
+                    # 다운로드 링크 필터링
+                    if 'download.php' in href or any(ext in href.lower() for ext in ['.pdf', '.docx', '.hwp', '.pptx', '.xlsx']):
+                        # 상대 경로를 절대 경로로 변환
+                        if href.startswith('/'):
+                            href = f"https://cse.knu.ac.kr{href}"
+                        attachment_content.append(href)
 
             # 날짜 추출
             date_element = soup.select_one("strong.if_date")
             date = date_element.get_text(strip=True) if date_element else "Unknown Date"
 
-            return title, text_content, image_content, date, url
+            return title, text_content, image_content, attachment_content, date, url
 
         except Exception as e:
             print(f"❌ 오류 발생 ({url}): {e}")
