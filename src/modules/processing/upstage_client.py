@@ -68,12 +68,6 @@ class UpstageClient:
             실패 시 None
         """
         try:
-            # URL 파일 타입 확인
-            file_ext = Path(url).suffix.lower()
-            if file_ext not in self.SUPPORTED_DOCUMENT_TYPES:
-                logger.warning(f"지원하지 않는 문서 타입: {file_ext}")
-                return None
-
             logger.info(f"📄 Document Parse 시작: {url}")
 
             # URL에서 파일 다운로드 후 업로드
@@ -84,9 +78,49 @@ class UpstageClient:
                     logger.error(f"파일 다운로드 실패: {url}")
                     return None
 
+                # Content-Type과 Content-Disposition에서 파일 정보 추출
+                content_type = file_response.headers.get('Content-Type', '').lower()
+                content_disposition = file_response.headers.get('Content-Disposition', '')
+
+                # 실제 파일명 추출 (Content-Disposition 헤더에서)
+                filename = Path(url).name  # 기본값
+                if 'filename=' in content_disposition:
+                    import re
+                    match = re.search(r'filename[^;=\n]*=(([\'"]).*?\2|[^;\n]*)', content_disposition)
+                    if match:
+                        filename = match.group(1).strip('"\'')
+
+                # Content-Type으로 문서 타입 확인
+                supported_types = [
+                    'application/pdf',
+                    'application/msword',
+                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                    'application/vnd.ms-powerpoint',
+                    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+                    'application/vnd.ms-excel',
+                    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    'application/x-hwp',  # HWP
+                    'application/haansofthwp',  # HWP
+                ]
+
+                # 파일 확장자로도 체크
+                file_ext = Path(filename).suffix.lower()
+                is_supported = (
+                    any(t in content_type for t in supported_types) or
+                    file_ext in self.SUPPORTED_DOCUMENT_TYPES
+                )
+
+                if not is_supported:
+                    logger.warning(f"지원하지 않는 파일 타입: {content_type}, 확장자: {file_ext}")
+                    logger.warning(f"URL: {url}")
+                    logger.warning(f"파일명: {filename}")
+                    return None
+
+                logger.info(f"📄 파일 다운로드 성공: {filename} ({content_type})")
+
                 # Upstage Document Parse API 호출 (파일 업로드 방식)
                 files = {
-                    "document": (Path(url).name, file_response.content)
+                    "document": (filename, file_response.content)
                 }
                 data = {
                     "ocr": "auto"  # OCR 자동 활성화 (PDF 내장 텍스트 우선, 필요시 OCR)
@@ -105,10 +139,18 @@ class UpstageClient:
                         if response.status_code == 200:
                             result = response.json()
 
+                            # 디버깅: API 응답 구조 로깅
+                            logger.info(f"📊 Document Parse API 응답 키: {list(result.keys())}")
+                            if "pages" in result and len(result["pages"]) > 0:
+                                logger.info(f"📊 첫 페이지 키: {list(result['pages'][0].keys())}")
+
                             # 텍스트 추출 (pages 구조 사용)
                             extracted_text = self._extract_text_from_pages(result)
 
-                            logger.info(f"✅ Document Parse 성공: {len(extracted_text)}자 추출")
+                            if extracted_text:
+                                logger.info(f"✅ Document Parse 성공: {len(extracted_text)}자 추출")
+                            else:
+                                logger.warning(f"⚠️  텍스트 추출 실패. 응답 구조: {result}")
 
                             return {
                                 "text": extracted_text,
@@ -154,12 +196,6 @@ class UpstageClient:
             실패 시 None
         """
         try:
-            # URL 파일 타입 확인
-            file_ext = Path(url).suffix.lower()
-            if file_ext not in self.SUPPORTED_IMAGE_TYPES:
-                logger.warning(f"지원하지 않는 이미지 타입: {file_ext}")
-                return None
-
             logger.info(f"🖼️  OCR 시작: {url}")
 
             # URL에서 이미지 다운로드
@@ -169,10 +205,43 @@ class UpstageClient:
                     logger.error(f"이미지 다운로드 실패: {url}")
                     return None
 
+                # Content-Type 확인
+                content_type = file_response.headers.get('Content-Type', '').lower()
+                content_disposition = file_response.headers.get('Content-Disposition', '')
+
+                # 실제 파일명 추출
+                filename = Path(url).name
+                if 'filename=' in content_disposition:
+                    import re
+                    match = re.search(r'filename[^;=\n]*=(([\'"]).*?\2|[^;\n]*)', content_disposition)
+                    if match:
+                        filename = match.group(1).strip('"\'')
+
+                # 이미지 타입 확인
+                supported_image_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/bmp', 'image/webp']
+                file_ext = Path(filename).suffix.lower()
+
+                is_image = (
+                    any(t in content_type for t in supported_image_types) or
+                    file_ext in self.SUPPORTED_IMAGE_TYPES
+                )
+
+                if not is_image:
+                    logger.warning(f"이미지가 아님: {content_type}, 확장자: {file_ext}, URL: {url}")
+                    return None
+
+                # 파일 크기 확인 (너무 작으면 손상되었을 가능성)
+                content_length = len(file_response.content)
+                if content_length < 100:
+                    logger.warning(f"이미지 파일이 너무 작음 ({content_length} bytes): {url}")
+                    return None
+
+                logger.info(f"🖼️  이미지 다운로드 성공: {filename} ({content_type}, {content_length} bytes)")
+
                 # Upstage OCR API 호출 (파일 업로드 방식)
                 # 이미지 파일은 document-digitization API로 자동 OCR 처리
                 files = {
-                    "document": (Path(url).name, file_response.content)
+                    "document": (filename, file_response.content)
                 }
                 # 이미지 파일을 보내면 자동으로 OCR 처리됨 (별도 파라미터 불필요)
                 data = {}
@@ -190,6 +259,11 @@ class UpstageClient:
                         if response.status_code == 200:
                             result = response.json()
 
+                            # 디버깅: API 응답 구조 로깅
+                            logger.info(f"📊 OCR API 응답 키: {list(result.keys())}")
+                            if "pages" in result and len(result["pages"]) > 0:
+                                logger.info(f"📊 첫 페이지 키: {list(result['pages'][0].keys())}")
+
                             # OCR 결과에서 텍스트 추출 (pages 구조 사용)
                             extracted_text = self._extract_text_from_pages(result)
 
@@ -203,7 +277,8 @@ class UpstageClient:
                                     "source_url": url
                                 }
                             else:
-                                logger.warning("OCR 결과가 비어있음")
+                                logger.warning("⚠️  OCR 결과가 비어있음")
+                                logger.warning(f"응답 전체 구조: {result}")
                                 return None
                         else:
                             logger.warning(f"OCR API 오류: {response.status_code} - {response.text[:200]}")
