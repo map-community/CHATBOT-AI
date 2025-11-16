@@ -299,7 +299,10 @@ class MultimodalProcessor:
 
     def process_attachments(self, attachment_urls: List[str], logger=None, category: str = "notice") -> Dict:
         """
-        첨부파일 리스트 처리 (Document Parse)
+        첨부파일 리스트 처리 (Document Parse 또는 OCR)
+
+        이미지 확장자 첨부파일은 OCR로 처리하고,
+        문서 확장자는 Document Parse로 처리합니다.
 
         Args:
             attachment_urls: 첨부파일 URL 리스트
@@ -322,6 +325,97 @@ class MultimodalProcessor:
         unsupported = []
 
         for att_url in attachment_urls:
+            # 이미지 확장자 확인 (대소문자 무관)
+            is_image = self.upstage_client.is_image_url(att_url)
+
+            # 이미지 첨부파일은 OCR로 처리
+            if is_image:
+                # 이미지로 처리 (process_images 로직과 동일)
+                try:
+                    # 캐시 확인
+                    cached = self._get_from_cache(att_url)
+                    if cached:
+                        cached["url"] = att_url
+                        if cached.get('text') or cached.get('ocr_text'):
+                            # 이미지는 ocr_text 키 사용, 첨부파일은 text 키 사용
+                            text = cached.get('text') or cached.get('ocr_text', '')
+                            content = {
+                                "url": att_url,
+                                "type": "image",
+                                "text": text
+                            }
+                            successful.append(content)
+                            if logger:
+                                url_display = att_url[:50] + "..." if len(att_url) > 50 else att_url
+                                logger.log_multimodal_detail(
+                                    "이미지 첨부 OCR (캐시)",
+                                    url_display,
+                                    success=True,
+                                    detail=f"이미지 - {len(text)}자"
+                                )
+                        continue
+
+                    # OCR API 호출
+                    ocr_result = self.upstage_client.extract_text_from_image_url(att_url)
+
+                    if ocr_result and ocr_result.get("text"):
+                        text = ocr_result.get("text", "")
+                        content = {
+                            "url": att_url,
+                            "type": "image",
+                            "text": text
+                        }
+                        successful.append(content)
+                        self._save_to_cache(att_url, {"ocr_text": text, "type": "image"})
+
+                        if logger:
+                            url_display = att_url[:50] + "..." if len(att_url) > 50 else att_url
+                            logger.log_multimodal_detail(
+                                "이미지 첨부 OCR",
+                                url_display,
+                                success=True,
+                                detail=f"이미지 - {len(text)}자 추출"
+                            )
+                    else:
+                        failed.append({
+                            "url": att_url,
+                            "reason": "OCR 텍스트 추출 실패"
+                        })
+                        if logger:
+                            url_display = att_url[:50] + "..." if len(att_url) > 50 else att_url
+                            logger.log_multimodal_detail(
+                                "이미지 첨부 OCR",
+                                url_display,
+                                success=False,
+                                detail="텍스트 없음"
+                            )
+
+                except Exception as e:
+                    error_msg = str(e)
+                    if "지원하지 않는" in error_msg or "unsupported" in error_msg.lower():
+                        unsupported.append({
+                            "url": att_url,
+                            "reason": error_msg
+                        })
+                    else:
+                        failed.append({
+                            "url": att_url,
+                            "reason": error_msg
+                        })
+
+                    if logger:
+                        url_display = att_url[:50] + "..." if len(att_url) > 50 else att_url
+                        logger.log_multimodal_detail(
+                            "이미지 첨부 OCR",
+                            url_display,
+                            success=False,
+                            detail=error_msg[:100]
+                        )
+
+                # 이미지 처리 완료, 다음 첨부파일로
+                continue
+
+            # 문서 파일 처리 (PDF, DOCX, HWP 등)
             try:
                 # 파일 타입 확인 (download.php 같은 동적 URL은 Content-Type으로 확인)
                 # is_document_url은 확장자 체크이므로 일단 시도
