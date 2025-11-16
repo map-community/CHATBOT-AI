@@ -273,8 +273,115 @@ class UpstageClient:
             실패 시 None
         """
         try:
-            logger.info(f"🖼️  OCR 시작: {url}")
+            logger.info(f"🖼️  OCR 시작: {url[:100]}...")
 
+            # Data URI Scheme 처리 (data:image/png;base64,...)
+            if url.startswith('data:'):
+                try:
+                    import base64
+                    import re
+
+                    logger.info("📊 Data URI 감지 - Base64 디코딩 시작")
+
+                    # Data URI 파싱: data:[<mediatype>][;base64],<data>
+                    match = re.match(r'data:([^;]+);base64,(.+)', url)
+                    if not match:
+                        logger.error("Data URI 형식이 올바르지 않음 (base64 인코딩 필요)")
+                        return None
+
+                    mime_type = match.group(1)  # image/png, image/jpeg 등
+                    base64_data = match.group(2)
+
+                    # MIME 타입 확인
+                    supported_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/bmp', 'image/webp']
+                    if mime_type not in supported_types:
+                        logger.warning(f"지원하지 않는 이미지 타입: {mime_type}")
+                        return None
+
+                    # Base64 디코딩
+                    image_data = base64.b64decode(base64_data)
+                    data_length = len(image_data)
+
+                    # 파일 크기 확인
+                    if data_length < 100:
+                        logger.warning(f"이미지 데이터가 너무 작음 ({data_length} bytes)")
+                        return None
+
+                    # 확장자 결정
+                    ext_map = {
+                        'image/jpeg': '.jpg',
+                        'image/jpg': '.jpg',
+                        'image/png': '.png',
+                        'image/gif': '.gif',
+                        'image/bmp': '.bmp',
+                        'image/webp': '.webp'
+                    }
+                    extension = ext_map.get(mime_type, '.jpg')
+                    filename = f"data_uri_image{extension}"
+
+                    logger.info(f"🖼️  Data URI 디코딩 성공: {filename} ({mime_type}, {data_length} bytes)")
+
+                    # Upstage OCR API 호출
+                    files = {
+                        "document": (filename, image_data)
+                    }
+                    data_param = {
+                        "model": "document-parse",
+                        "ocr": "auto"
+                    }
+
+                    for attempt in range(self.max_retries):
+                        try:
+                            response = requests.post(
+                                self.API_URL,
+                                headers=self.headers,
+                                files=files,
+                                data=data_param,
+                                timeout=30
+                            )
+
+                            if response.status_code == 200:
+                                result = response.json()
+
+                                # 디버깅: API 응답 구조 로깅
+                                logger.info(f"📊 OCR API 응답 키: {list(result.keys())}")
+
+                                # OCR 결과에서 텍스트 추출
+                                extracted_text = self._extract_text_from_response(result)
+
+                                if extracted_text:
+                                    logger.info(f"✅ OCR 성공 (Data URI): {len(extracted_text)}자 추출")
+
+                                    # RAG용으로 텍스트와 HTML 둘 다 반환
+                                    return {
+                                        "text": extracted_text,
+                                        "html": result.get("content", {}).get("html", ""),
+                                        "full_html": result.get("content", {}).get("html", ""),
+                                        "elements": result.get("elements", []),
+                                        "source_url": "data_uri"  # Data URI는 너무 길어서 "data_uri"로 표시
+                                    }
+                                else:
+                                    logger.warning("⚠️  OCR 결과가 비어있음 (Data URI)")
+                                    return None
+                            else:
+                                logger.warning(f"OCR API 오류: {response.status_code} - {response.text[:200]}")
+
+                        except Exception as e:
+                            if attempt < self.max_retries - 1:
+                                wait_time = 2 ** attempt
+                                logger.warning(f"재시도 {attempt + 1}/{self.max_retries} (대기: {wait_time}초)")
+                                time.sleep(wait_time)
+                            else:
+                                logger.error(f"OCR 실패 (Data URI): {e}")
+                                raise
+
+                    return None
+
+                except Exception as data_uri_error:
+                    logger.error(f"Data URI 처리 오류: {data_uri_error}")
+                    return None
+
+            # 일반 HTTP/HTTPS URL 처리
             # URL에서 이미지 다운로드 (리다이렉트 따라가기!)
             try:
                 file_response = requests.get(url, timeout=30, allow_redirects=True)
