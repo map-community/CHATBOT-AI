@@ -7,6 +7,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import logging
+import hashlib
+import requests
 from typing import List, Tuple, Dict, Optional
 from pymongo import MongoClient
 from config import CrawlerConfig
@@ -165,6 +167,7 @@ class MultimodalProcessor:
 
         # 캐시 인덱스 생성
         self.cache_collection.create_index("url", unique=True)
+        self.cache_collection.create_index("file_hash")  # 파일 해시 인덱스 (중복 이미지 감지용)
 
         logger.info(f"MultimodalProcessor 초기화 - 이미지: {self.enable_image}, 첨부파일: {self.enable_attachment}")
 
@@ -194,7 +197,7 @@ class MultimodalProcessor:
 
         for img_url in image_urls:
             try:
-                # 캐시 확인
+                # 1. URL 기반 캐시 확인 (빠른 경로)
                 cached = self._get_from_cache(img_url)
                 if cached:
                     # 캐시에서 가져온 데이터에 url 키 추가 (캐시 메서드에서 제거되므로)
@@ -205,14 +208,59 @@ class MultimodalProcessor:
                         successful.append(cached)
                         if logger:
                             logger.log_multimodal_detail(
-                                "이미지 OCR (캐시)",
+                                "이미지 OCR (URL 캐시)",
                                 img_url[:50] + "..." if len(img_url) > 50 else img_url,
                                 success=True,
                                 detail=f"{len(cached.get('ocr_text', ''))}자"
                             )
                     continue
 
-                # Upstage OCR API 호출
+                # 2. 파일 다운로드 및 해시 계산
+                file_data = self._download_file(img_url)
+                if not file_data:
+                    failed.append({
+                        "url": img_url,
+                        "reason": "파일 다운로드 실패"
+                    })
+                    if logger:
+                        url_display = img_url[:50] + "..." if len(img_url) > 50 else img_url
+                        logger.log_multimodal_detail(
+                            "이미지 OCR",
+                            url_display,
+                            success=False,
+                            detail="다운로드 실패"
+                        )
+                    continue
+
+                file_hash = self._calculate_file_hash(file_data)
+
+                # 3. 파일 해시 기반 캐시 확인 (중복 이미지 감지)
+                cached_by_hash = self._get_from_cache_by_file_hash(file_hash)
+                if cached_by_hash:
+                    # 중복 이미지 발견! OCR 생략
+                    content = {
+                        "url": img_url,
+                        "ocr_text": cached_by_hash.get("ocr_text", ""),
+                        "description": cached_by_hash.get("description", "")
+                    }
+                    successful.append(content)
+                    # 현재 URL도 캐시에 추가 (빠른 조회용)
+                    self._save_to_cache(img_url, content, file_hash=file_hash)
+
+                    if logger:
+                        url_display = img_url[:50] + "..." if len(img_url) > 50 else img_url
+                        logger.log_multimodal_detail(
+                            "이미지 OCR (파일 해시 캐시)",
+                            url_display,
+                            success=True,
+                            detail=f"중복 이미지 - {len(content['ocr_text'])}자"
+                        )
+                    else:
+                        # 로거 없을 때 콘솔 출력
+                        print(f"ℹ️  중복 이미지 감지 (파일 해시): OCR 생략 - {len(content['ocr_text'])}자")
+                    continue
+
+                # 4. 새 이미지 → Upstage OCR API 호출
                 ocr_result = self.upstage_client.extract_text_from_image_url(img_url)
 
                 if ocr_result:
@@ -226,7 +274,7 @@ class MultimodalProcessor:
                             "description": ""
                         }
                         successful.append(content)
-                        self._save_to_cache(img_url, content)
+                        self._save_to_cache(img_url, content, file_hash=file_hash)
 
                         if logger:
                             url_display = img_url[:50] + "..." if len(img_url) > 50 else img_url
@@ -332,7 +380,7 @@ class MultimodalProcessor:
             if is_image:
                 # 이미지로 처리 (process_images 로직과 동일)
                 try:
-                    # 캐시 확인
+                    # 1. URL 기반 캐시 확인
                     cached = self._get_from_cache(att_url)
                     if cached:
                         cached["url"] = att_url
@@ -348,14 +396,59 @@ class MultimodalProcessor:
                             if logger:
                                 url_display = att_url[:50] + "..." if len(att_url) > 50 else att_url
                                 logger.log_multimodal_detail(
-                                    "이미지 첨부 OCR (캐시)",
+                                    "이미지 첨부 OCR (URL 캐시)",
                                     url_display,
                                     success=True,
                                     detail=f"이미지 - {len(text)}자"
                                 )
                         continue
 
-                    # OCR API 호출
+                    # 2. 파일 다운로드 및 해시 계산
+                    file_data = self._download_file(att_url)
+                    if not file_data:
+                        failed.append({
+                            "url": att_url,
+                            "reason": "파일 다운로드 실패"
+                        })
+                        if logger:
+                            url_display = att_url[:50] + "..." if len(att_url) > 50 else att_url
+                            logger.log_multimodal_detail(
+                                "이미지 첨부 OCR",
+                                url_display,
+                                success=False,
+                                detail="다운로드 실패"
+                            )
+                        continue
+
+                    file_hash = self._calculate_file_hash(file_data)
+
+                    # 3. 파일 해시 기반 캐시 확인 (중복 이미지 감지)
+                    cached_by_hash = self._get_from_cache_by_file_hash(file_hash)
+                    if cached_by_hash:
+                        # 중복 이미지 발견! OCR 생략
+                        text = cached_by_hash.get("ocr_text") or cached_by_hash.get("text", "")
+                        content = {
+                            "url": att_url,
+                            "type": "image",
+                            "text": text
+                        }
+                        successful.append(content)
+                        # 현재 URL도 캐시에 추가
+                        self._save_to_cache(att_url, {"ocr_text": text, "type": "image"}, file_hash=file_hash)
+
+                        if logger:
+                            url_display = att_url[:50] + "..." if len(att_url) > 50 else att_url
+                            logger.log_multimodal_detail(
+                                "이미지 첨부 OCR (파일 해시 캐시)",
+                                url_display,
+                                success=True,
+                                detail=f"중복 이미지 - {len(text)}자"
+                            )
+                        else:
+                            print(f"ℹ️  중복 이미지 감지 (파일 해시): OCR 생략 - {len(text)}자")
+                        continue
+
+                    # 4. 새 이미지 → OCR API 호출
                     ocr_result = self.upstage_client.extract_text_from_image_url(att_url)
 
                     if ocr_result and ocr_result.get("text"):
@@ -366,7 +459,7 @@ class MultimodalProcessor:
                             "text": text
                         }
                         successful.append(content)
-                        self._save_to_cache(att_url, {"ocr_text": text, "type": "image"})
+                        self._save_to_cache(att_url, {"ocr_text": text, "type": "image"}, file_hash=file_hash)
 
                         if logger:
                             url_display = att_url[:50] + "..." if len(att_url) > 50 else att_url
@@ -526,6 +619,75 @@ class MultimodalProcessor:
             "total": len(attachment_urls)
         }
 
+    def _calculate_file_hash(self, file_data: bytes) -> str:
+        """
+        파일 바이너리 데이터의 MD5 해시 계산
+
+        Args:
+            file_data: 파일 바이너리 데이터
+
+        Returns:
+            MD5 해시 문자열
+        """
+        return hashlib.md5(file_data).hexdigest()
+
+    def _download_file(self, url: str) -> Optional[bytes]:
+        """
+        URL에서 파일 다운로드
+
+        Args:
+            url: 다운로드할 URL (Data URI도 지원)
+
+        Returns:
+            파일 바이너리 데이터, 실패 시 None
+        """
+        try:
+            # Data URI 처리
+            if url.startswith('data:'):
+                import base64
+                import re
+
+                # data:image/png;base64,iVBORw0KGgo... 형식 파싱
+                if ';base64,' in url:
+                    parts = url.split(';base64,')
+                    if len(parts) == 2:
+                        base64_data = parts[1]
+                        return base64.b64decode(base64_data)
+                return None
+
+            # HTTP/HTTPS URL 처리
+            response = requests.get(url, timeout=30, allow_redirects=True)
+            if response.status_code == 200:
+                return response.content
+            return None
+
+        except Exception as e:
+            logger.warning(f"파일 다운로드 오류 ({url[:50]}...): {e}")
+            return None
+
+    def _get_from_cache_by_file_hash(self, file_hash: str) -> Optional[Dict]:
+        """
+        파일 해시로 캐시 조회 (중복 이미지 감지)
+
+        Args:
+            file_hash: 파일 MD5 해시
+
+        Returns:
+            캐시된 처리 결과 또는 None
+        """
+        try:
+            cached = self.cache_collection.find_one({"file_hash": file_hash})
+            if cached:
+                # MongoDB _id, url, file_hash 제거
+                cached.pop("_id", None)
+                cached.pop("url", None)
+                cached.pop("file_hash", None)
+                return cached
+        except Exception as e:
+            logger.warning(f"파일 해시 캐시 조회 오류: {e}")
+
+        return None
+
     def _get_from_cache(self, url: str) -> Optional[Dict]:
         """캐시에서 처리 결과 조회"""
         try:
@@ -534,16 +696,27 @@ class MultimodalProcessor:
                 # MongoDB _id 제거
                 cached.pop("_id", None)
                 cached.pop("url", None)
+                cached.pop("file_hash", None)
                 return cached
         except Exception as e:
             logger.warning(f"캐시 조회 오류: {e}")
 
         return None
 
-    def _save_to_cache(self, url: str, content: Dict):
-        """처리 결과를 캐시에 저장"""
+    def _save_to_cache(self, url: str, content: Dict, file_hash: Optional[str] = None):
+        """
+        처리 결과를 캐시에 저장
+
+        Args:
+            url: 원본 URL
+            content: 처리 결과 (ocr_text, text 등)
+            file_hash: 파일 해시 (선택)
+        """
         try:
             cache_data = {"url": url, **content}
+            if file_hash:
+                cache_data["file_hash"] = file_hash
+
             self.cache_collection.update_one(
                 {"url": url},
                 {"$set": cache_data},
