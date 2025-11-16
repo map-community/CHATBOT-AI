@@ -191,7 +191,9 @@ class UpstageClient:
                     logger.warning(f"파일명: {filename}")
                     return None
 
-                logger.info(f"📄 파일 다운로드 성공: {filename} ({content_type})")
+                # 파일명이 길면 줄임
+                display_name = filename if len(filename) <= 30 else f"{filename[:27]}..."
+                logger.info(f"📄 다운로드 성공: {display_name}")
 
                 # Upstage Document Parse API 호출 (파일 업로드 방식)
                 files = {
@@ -319,7 +321,7 @@ class UpstageClient:
                     extension = ext_map.get(mime_type, '.jpg')
                     filename = f"data_uri_image{extension}"
 
-                    logger.info(f"🖼️  Data URI 디코딩 성공: {filename} ({mime_type}, {data_length} bytes)")
+                    logger.info(f"📊 디코딩 성공: {mime_type}, {data_length} bytes")
 
                     # Upstage OCR API 호출
                     files = {
@@ -435,7 +437,9 @@ class UpstageClient:
                     logger.warning(f"이미지 파일이 너무 작음 ({content_length} bytes): {url}")
                     return None
 
-                logger.info(f"🖼️  이미지 다운로드 성공: {filename} ({content_type}, {content_length} bytes)")
+                # 파일명이 길면 줄임
+                display_name = filename if len(filename) <= 30 else f"{filename[:27]}..."
+                logger.info(f"📊 다운로드 성공: {display_name}, {content_length} bytes")
 
                 # Upstage OCR API 호출 (파일 업로드 방식)
                 # 이미지도 document-parse 모델로 처리 (자동 OCR)

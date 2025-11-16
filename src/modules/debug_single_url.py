@@ -601,7 +601,7 @@ def debug_url(url: str, category: str = "notice"):
             function="create_multimodal_content"
         )
 
-        multimodal_content = multimodal_processor.create_multimodal_content(
+        multimodal_content, failures = multimodal_processor.create_multimodal_content(
             title=title,
             url=url,
             date=date,
@@ -616,7 +616,13 @@ def debug_url(url: str, category: str = "notice"):
             "date": multimodal_content.date,
             "text_chunks_count": len(multimodal_content.text_chunks),
             "image_contents_count": len(multimodal_content.image_contents),
-            "attachment_contents_count": len(multimodal_content.attachment_contents)
+            "attachment_contents_count": len(multimodal_content.attachment_contents),
+            "failures": {
+                "image_failed": len(failures["image_failed"]),
+                "image_unsupported": len(failures["image_unsupported"]),
+                "attachment_failed": len(failures["attachment_failed"]),
+                "attachment_unsupported": len(failures["attachment_unsupported"])
+            }
         }
         tracker.log_output(content_summary, "멀티모달 콘텐츠")
         tracker.end_step()

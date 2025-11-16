@@ -168,7 +168,7 @@ class MultimodalProcessor:
 
         logger.info(f"MultimodalProcessor 초기화 - 이미지: {self.enable_image}, 첨부파일: {self.enable_attachment}")
 
-    def process_images(self, image_urls: List[str], logger=None, category: str = "notice") -> List[Dict]:
+    def process_images(self, image_urls: List[str], logger=None, category: str = "notice") -> Dict:
         """
         이미지 리스트 처리 (OCR)
 
@@ -178,12 +178,19 @@ class MultimodalProcessor:
             category: 카테고리
 
         Returns:
-            [{"url": "...", "ocr_text": "...", "description": "..."}, ...]
+            {
+                "successful": [{"url": "...", "ocr_text": "..."}],
+                "failed": [{"url": "...", "reason": "..."}],
+                "unsupported": [{"url": "...", "reason": "..."}],
+                "total": N
+            }
         """
         if not self.enable_image or not image_urls:
-            return []
+            return {"successful": [], "failed": [], "unsupported": [], "total": 0}
 
-        results = []
+        successful = []
+        failed = []
+        unsupported = []
 
         for img_url in image_urls:
             try:
@@ -192,70 +199,105 @@ class MultimodalProcessor:
                 if cached:
                     # 캐시에서 가져온 데이터에 url 키 추가 (캐시 메서드에서 제거되므로)
                     cached["url"] = img_url
-                    results.append(cached)
-                    if logger:
-                        logger.log_multimodal_detail(
-                            "이미지 OCR (캐시)",
-                            img_url,
-                            success=True,
-                            detail=f"{len(cached.get('ocr_text', ''))}자"
-                        )
+
+                    # 캐시된 데이터의 성공 여부 확인
+                    if cached.get('ocr_text'):
+                        successful.append(cached)
+                        if logger:
+                            logger.log_multimodal_detail(
+                                "이미지 OCR (캐시)",
+                                img_url[:50] + "..." if len(img_url) > 50 else img_url,
+                                success=True,
+                                detail=f"{len(cached.get('ocr_text', ''))}자"
+                            )
                     continue
 
                 # Upstage OCR API 호출
                 ocr_result = self.upstage_client.extract_text_from_image_url(img_url)
 
                 if ocr_result:
-                    # ocr_result가 딕셔너리 형태로 반환됨 (text, html, elements 등 포함)
-                    content = {
-                        "url": img_url,
-                        "ocr_text": ocr_result.get("text", ""),
-                        "description": ""  # 향후 Vision API 추가 가능
-                    }
+                    text_length = len(ocr_result.get("text", ""))
 
-                    results.append(content)
+                    if text_length > 0:
+                        # 성공: 텍스트 추출 완료
+                        content = {
+                            "url": img_url,
+                            "ocr_text": ocr_result.get("text", ""),
+                            "description": ""
+                        }
+                        successful.append(content)
+                        self._save_to_cache(img_url, content)
 
-                    # 캐시에 저장
-                    self._save_to_cache(img_url, content)
-
-                    if logger:
-                        text_length = len(ocr_result.get("text", ""))
-                        if text_length > 0:
+                        if logger:
+                            url_display = img_url[:50] + "..." if len(img_url) > 50 else img_url
                             logger.log_multimodal_detail(
                                 "이미지 OCR",
-                                img_url,
+                                url_display,
                                 success=True,
                                 detail=f"{text_length}자 추출"
                             )
-                        else:
+                    else:
+                        # 실패: API는 응답했지만 텍스트 없음
+                        failed.append({
+                            "url": img_url,
+                            "reason": "빈 이미지 또는 텍스트 인식 실패"
+                        })
+                        if logger:
+                            url_display = img_url[:50] + "..." if len(img_url) > 50 else img_url
                             logger.log_multimodal_detail(
                                 "이미지 OCR",
-                                img_url,
+                                url_display,
                                 success=False,
-                                detail="텍스트 없음 (빈 이미지 또는 인식 실패)"
+                                detail="텍스트 없음 (인식 실패)"
                             )
                 else:
+                    # 실패: API 호출 자체가 실패
+                    failed.append({
+                        "url": img_url,
+                        "reason": "API 호출 실패"
+                    })
                     if logger:
+                        url_display = img_url[:50] + "..." if len(img_url) > 50 else img_url
                         logger.log_multimodal_detail(
                             "이미지 OCR",
-                            img_url,
+                            url_display,
                             success=False,
                             detail="API 호출 실패"
                         )
 
             except Exception as e:
+                # 예외 발생: 실패로 분류
+                error_msg = str(e)
+
+                # 지원하지 않는 형식인지 확인
+                if "지원하지 않는" in error_msg or "unsupported" in error_msg.lower():
+                    unsupported.append({
+                        "url": img_url,
+                        "reason": error_msg
+                    })
+                else:
+                    failed.append({
+                        "url": img_url,
+                        "reason": error_msg
+                    })
+
                 if logger:
+                    url_display = img_url[:50] + "..." if len(img_url) > 50 else img_url
                     logger.log_multimodal_detail(
                         "이미지 OCR",
-                        img_url,
+                        url_display,
                         success=False,
-                        detail=str(e)
+                        detail=error_msg[:100]
                     )
-                # 오류 발생해도 다음 이미지 계속 처리
 
-        return results
+        return {
+            "successful": successful,
+            "failed": failed,
+            "unsupported": unsupported,
+            "total": len(image_urls)
+        }
 
-    def process_attachments(self, attachment_urls: List[str], logger=None, category: str = "notice") -> List[Dict]:
+    def process_attachments(self, attachment_urls: List[str], logger=None, category: str = "notice") -> Dict:
         """
         첨부파일 리스트 처리 (Document Parse)
 
@@ -265,12 +307,19 @@ class MultimodalProcessor:
             category: 카테고리
 
         Returns:
-            [{"url": "...", "type": "pdf", "text": "..."}, ...]
+            {
+                "successful": [{"url": "...", "type": "pdf", "text": "..."}],
+                "failed": [{"url": "...", "reason": "..."}],
+                "unsupported": [{"url": "...", "reason": "..."}],
+                "total": N
+            }
         """
         if not self.enable_attachment or not attachment_urls:
-            return []
+            return {"successful": [], "failed": [], "unsupported": [], "total": 0}
 
-        results = []
+        successful = []
+        failed = []
+        unsupported = []
 
         for att_url in attachment_urls:
             try:
@@ -283,70 +332,105 @@ class MultimodalProcessor:
                 if cached:
                     # 캐시에서 가져온 데이터에 url 키 추가 (캐시 메서드에서 제거되므로)
                     cached["url"] = att_url
-                    results.append(cached)
-                    if logger:
-                        logger.log_multimodal_detail(
-                            "문서 파싱 (캐시)",
-                            att_url,
-                            success=True,
-                            detail=f"{cached.get('type', 'unknown')} - {len(cached.get('text', ''))}자"
-                        )
+
+                    # 캐시된 데이터의 성공 여부 확인
+                    if cached.get('text'):
+                        successful.append(cached)
+                        if logger:
+                            url_display = att_url[:50] + "..." if len(att_url) > 50 else att_url
+                            logger.log_multimodal_detail(
+                                "문서 파싱 (캐시)",
+                                url_display,
+                                success=True,
+                                detail=f"{cached.get('type', 'unknown')} - {len(cached.get('text', ''))}자"
+                            )
                     continue
 
                 # Upstage Document Parse API 호출
                 parse_result = self.upstage_client.parse_document_from_url(att_url)
 
                 if parse_result:
-                    # parse_result가 딕셔너리 형태로 반환됨 (text, html, elements 등 포함)
+                    text_length = len(parse_result.get("text", ""))
                     file_type = Path(att_url).suffix.lower()[1:] if Path(att_url).suffix else "unknown"
 
-                    content = {
-                        "url": att_url,
-                        "type": file_type,
-                        "text": parse_result.get("text", "")
-                    }
+                    if text_length > 0:
+                        # 성공: 텍스트 추출 완료
+                        content = {
+                            "url": att_url,
+                            "type": file_type,
+                            "text": parse_result.get("text", "")
+                        }
+                        successful.append(content)
+                        self._save_to_cache(att_url, content)
 
-                    results.append(content)
-
-                    # 캐시에 저장
-                    self._save_to_cache(att_url, content)
-
-                    if logger:
-                        text_length = len(parse_result.get("text", ""))
-                        if text_length > 0:
+                        if logger:
+                            url_display = att_url[:50] + "..." if len(att_url) > 50 else att_url
                             logger.log_multimodal_detail(
                                 "문서 파싱",
-                                att_url,
+                                url_display,
                                 success=True,
                                 detail=f"{file_type} - {text_length}자 추출"
                             )
-                        else:
+                    else:
+                        # 실패: API는 응답했지만 텍스트 없음
+                        failed.append({
+                            "url": att_url,
+                            "reason": "빈 문서 또는 텍스트 추출 실패"
+                        })
+                        if logger:
+                            url_display = att_url[:50] + "..." if len(att_url) > 50 else att_url
                             logger.log_multimodal_detail(
                                 "문서 파싱",
-                                att_url,
+                                url_display,
                                 success=False,
                                 detail=f"{file_type} - 텍스트 없음"
                             )
                 else:
+                    # 실패: API 호출 자체가 실패
+                    failed.append({
+                        "url": att_url,
+                        "reason": "API 호출 실패"
+                    })
                     if logger:
+                        url_display = att_url[:50] + "..." if len(att_url) > 50 else att_url
                         logger.log_multimodal_detail(
                             "문서 파싱",
-                            att_url,
+                            url_display,
                             success=False,
-                            detail="텍스트 추출 실패"
+                            detail="API 호출 실패"
                         )
 
             except Exception as e:
+                # 예외 발생: 실패로 분류
+                error_msg = str(e)
+
+                # 지원하지 않는 형식인지 확인
+                if "지원하지 않는" in error_msg or "unsupported" in error_msg.lower():
+                    unsupported.append({
+                        "url": att_url,
+                        "reason": error_msg
+                    })
+                else:
+                    failed.append({
+                        "url": att_url,
+                        "reason": error_msg
+                    })
+
                 if logger:
+                    url_display = att_url[:50] + "..." if len(att_url) > 50 else att_url
                     logger.log_multimodal_detail(
                         "문서 파싱",
-                        att_url,
+                        url_display,
                         success=False,
-                        detail=str(e)
+                        detail=error_msg[:100]
                     )
-                # 오류 발생해도 다음 파일 계속 처리
 
-        return results
+        return {
+            "successful": successful,
+            "failed": failed,
+            "unsupported": unsupported,
+            "total": len(attachment_urls)
+        }
 
     def _get_from_cache(self, url: str) -> Optional[Dict]:
         """캐시에서 처리 결과 조회"""
@@ -384,7 +468,7 @@ class MultimodalProcessor:
         attachment_urls: List[str],
         category: str = "notice",
         logger=None
-    ) -> MultimodalContent:
+    ) -> Tuple[MultimodalContent, Dict]:
         """
         멀티모달 콘텐츠 생성 (통합 인터페이스)
 
@@ -399,9 +483,17 @@ class MultimodalProcessor:
             logger: 커스텀 로거 (CrawlerLogger)
 
         Returns:
-            MultimodalContent 객체
+            (MultimodalContent, {"image_failures": [...], "attachment_failures": [...]})
         """
         content = MultimodalContent(title, url, date)
+
+        # 실패 정보 수집
+        failures = {
+            "image_failed": [],
+            "image_unsupported": [],
+            "attachment_failed": [],
+            "attachment_unsupported": []
+        }
 
         # 1. 텍스트 추가
         for chunk in text_chunks:
@@ -409,22 +501,30 @@ class MultimodalProcessor:
 
         # 2. 이미지 처리 및 추가
         if image_urls:
-            image_contents = self.process_images(image_urls, logger=logger, category=category)
-            for img_content in image_contents:
+            image_result = self.process_images(image_urls, logger=logger, category=category)
+            # 성공한 이미지만 추가
+            for img_content in image_result["successful"]:
                 content.add_image_content(
                     url=img_content["url"],
                     ocr_text=img_content.get("ocr_text", ""),
                     description=img_content.get("description", "")
                 )
+            # 실패 정보 저장
+            failures["image_failed"] = image_result["failed"]
+            failures["image_unsupported"] = image_result["unsupported"]
 
         # 3. 첨부파일 처리 및 추가
         if attachment_urls:
-            attachment_contents = self.process_attachments(attachment_urls, logger=logger, category=category)
-            for att_content in attachment_contents:
+            attachment_result = self.process_attachments(attachment_urls, logger=logger, category=category)
+            # 성공한 첨부파일만 추가
+            for att_content in attachment_result["successful"]:
                 content.add_attachment_content(
                     url=att_content["url"],
                     file_type=att_content["type"],
                     text=att_content["text"]
                 )
+            # 실패 정보 저장
+            failures["attachment_failed"] = attachment_result["failed"]
+            failures["attachment_unsupported"] = attachment_result["unsupported"]
 
-        return content
+        return content, failures

@@ -257,7 +257,7 @@ class DocumentProcessor:
                     text_chunks = []  # 텍스트 없으면 빈 리스트
 
                 # 멀티모달 콘텐츠 생성 (이미지 OCR, 첨부파일 파싱 포함)
-                multimodal_content = self.multimodal_processor.create_multimodal_content(
+                multimodal_content, failures = self.multimodal_processor.create_multimodal_content(
                     title=title,
                     url=url,
                     date=date,
@@ -267,6 +267,36 @@ class DocumentProcessor:
                     category=category,
                     logger=logger
                 )
+
+                # 멀티모달 처리 실패 검증
+                has_critical_failure = False
+                failure_reasons = []
+
+                # 이미지가 있었는데 추출 실패한 경우
+                if image_list and failures["image_failed"]:
+                    has_critical_failure = True
+                    failure_reasons.append(f"이미지 OCR 실패 {len(failures['image_failed'])}개")
+
+                # 첨부파일이 있었는데 추출 실패한 경우
+                if attachment_list and failures["attachment_failed"]:
+                    has_critical_failure = True
+                    failure_reasons.append(f"첨부파일 파싱 실패 {len(failures['attachment_failed'])}개")
+
+                # 지원하지 않는 형식은 건너뛰기(skipped)로 처리
+                if failures["image_unsupported"]:
+                    logger.log_post_skipped(
+                        category, title,
+                        reason=f"이미지 {len(failures['image_unsupported'])}개 지원하지 않는 형식"
+                    )
+                if failures["attachment_unsupported"]:
+                    logger.log_post_skipped(
+                        category, title,
+                        reason=f"첨부파일 {len(failures['attachment_unsupported'])}개 지원하지 않는 형식"
+                    )
+
+                # 실패가 있으면 게시글 전체를 실패로 처리
+                if has_critical_failure:
+                    raise Exception(" / ".join(failure_reasons))
 
                 # 임베딩 아이템으로 변환
                 items = multimodal_content.to_embedding_items()
