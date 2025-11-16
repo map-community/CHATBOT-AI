@@ -190,6 +190,8 @@ class MultimodalProcessor:
                 # 캐시 확인
                 cached = self._get_from_cache(img_url)
                 if cached:
+                    # 캐시에서 가져온 데이터에 url 키 추가 (캐시 메서드에서 제거되므로)
+                    cached["url"] = img_url
                     results.append(cached)
                     if logger:
                         logger.log_multimodal_detail(
@@ -279,6 +281,8 @@ class MultimodalProcessor:
                 # 캐시 확인
                 cached = self._get_from_cache(att_url)
                 if cached:
+                    # 캐시에서 가져온 데이터에 url 키 추가 (캐시 메서드에서 제거되므로)
+                    cached["url"] = att_url
                     results.append(cached)
                     if logger:
                         logger.log_multimodal_detail(
