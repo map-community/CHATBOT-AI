@@ -72,8 +72,45 @@ class UpstageClient:
 
             # URL에서 파일 다운로드 후 업로드
             try:
-                # URL에서 파일 다운로드 (리다이렉트 따라가기!)
-                file_response = requests.get(url, timeout=30, allow_redirects=True)
+                # download.php의 경우 세션 유지가 필요 (봇 차단 우회)
+                if 'download.php' in url:
+                    from urllib.parse import urlparse, parse_qs
+
+                    # URL 파싱
+                    parsed = urlparse(url)
+                    params = parse_qs(parsed.query)
+
+                    # 세션 생성
+                    session = requests.Session()
+                    session.headers.update({
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                    })
+
+                    # 베이스 URL
+                    base_url = f"{parsed.scheme}://{parsed.netloc}"
+
+                    # 1단계: 게시판 방문 (bo_table만)
+                    if 'bo_table' in params:
+                        bo_table = params['bo_table'][0]
+                        board_url = f"{base_url}/bbs/board.php?bo_table={bo_table}"
+                        logger.info(f"🔗 1단계: 게시판 방문 - {board_url}")
+                        session.get(board_url, timeout=30)
+
+                    # 2단계: 글 방문 (bo_table + wr_id)
+                    if 'bo_table' in params and 'wr_id' in params:
+                        bo_table = params['bo_table'][0]
+                        wr_id = params['wr_id'][0]
+                        post_url = f"{base_url}/bbs/board.php?bo_table={bo_table}&wr_id={wr_id}"
+                        logger.info(f"🔗 2단계: 글 방문 - {post_url}")
+                        session.get(post_url, timeout=30)
+
+                    # 3단계: 다운로드 (세션 유지 상태)
+                    logger.info(f"🔗 3단계: 파일 다운로드 - {url}")
+                    file_response = session.get(url, timeout=30, allow_redirects=True)
+                else:
+                    # 일반 URL은 직접 다운로드
+                    file_response = requests.get(url, timeout=30, allow_redirects=True)
+
                 if file_response.status_code != 200:
                     logger.error(f"파일 다운로드 실패: {url}")
                     return None

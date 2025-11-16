@@ -203,10 +203,11 @@ class MultimodalProcessor:
                 # Upstage OCR API 호출
                 ocr_result = self.upstage_client.extract_text_from_image_url(img_url)
 
-                if ocr_result and ocr_result["text"]:
+                if ocr_result:
+                    # ocr_result가 딕셔너리 형태로 반환됨 (text, html, elements 등 포함)
                     content = {
                         "url": img_url,
-                        "ocr_text": ocr_result["text"],
+                        "ocr_text": ocr_result.get("text", ""),
                         "description": ""  # 향후 Vision API 추가 가능
                     }
 
@@ -216,19 +217,28 @@ class MultimodalProcessor:
                     self._save_to_cache(img_url, content)
 
                     if logger:
-                        logger.log_multimodal_detail(
-                            "이미지 OCR",
-                            img_url,
-                            success=True,
-                            detail=f"{len(ocr_result['text'])}자 추출"
-                        )
+                        text_length = len(ocr_result.get("text", ""))
+                        if text_length > 0:
+                            logger.log_multimodal_detail(
+                                "이미지 OCR",
+                                img_url,
+                                success=True,
+                                detail=f"{text_length}자 추출"
+                            )
+                        else:
+                            logger.log_multimodal_detail(
+                                "이미지 OCR",
+                                img_url,
+                                success=False,
+                                detail="텍스트 없음 (빈 이미지 또는 인식 실패)"
+                            )
                 else:
                     if logger:
                         logger.log_multimodal_detail(
                             "이미지 OCR",
                             img_url,
                             success=False,
-                            detail="텍스트 추출 실패"
+                            detail="API 호출 실패"
                         )
 
             except Exception as e:
@@ -282,13 +292,14 @@ class MultimodalProcessor:
                 # Upstage Document Parse API 호출
                 parse_result = self.upstage_client.parse_document_from_url(att_url)
 
-                if parse_result and parse_result["text"]:
+                if parse_result:
+                    # parse_result가 딕셔너리 형태로 반환됨 (text, html, elements 등 포함)
                     file_type = Path(att_url).suffix.lower()[1:] if Path(att_url).suffix else "unknown"
 
                     content = {
                         "url": att_url,
                         "type": file_type,
-                        "text": parse_result["text"]
+                        "text": parse_result.get("text", "")
                     }
 
                     results.append(content)
@@ -297,12 +308,21 @@ class MultimodalProcessor:
                     self._save_to_cache(att_url, content)
 
                     if logger:
-                        logger.log_multimodal_detail(
-                            "문서 파싱",
-                            att_url,
-                            success=True,
-                            detail=f"{file_type} - {len(parse_result['text'])}자 추출"
-                        )
+                        text_length = len(parse_result.get("text", ""))
+                        if text_length > 0:
+                            logger.log_multimodal_detail(
+                                "문서 파싱",
+                                att_url,
+                                success=True,
+                                detail=f"{file_type} - {text_length}자 추출"
+                            )
+                        else:
+                            logger.log_multimodal_detail(
+                                "문서 파싱",
+                                att_url,
+                                success=False,
+                                detail=f"{file_type} - 텍스트 없음"
+                            )
                 else:
                     if logger:
                         logger.log_multimodal_detail(
