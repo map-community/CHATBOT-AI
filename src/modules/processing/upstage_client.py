@@ -72,8 +72,8 @@ class UpstageClient:
 
             # URL에서 파일 다운로드 후 업로드
             try:
-                # URL에서 파일 다운로드
-                file_response = requests.get(url, timeout=30)
+                # URL에서 파일 다운로드 (리다이렉트 따라가기!)
+                file_response = requests.get(url, timeout=30, allow_redirects=True)
                 if file_response.status_code != 200:
                     logger.error(f"파일 다운로드 실패: {url}")
                     return None
@@ -82,13 +82,51 @@ class UpstageClient:
                 content_type = file_response.headers.get('Content-Type', '').lower()
                 content_disposition = file_response.headers.get('Content-Disposition', '')
 
-                # 실제 파일명 추출 (Content-Disposition 헤더에서)
-                filename = Path(url).name  # 기본값
+                logger.info(f"📊 응답 정보: Content-Type={content_type}, Content-Disposition={content_disposition}")
+
+                # 실제 파일명 추출 (우선순위: Content-Disposition > URL 경로)
+                filename = None
+
+                # 1. Content-Disposition 헤더에서 파일명 추출 (가장 신뢰성 높음)
                 if 'filename=' in content_disposition:
                     import re
-                    match = re.search(r'filename[^;=\n]*=(([\'"]).*?\2|[^;\n]*)', content_disposition)
+                    # RFC 5987: filename*=UTF-8''encoded_filename 또는 filename="regular_filename"
+                    match = re.search(r"filename\*=(?:UTF-8'')?([^;]+)|filename=([^;]+)", content_disposition)
                     if match:
-                        filename = match.group(1).strip('"\'')
+                        encoded_filename = match.group(1)
+                        regular_filename = match.group(2)
+
+                        if encoded_filename:
+                            # URL 디코딩
+                            from urllib.parse import unquote
+                            filename = unquote(encoded_filename).strip('"\'')
+                        elif regular_filename:
+                            filename = regular_filename.strip('"\'')
+
+                # 2. URL 경로에서 추출 (쿼리 파라미터 제거!)
+                if not filename:
+                    filename = Path(url).name
+                    # 쿼리 파라미터 제거 (download.php?... → download.php)
+                    if '?' in filename:
+                        filename = filename.split('?')[0]
+
+                # 3. Content-Type에서 확장자 유추 (최후의 수단)
+                if not filename or filename == 'download.php' or not Path(filename).suffix:
+                    type_to_ext = {
+                        'application/pdf': '.pdf',
+                        'application/msword': '.doc',
+                        'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+                        'application/x-hwp': '.hwp',
+                        'application/haansofthwp': '.hwp',
+                        'application/vnd.ms-powerpoint': '.ppt',
+                        'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx'
+                    }
+                    for mime_type, ext in type_to_ext.items():
+                        if mime_type in content_type:
+                            filename = f"document{ext}"
+                            break
+
+                logger.info(f"📄 최종 파일명: {filename}")
 
                 # Content-Type으로 문서 타입 확인
                 supported_types = [
@@ -200,9 +238,9 @@ class UpstageClient:
         try:
             logger.info(f"🖼️  OCR 시작: {url}")
 
-            # URL에서 이미지 다운로드
+            # URL에서 이미지 다운로드 (리다이렉트 따라가기!)
             try:
-                file_response = requests.get(url, timeout=30)
+                file_response = requests.get(url, timeout=30, allow_redirects=True)
                 if file_response.status_code != 200:
                     logger.error(f"이미지 다운로드 실패: {url}")
                     return None
@@ -211,13 +249,28 @@ class UpstageClient:
                 content_type = file_response.headers.get('Content-Type', '').lower()
                 content_disposition = file_response.headers.get('Content-Disposition', '')
 
-                # 실제 파일명 추출
-                filename = Path(url).name
+                # 실제 파일명 추출 (우선순위: Content-Disposition > URL 경로)
+                filename = None
+
+                # 1. Content-Disposition 헤더
                 if 'filename=' in content_disposition:
                     import re
-                    match = re.search(r'filename[^;=\n]*=(([\'"]).*?\2|[^;\n]*)', content_disposition)
+                    match = re.search(r"filename\*=(?:UTF-8'')?([^;]+)|filename=([^;]+)", content_disposition)
                     if match:
-                        filename = match.group(1).strip('"\'')
+                        encoded_filename = match.group(1)
+                        regular_filename = match.group(2)
+
+                        if encoded_filename:
+                            from urllib.parse import unquote
+                            filename = unquote(encoded_filename).strip('"\'')
+                        elif regular_filename:
+                            filename = regular_filename.strip('"\'')
+
+                # 2. URL 경로 (쿼리 파라미터 제거)
+                if not filename:
+                    filename = Path(url).name
+                    if '?' in filename:
+                        filename = filename.split('?')[0]
 
                 # 이미지 타입 확인
                 supported_image_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/bmp', 'image/webp']
