@@ -319,13 +319,13 @@ def debug_url(url: str, category: str = "notice"):
         tracker.start_step("HTML 파싱", "BeautifulSoup으로 HTML 파싱 및 데이터 추출")
         tracker.log_input(html_content[:500], "HTML 내용 (일부)")
         tracker.log_function_call(
-            module="crawling.base_crawler",
-            function="crawl_page",
+            module=f"crawling.{category}_crawler",
+            function="extract_from_url",
             args={"url": url}
         )
 
-        # 크롤러의 crawl_page 메서드 호출
-        crawled_data = crawler.crawl_page(url)
+        # 크롤러의 extract_from_url 메서드 호출
+        crawled_data = crawler.extract_from_url(url)
 
         if crawled_data:
             title, text, image_list, attachment_list, date, crawled_url = crawled_data
