@@ -165,6 +165,71 @@ class UpstageClient:
 
                 logger.info(f"📄 최종 파일명: {filename}")
 
+                # 파일 확장자 확인
+                file_ext = Path(filename).suffix.lower()
+
+                # 이미지 파일인지 확인
+                supported_image_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/bmp', 'image/webp']
+                is_image = (
+                    any(t in content_type for t in supported_image_types) or
+                    file_ext in self.SUPPORTED_IMAGE_TYPES
+                )
+
+                # 이미지 파일이면 OCR로 자동 전환
+                if is_image:
+                    logger.info(f"📊 이미지 파일 감지 ({file_ext}) - OCR로 전환")
+
+                    # OCR API 호출 (이미 다운로드한 파일 사용)
+                    files = {
+                        "document": (filename, file_response.content)
+                    }
+                    data_param = {
+                        "model": "document-parse",
+                        "ocr": "auto"
+                    }
+
+                    for attempt in range(self.max_retries):
+                        try:
+                            response = requests.post(
+                                self.API_URL,
+                                headers=self.headers,
+                                files=files,
+                                data=data_param,
+                                timeout=30
+                            )
+
+                            if response.status_code == 200:
+                                result = response.json()
+                                logger.info(f"📊 OCR API 응답 키: {list(result.keys())}")
+
+                                extracted_text = self._extract_text_from_response(result)
+
+                                if extracted_text:
+                                    logger.info(f"✅ OCR 성공 (이미지 첨부파일): {len(extracted_text)}자 추출")
+                                    return {
+                                        "text": extracted_text,
+                                        "html": result.get("content", {}).get("html", ""),
+                                        "full_html": result.get("content", {}).get("html", ""),
+                                        "elements": result.get("elements", []),
+                                        "source_url": url
+                                    }
+                                else:
+                                    logger.warning("⚠️  OCR 결과가 비어있음 (이미지 첨부파일)")
+                                    return None
+                            else:
+                                logger.warning(f"OCR API 오류: {response.status_code} - {response.text[:200]}")
+
+                        except Exception as e:
+                            if attempt < self.max_retries - 1:
+                                wait_time = 2 ** attempt
+                                logger.warning(f"재시도 {attempt + 1}/{self.max_retries} (대기: {wait_time}초)")
+                                time.sleep(wait_time)
+                            else:
+                                logger.error(f"OCR 실패 (이미지 첨부파일): {e}")
+                                raise
+
+                    return None
+
                 # Content-Type으로 문서 타입 확인
                 supported_types = [
                     'application/pdf',
@@ -178,8 +243,7 @@ class UpstageClient:
                     'application/haansofthwp',  # HWP
                 ]
 
-                # 파일 확장자로도 체크
-                file_ext = Path(filename).suffix.lower()
+                # 문서 타입 확인
                 is_supported = (
                     any(t in content_type for t in supported_types) or
                     file_ext in self.SUPPORTED_DOCUMENT_TYPES
