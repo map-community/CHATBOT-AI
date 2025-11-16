@@ -488,7 +488,9 @@ def debug_url(url: str, category: str = "notice"):
 
             ocr_results = []
             for idx, img_url in enumerate(image_list):
-                tracker.logger.info(f"\n  🖼️  이미지 {idx+1}/{len(image_list)}: {img_url}")
+                # URL 길이 제한 (50자)
+                url_display = img_url[:50] + "..." if len(img_url) > 50 else img_url
+                tracker.logger.info(f"\n  🖼️  이미지 {idx+1}/{len(image_list)}: {url_display}")
 
                 try:
                     # Upstage OCR API 호출
@@ -546,7 +548,9 @@ def debug_url(url: str, category: str = "notice"):
 
             parse_results = []
             for idx, att_url in enumerate(attachment_list):
-                tracker.logger.info(f"\n  📄 첨부파일 {idx+1}/{len(attachment_list)}: {att_url}")
+                # URL 길이 제한 (50자)
+                url_display = att_url[:50] + "..." if len(att_url) > 50 else att_url
+                tracker.logger.info(f"\n  📄 첨부파일 {idx+1}/{len(attachment_list)}: {url_display}")
 
                 try:
                     # Upstage Document Parse API 호출
@@ -625,6 +629,36 @@ def debug_url(url: str, category: str = "notice"):
             }
         }
         tracker.log_output(content_summary, "멀티모달 콘텐츠")
+
+        # 실패 검증 (document_processor.py와 동일한 로직)
+        has_critical_failure = False
+        failure_reasons = []
+
+        # 이미지가 있었는데 추출 실패한 경우
+        if image_list and failures["image_failed"]:
+            has_critical_failure = True
+            failure_reasons.append(f"이미지 OCR 실패 {len(failures['image_failed'])}개")
+            tracker.logger.error(f"\n⚠️  경고: 이미지 {len(failures['image_failed'])}개 OCR 실패")
+
+        # 첨부파일이 있었는데 추출 실패한 경우
+        if attachment_list and failures["attachment_failed"]:
+            has_critical_failure = True
+            failure_reasons.append(f"첨부파일 파싱 실패 {len(failures['attachment_failed'])}개")
+            tracker.logger.error(f"\n⚠️  경고: 첨부파일 {len(failures['attachment_failed'])}개 파싱 실패")
+
+        # 지원하지 않는 형식은 경고만
+        if failures["image_unsupported"]:
+            tracker.logger.warning(f"\nℹ️  이미지 {len(failures['image_unsupported'])}개 지원하지 않는 형식")
+        if failures["attachment_unsupported"]:
+            tracker.logger.warning(f"\nℹ️  첨부파일 {len(failures['attachment_unsupported'])}개 지원하지 않는 형식")
+
+        # 실패가 있으면 예외 발생
+        if has_critical_failure:
+            error_message = " / ".join(failure_reasons)
+            tracker.logger.error(f"\n❌ 게시글 처리 실패: {error_message}")
+            tracker.end_step()
+            raise Exception(error_message)
+
         tracker.end_step()
 
         # ========== STEP 9: 임베딩 아이템 생성 ==========
