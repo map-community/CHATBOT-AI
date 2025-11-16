@@ -2,10 +2,16 @@
 크롤링 상태 관리
 각 게시판별 마지막 처리 ID를 추적하여 증분 크롤링 지원
 """
+import sys
+from pathlib import Path
+
+# modules 디렉토리를 path에 추가
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from datetime import datetime
 from typing import Optional, Dict
 from pymongo import MongoClient
-from ..config import CrawlerConfig
+from config import CrawlerConfig
 
 
 class CrawlStateManager:

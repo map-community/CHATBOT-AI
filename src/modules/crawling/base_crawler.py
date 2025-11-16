@@ -9,7 +9,10 @@ from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
 import re
 import time
-from ..config import CrawlerConfig
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from config import CrawlerConfig
 
 
 class BaseCrawler(ABC):
@@ -79,7 +82,7 @@ class BaseCrawler(ABC):
         return None
 
     @abstractmethod
-    def extract_from_url(self, url: str) -> Optional[Tuple[str, str, any, str, str]]:
+    def extract_from_url(self, url: str) -> Optional[Tuple[str, str, any, any, str, str]]:
         """
         URL에서 데이터 추출 (각 크롤러에서 구현)
 
@@ -87,11 +90,11 @@ class BaseCrawler(ABC):
             url: 크롤링할 URL
 
         Returns:
-            (title, text, image, date, url) 튜플 (실패 시 None)
+            (title, text, image_list, attachment_list, date, url) 튜플 (실패 시 None)
         """
         pass
 
-    def crawl_urls(self, urls: List[str]) -> List[Tuple[str, str, any, str, str]]:
+    def crawl_urls(self, urls: List[str]) -> List[Tuple[str, str, any, any, str, str]]:
         """
         여러 URL을 병렬로 크롤링
 
@@ -99,7 +102,7 @@ class BaseCrawler(ABC):
             urls: 크롤링할 URL 리스트
 
         Returns:
-            [(title, text, image, date, url), ...] 리스트
+            [(title, text, image_list, attachment_list, date, url), ...] 리스트
         """
         all_data = []
 
@@ -120,9 +123,9 @@ class BaseCrawler(ABC):
         # 유효한 데이터만 추가
         for result in results:
             if result is not None:
-                title, text, image, date, url = result
+                title, text, image_list, attachment_list, date, url = result
                 if title is not None and title != "Unknown Title":
-                    all_data.append((title, text, image, date, url))
+                    all_data.append((title, text, image_list, attachment_list, date, url))
 
         print(f"\n{'='*80}")
         print(f"✅ {self.board_type.upper()} 크롤링 완료! {len(all_data)}개 수집됨")

@@ -2,11 +2,14 @@
 임베딩 생성 및 벡터 DB 관리
 새 문서만 임베딩 생성하여 API 비용 절감
 """
-from typing import List
+from typing import List, Tuple, Dict
 import numpy as np
 from langchain_upstage import UpstageEmbeddings
 from pinecone import Pinecone
-from ..config import CrawlerConfig
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from config import CrawlerConfig
 
 
 class EmbeddingManager:
@@ -177,5 +180,68 @@ class EmbeddingManager:
         uploaded_count = self.upload_to_pinecone(
             embeddings, texts, titles, doc_urls, doc_dates
         )
+
+        return uploaded_count
+
+    def process_and_upload_items(
+        self,
+        embedding_items: List[Tuple[str, Dict]]
+    ) -> int:
+        """
+        임베딩 아이템 리스트 처리 및 Pinecone 업로드 (멀티모달 지원)
+
+        Args:
+            embedding_items: [(text, metadata), ...] 형식의 리스트
+                metadata에는 title, url, date, content_type 등이 포함
+
+        Returns:
+            업로드된 벡터 개수
+        """
+        if not embedding_items:
+            print("⚠️  처리할 아이템이 없습니다.")
+            return 0
+
+        # 텍스트와 메타데이터 분리
+        texts = [item[0] for item in embedding_items]
+        metadatas = [item[1] for item in embedding_items]
+
+        print(f"\n{'='*80}")
+        print(f"📊 임베딩 생성 시작: {len(texts)}개 문서")
+        print(f"{'='*80}\n")
+
+        # 1. 임베딩 생성
+        print("🔄 Upstage API로 임베딩 생성 중... (시간이 걸릴 수 있습니다)")
+        embeddings = np.array(self.embeddings.embed_documents(texts))
+        print(f"✅ 임베딩 생성 완료! {len(embeddings)}개 벡터 생성됨\n")
+
+        # 2. Pinecone 업로드
+        start_id = self.get_next_vector_id()
+
+        print(f"\n{'='*80}")
+        print(f"📤 Pinecone 업로드 시작: {len(embeddings)}개 벡터")
+        print(f"📍 시작 ID: {start_id}")
+        print(f"{'='*80}\n")
+
+        uploaded_count = 0
+
+        for i, embedding in enumerate(embeddings):
+            vector_id = start_id + i
+
+            # 메타데이터에 텍스트 추가
+            metadata = metadatas[i].copy()
+            metadata["text"] = texts[i]
+
+            # Pinecone에 업로드
+            self.index.upsert([(str(vector_id), embedding.tolist(), metadata)])
+            uploaded_count += 1
+
+            # 진행 상황 출력
+            if (i + 1) % CrawlerConfig.EMBEDDING_BATCH_SIZE == 0:
+                progress = (i + 1) / len(embeddings) * 100
+                print(f"⏳ 진행: {i + 1}/{len(embeddings)} ({progress:.1f}%)")
+
+        print(f"\n{'='*80}")
+        print(f"✅ Pinecone 업로드 완료! 총 {uploaded_count}개 벡터 업로드됨")
+        print(f"{'='*80}\n")
 
         return uploaded_count

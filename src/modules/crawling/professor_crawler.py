@@ -4,7 +4,11 @@
 from typing import List, Tuple, Optional
 from bs4 import BeautifulSoup
 from .base_crawler import BaseCrawler
-from ..config import CrawlerConfig
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from config import CrawlerConfig
+from utils import korean_to_iso8601
 
 
 class ProfessorCrawler(BaseCrawler):
@@ -16,18 +20,18 @@ class ProfessorCrawler(BaseCrawler):
             base_url=CrawlerConfig.BASE_URLS['professor']
         )
 
-    def extract_from_url(self, url: str) -> Optional[Tuple[str, str, any, str, str]]:
+    def extract_from_url(self, url: str) -> Optional[Tuple[str, str, any, any, str, str]]:
         """
         단일 URL이 아닌 페이지 전체 교수 목록을 크롤링하므로 사용 안 함
         """
         return None
 
-    def crawl_all(self) -> List[Tuple[str, str, any, str, str]]:
+    def crawl_all(self) -> List[Tuple[str, str, any, any, str, str]]:
         """
         교수 정보 전체 크롤링 (페이지 기반)
 
         Returns:
-            [(title, text, image, date, url), ...] 리스트
+            [(title, text, image_list, attachment_list, date, url), ...] 리스트
         """
         all_data = []
 
@@ -79,14 +83,15 @@ class ProfessorCrawler(BaseCrawler):
 
                 text_content = f"{title}, {contact_number}, {email}"
 
-                # 날짜와 URL 설정
-                date = "작성일24-01-01 00:00"
+                # 날짜와 URL 설정 (교수 정보는 기준일로 통일)
+                date = korean_to_iso8601("작성일24-01-01 00:00")
 
                 prof_url_element = professor.find("a")
                 prof_url = prof_url_element["href"] if prof_url_element else "Unknown URL"
 
-                # 데이터 추가
-                all_data.append((title, text_content, image_content, date, prof_url))
+                # 데이터 추가 (이미지를 리스트로, 첨부파일은 빈 리스트)
+                image_list = [image_content] if image_content != "Unknown Image URL" else []
+                all_data.append((title, text_content, image_list, [], date, prof_url))
 
         except Exception as e:
             print(f"❌ 교수 정보 크롤링 오류: {e}")
@@ -107,11 +112,11 @@ class GuestProfessorCrawler(BaseCrawler):
             base_url=CrawlerConfig.BASE_URLS['guest_professor']
         )
 
-    def extract_from_url(self, url: str) -> Optional[Tuple[str, str, any, str, str]]:
+    def extract_from_url(self, url: str) -> Optional[Tuple[str, str, any, any, str, str]]:
         """사용 안 함"""
         return None
 
-    def crawl_all(self) -> List[Tuple[str, str, any, str, str]]:
+    def crawl_all(self) -> List[Tuple[str, str, any, any, str, str]]:
         """초빙교수 정보 전체 크롤링"""
         all_data = []
 
@@ -169,12 +174,13 @@ class GuestProfessorCrawler(BaseCrawler):
                 # 텍스트 내용 조합
                 text_content = f"성함(이름):{title}, 연구실(장소):{contact_place}, 이메일:{email}"
 
-                # 날짜와 URL 설정
-                date = "작성일24-01-01 00:00"
+                # 날짜와 URL 설정 (교수 정보는 기준일로 통일)
+                date = korean_to_iso8601("작성일24-01-01 00:00")
                 prof_url = self.base_url
 
-                # 데이터 추가
-                all_data.append((title, text_content, image_content, date, prof_url))
+                # 데이터 추가 (이미지를 리스트로, 첨부파일은 빈 리스트)
+                image_list = [image_content] if image_content != "Unknown Image URL" else []
+                all_data.append((title, text_content, image_list, [], date, prof_url))
 
         except Exception as e:
             print(f"❌ 초빙교수 정보 크롤링 오류: {e}")
@@ -195,11 +201,11 @@ class StaffCrawler(BaseCrawler):
             base_url=CrawlerConfig.BASE_URLS['staff']
         )
 
-    def extract_from_url(self, url: str) -> Optional[Tuple[str, str, any, str, str]]:
+    def extract_from_url(self, url: str) -> Optional[Tuple[str, str, any, any, str, str]]:
         """사용 안 함"""
         return None
 
-    def crawl_all(self) -> List[Tuple[str, str, any, str, str]]:
+    def crawl_all(self) -> List[Tuple[str, str, any, any, str, str]]:
         """직원 정보 전체 크롤링"""
         all_data = []
 
@@ -260,12 +266,13 @@ class StaffCrawler(BaseCrawler):
                 # 텍스트 내용 조합
                 text_content = f"성함(이름):{title}, 연락처(전화번호):{contact_number}, 사무실(장소):{contact_place}, 이메일:{email}, 담당업무:{role}"
 
-                # 날짜와 URL 설정
-                date = "작성일24-01-01 00:00"
+                # 날짜와 URL 설정 (교수 정보는 기준일로 통일)
+                date = korean_to_iso8601("작성일24-01-01 00:00")
                 staff_url = self.base_url
 
-                # 데이터 추가
-                all_data.append((title, text_content, image_content, date, staff_url))
+                # 데이터 추가 (이미지를 리스트로, 첨부파일은 빈 리스트)
+                image_list = [image_content] if image_content != "Unknown Image URL" else []
+                all_data.append((title, text_content, image_list, [], date, staff_url))
 
         except Exception as e:
             print(f"❌ 직원 정보 크롤링 오류: {e}")

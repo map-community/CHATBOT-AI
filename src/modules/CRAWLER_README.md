@@ -40,7 +40,7 @@ src/modules/
 │   └── professor_crawler.py      # 교수/직원 크롤러
 │
 ├── data_crawler.py               # 기존 크롤러 (백업)
-└── data_crawler_refactored.py    # 리팩토링된 크롤러 (메인)
+└── run_crawler.py    # 리팩토링된 크롤러 (메인)
 ```
 
 ---
@@ -51,7 +51,7 @@ src/modules/
 
 ```bash
 cd /home/user/CHATBOT-AI/src/modules
-python data_crawler_refactored.py
+python run_crawler.py
 ```
 
 ### 2. 첫 실행 vs 이후 실행
@@ -263,7 +263,7 @@ cp data_crawler.py data_crawler_backup.py
 
 #### 2단계: 새 크롤러 테스트
 ```bash
-python data_crawler_refactored.py
+python run_crawler.py
 ```
 
 #### 3단계: 확인
@@ -273,7 +273,7 @@ python data_crawler_refactored.py
 #### 4단계: 전환 (선택사항)
 ```bash
 mv data_crawler.py data_crawler_old.py
-mv data_crawler_refactored.py data_crawler.py
+mv run_crawler.py data_crawler.py
 ```
 
 ---
@@ -294,7 +294,7 @@ mv data_crawler_refactored.py data_crawler.py
 1. **스케줄링**: cron으로 주기적 실행
    ```bash
    # 매일 새벽 3시 실행
-   0 3 * * * cd /home/user/CHATBOT-AI/src/modules && python data_crawler_refactored.py
+   0 3 * * * cd /home/user/CHATBOT-AI/src/modules && python run_crawler.py
    ```
 
 2. **로깅**: 파일 로깅 추가

@@ -5,7 +5,13 @@ Keyword Filter
 
 import re
 import logging
+import sys
+from pathlib import Path
 from typing import List, Tuple
+
+# utils 모듈 경로 추가
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from utils import korean_to_iso8601
 
 logger = logging.getLogger(__name__)
 
@@ -409,10 +415,12 @@ class KeywordFilter:
                     else:
                         score += 0.5
 
-        # 교수 관련
+        # 교수 관련 (기준 날짜로 교수 정보 판별)
+        # ISO 8601 형식: "2024-01-01T00:00:00+09:00"
+        professor_baseline_date = korean_to_iso8601("작성일24-01-01 00:00")
         if (any(keyword in query_nouns for keyword in ['담당', '업무', '일', '근무']) or
             any(keyword in query_nouns for keyword in ['직원', '교수', '선생', '선생님'])) and \
-           date == "작성일24-01-01 00:00":
+           date == professor_baseline_date:
             if any(keys in query_nouns for keys in ['교수']):
                 check = 0
                 compare_url = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub2_5&lang=kor"
