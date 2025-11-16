@@ -113,6 +113,11 @@ class JobCrawler(BaseCrawler):
                             href = f"https://cse.knu.ac.kr/{href}"
                         attachment_content.append(href)
 
+            # 중복 제거: 본문 이미지와 첨부파일에서 중복되는 URL 제거
+            # (같은 이미지가 본문과 첨부파일에 모두 있는 경우)
+            image_urls_set = set(image_content)
+            attachment_content = [url for url in attachment_content if url not in image_urls_set]
+
             # 날짜 추출
             date_element = soup.select_one("strong.if_date")
             date_raw = date_element.get_text(strip=True) if date_element else ""
