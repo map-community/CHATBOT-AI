@@ -243,7 +243,8 @@ class UpstageClient:
                     "document": (filename, file_response.content)
                 }
                 data = {
-                    "model": "document-parse"  # 필수! 이미지도 document-parse 사용
+                    "model": "document-parse",  # 필수! 이미지도 document-parse 사용
+                    "ocr": "auto"
                 }
 
                 for attempt in range(self.max_retries):
