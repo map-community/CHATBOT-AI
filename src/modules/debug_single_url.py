@@ -194,8 +194,10 @@ class DebugTracker:
         if isinstance(input_data, str):
             self.logger.info(f"  타입: str")
             self.logger.info(f"  길이: {len(input_data)} 문자")
-            if len(input_data) <= 200:
-                self.logger.info(f"  내용: {input_data}")
+            # Data URI는 짧게 표시
+            display_str = self._truncate_data_uri(input_data, max_length=200)
+            if len(input_data) <= 200 or input_data.startswith('data:'):
+                self.logger.info(f"  내용: {display_str}")
             else:
                 self.logger.info(f"  내용 (처음 200자): {input_data[:200]}...")
         elif isinstance(input_data, (list, tuple)):
@@ -203,7 +205,12 @@ class DebugTracker:
             self.logger.info(f"  개수: {len(input_data)}개")
             if input_data and len(input_data) <= 5:
                 for i, item in enumerate(input_data):
-                    self.logger.info(f"  [{i}]: {str(item)[:100]}")
+                    # 리스트 항목도 Data URI 체크
+                    if isinstance(item, str):
+                        display_item = self._truncate_data_uri(item, max_length=100)
+                    else:
+                        display_item = str(item)[:100]
+                    self.logger.info(f"  [{i}]: {display_item}")
         elif isinstance(input_data, dict):
             self.logger.info(f"  타입: dict")
             self.logger.info(f"  키: {list(input_data.keys())}")
@@ -220,8 +227,10 @@ class DebugTracker:
         if isinstance(output_data, str):
             self.logger.info(f"  타입: str")
             self.logger.info(f"  길이: {len(output_data)} 문자")
-            if len(output_data) <= 200:
-                self.logger.info(f"  내용: {output_data}")
+            # Data URI는 짧게 표시
+            display_str = self._truncate_data_uri(output_data, max_length=200)
+            if len(output_data) <= 200 or output_data.startswith('data:'):
+                self.logger.info(f"  내용: {display_str}")
             else:
                 self.logger.info(f"  내용 (처음 200자): {output_data[:200]}...")
         elif isinstance(output_data, (list, tuple)):
@@ -229,13 +238,20 @@ class DebugTracker:
             self.logger.info(f"  개수: {len(output_data)}개")
             if output_data and len(output_data) <= 5:
                 for i, item in enumerate(output_data):
-                    self.logger.info(f"  [{i}]: {str(item)[:100]}")
+                    # 리스트 항목도 Data URI 체크
+                    if isinstance(item, str):
+                        display_item = self._truncate_data_uri(item, max_length=100)
+                    else:
+                        display_item = str(item)[:100]
+                    self.logger.info(f"  [{i}]: {display_item}")
         elif isinstance(output_data, dict):
             self.logger.info(f"  타입: dict")
             self.logger.info(f"  키: {list(output_data.keys())}")
             for key, value in output_data.items():
                 if isinstance(value, str):
-                    self.logger.info(f"  {key}: {value[:100] if len(value) > 100 else value}")
+                    # Data URI는 짧게 표시
+                    display_value = self._truncate_data_uri(value, max_length=100)
+                    self.logger.info(f"  {key}: {display_value}")
                 elif isinstance(value, (list, tuple)):
                     self.logger.info(f"  {key}: [{len(value)}개 항목]")
                 else:
@@ -254,8 +270,10 @@ class DebugTracker:
         if args:
             self.logger.info(f"  인자:")
             for key, value in args.items():
-                if isinstance(value, str) and len(value) > 100:
-                    self.logger.info(f"    {key}: {value[:100]}...")
+                if isinstance(value, str):
+                    # Data URI는 짧게 표시
+                    display_value = self._truncate_data_uri(value, max_length=100)
+                    self.logger.info(f"    {key}: {display_value}")
                 else:
                     self.logger.info(f"    {key}: {value}")
 
@@ -329,9 +347,37 @@ class DebugTracker:
         self.logger.info(f"📁 모든 결과: {self.debug_dir}")
         self.logger.info("="*80)
 
+    def _truncate_data_uri(self, url: str, max_length: int = 100) -> str:
+        """
+        Data URI를 짧게 표시
+
+        Args:
+            url: URL 문자열
+            max_length: 최대 길이 (Data URI가 아닌 경우)
+
+        Returns:
+            짧게 표시된 문자열
+        """
+        if url.startswith('data:'):
+            # Data URI 형식: data:image/png;base64,iVBORw0KGgo...
+            if ';base64,' in url:
+                parts = url.split(';base64,')
+                mime_type = parts[0].replace('data:', '')
+                data_preview = parts[1][:20] if len(parts) > 1 else ''
+                total_length = len(parts[1]) if len(parts) > 1 else 0
+                return f"data:{mime_type};base64,{data_preview}...({total_length} chars)"
+            else:
+                return f"{url[:50]}... (Data URI, {len(url)} chars)"
+        elif len(url) > max_length:
+            return f"{url[:max_length]}..."
+        return url
+
     def _serialize(self, data: Any) -> Any:
-        """JSON 직렬화 가능한 형태로 변환"""
-        if isinstance(data, (str, int, float, bool, type(None))):
+        """JSON 직렬화 가능한 형태로 변환 (Data URI는 짧게 표시)"""
+        if isinstance(data, str):
+            # Data URI는 짧게 표시
+            return self._truncate_data_uri(data)
+        elif isinstance(data, (int, float, bool, type(None))):
             return data
         elif isinstance(data, (list, tuple)):
             return [self._serialize(item) for item in data]
@@ -488,8 +534,8 @@ def debug_url(url: str, category: str = "notice"):
 
             ocr_results = []
             for idx, img_url in enumerate(image_list):
-                # URL 길이 제한 (50자)
-                url_display = img_url[:50] + "..." if len(img_url) > 50 else img_url
+                # Data URI는 짧게 표시
+                url_display = tracker._truncate_data_uri(img_url, max_length=50)
                 tracker.logger.info(f"\n  🖼️  이미지 {idx+1}/{len(image_list)}: {url_display}")
 
                 try:
@@ -499,7 +545,8 @@ def debug_url(url: str, category: str = "notice"):
 
                     if ocr_result and ocr_result.get("text"):
                         ocr_data = {
-                            "url": img_url,
+                            "url": tracker._truncate_data_uri(img_url, max_length=100),  # Data URI 짧게 저장
+                            "url_full": img_url if not img_url.startswith('data:') else "data_uri",  # 전체 URL (Data URI는 제외)
                             "success": True,
                             "text_length": len(ocr_result["text"]),
                             "text_full": ocr_result["text"],  # 전체 텍스트
@@ -509,7 +556,8 @@ def debug_url(url: str, category: str = "notice"):
                         tracker.logger.info(f"     텍스트: {ocr_result['text']}")  # 전체 텍스트 로그
                     else:
                         ocr_data = {
-                            "url": img_url,
+                            "url": tracker._truncate_data_uri(img_url, max_length=100),  # Data URI 짧게 저장
+                            "url_full": img_url if not img_url.startswith('data:') else "data_uri",
                             "success": False,
                             "error": "텍스트 추출 실패"
                         }
@@ -519,7 +567,8 @@ def debug_url(url: str, category: str = "notice"):
 
                 except Exception as e:
                     ocr_data = {
-                        "url": img_url,
+                        "url": tracker._truncate_data_uri(img_url, max_length=100),  # Data URI 짧게 저장
+                        "url_full": img_url if not img_url.startswith('data:') else "data_uri",
                         "success": False,
                         "error": str(e)
                     }
@@ -548,8 +597,8 @@ def debug_url(url: str, category: str = "notice"):
 
             parse_results = []
             for idx, att_url in enumerate(attachment_list):
-                # URL 길이 제한 (50자)
-                url_display = att_url[:50] + "..." if len(att_url) > 50 else att_url
+                # Data URI는 짧게 표시
+                url_display = tracker._truncate_data_uri(att_url, max_length=50)
                 tracker.logger.info(f"\n  📄 첨부파일 {idx+1}/{len(attachment_list)}: {url_display}")
 
                 try:
@@ -559,7 +608,8 @@ def debug_url(url: str, category: str = "notice"):
 
                     if parse_result and parse_result.get("text"):
                         parse_data = {
-                            "url": att_url,
+                            "url": tracker._truncate_data_uri(att_url, max_length=100),  # Data URI 짧게 저장
+                            "url_full": att_url if not att_url.startswith('data:') else "data_uri",  # 전체 URL (Data URI는 제외)
                             "success": True,
                             "file_type": Path(att_url).suffix.lower()[1:] if Path(att_url).suffix else "unknown",
                             "text_length": len(parse_result["text"]),
@@ -571,7 +621,8 @@ def debug_url(url: str, category: str = "notice"):
                         tracker.logger.info(f"     텍스트: {parse_result['text']}")  # 전체 텍스트 로그
                     else:
                         parse_data = {
-                            "url": att_url,
+                            "url": tracker._truncate_data_uri(att_url, max_length=100),  # Data URI 짧게 저장
+                            "url_full": att_url if not att_url.startswith('data:') else "data_uri",
                             "success": False,
                             "error": "텍스트 추출 실패"
                         }
@@ -581,7 +632,8 @@ def debug_url(url: str, category: str = "notice"):
 
                 except Exception as e:
                     parse_data = {
-                        "url": att_url,
+                        "url": tracker._truncate_data_uri(att_url, max_length=100),  # Data URI 짧게 저장
+                        "url_full": att_url if not att_url.startswith('data:') else "data_uri",
                         "success": False,
                         "error": str(e)
                     }

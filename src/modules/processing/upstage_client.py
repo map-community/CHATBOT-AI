@@ -275,7 +275,12 @@ class UpstageClient:
             실패 시 None
         """
         try:
-            logger.info(f"🖼️  OCR 시작: {url[:100]}...")
+            # Data URI는 짧게 로깅
+            if url.startswith('data:'):
+                log_url = "Data URI (Base64 이미지)"
+            else:
+                log_url = url[:100] + "..." if len(url) > 100 else url
+            logger.info(f"🖼️  OCR 시작: {log_url}")
 
             # Data URI Scheme 처리 (data:image/png;base64,...)
             if url.startswith('data:'):
@@ -388,7 +393,8 @@ class UpstageClient:
             try:
                 file_response = requests.get(url, timeout=30, allow_redirects=True)
                 if file_response.status_code != 200:
-                    logger.error(f"이미지 다운로드 실패: {url}")
+                    log_url = url[:100] + "..." if len(url) > 100 else url
+                    logger.error(f"이미지 다운로드 실패: {log_url}")
                     return None
 
                 # Content-Type 확인
@@ -428,13 +434,15 @@ class UpstageClient:
                 )
 
                 if not is_image:
-                    logger.warning(f"이미지가 아님: {content_type}, 확장자: {file_ext}, URL: {url}")
+                    log_url = url[:100] + "..." if len(url) > 100 else url
+                    logger.warning(f"이미지가 아님: {content_type}, 확장자: {file_ext}, URL: {log_url}")
                     return None
 
                 # 파일 크기 확인 (너무 작으면 손상되었을 가능성)
                 content_length = len(file_response.content)
                 if content_length < 100:
-                    logger.warning(f"이미지 파일이 너무 작음 ({content_length} bytes): {url}")
+                    log_url = url[:100] + "..." if len(url) > 100 else url
+                    logger.warning(f"이미지 파일이 너무 작음 ({content_length} bytes): {log_url}")
                     return None
 
                 # 파일명이 길면 줄임
@@ -504,7 +512,12 @@ class UpstageClient:
             return None
 
         except Exception as e:
-            logger.error(f"이미지 OCR 중 오류: {url} - {e}")
+            # Data URI는 짧게 로깅
+            if url.startswith('data:'):
+                log_url = "Data URI (Base64 이미지)"
+            else:
+                log_url = url[:100] + "..." if len(url) > 100 else url
+            logger.error(f"이미지 OCR 중 오류: {log_url} - {e}")
             return None
 
     def _extract_text_from_response(self, result: Dict) -> str:
