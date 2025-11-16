@@ -18,6 +18,8 @@
 import sys
 import json
 import traceback
+import re
+import shutil
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
@@ -45,9 +47,9 @@ class DebugTracker:
         self.url = url
         self.category = category
 
-        # 디버그 디렉토리 생성
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        self.debug_dir = Path("logs/debug") / f"debug_{timestamp}"
+        # 디버그 디렉토리 생성 (timestamp 저장)
+        self.timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        self.debug_dir = Path("logs/debug") / f"debug_{self.timestamp}"
         self.debug_dir.mkdir(parents=True, exist_ok=True)
 
         # 로거 설정
@@ -91,6 +93,78 @@ class DebugTracker:
         logger.addHandler(console_handler)
 
         return logger
+
+    def _sanitize_filename(self, text: str, max_length: int = 50) -> str:
+        """
+        파일/폴더명에 사용할 수 있도록 텍스트 정제
+
+        Args:
+            text: 원본 텍스트
+            max_length: 최대 길이
+
+        Returns:
+            정제된 문자열
+        """
+        # 파일명에 사용 불가능한 문자 제거
+        # Windows/Linux/Mac 공통: / \ : * ? " < > |
+        sanitized = re.sub(r'[/\\:*?"<>|]', '', text)
+
+        # 공백을 언더스코어로 치환
+        sanitized = sanitized.replace(' ', '_')
+
+        # 연속된 언더스코어를 하나로
+        sanitized = re.sub(r'_+', '_', sanitized)
+
+        # 앞뒤 언더스코어 제거
+        sanitized = sanitized.strip('_')
+
+        # 길이 제한
+        if len(sanitized) > max_length:
+            sanitized = sanitized[:max_length]
+
+        return sanitized
+
+    def update_folder_name_with_title(self, title: str):
+        """
+        제목을 포함하도록 폴더명 업데이트
+
+        Args:
+            title: 게시글 제목
+        """
+        try:
+            # 제목 정제
+            clean_title = self._sanitize_filename(title, max_length=50)
+
+            # 새 폴더명 생성 (기존 timestamp 사용)
+            new_dir_name = f"debug_{self.timestamp}_{clean_title}"
+            new_debug_dir = self.debug_dir.parent / new_dir_name
+
+            # 기존 폴더를 새 폴더로 이동
+            if self.debug_dir.exists() and self.debug_dir != new_debug_dir:
+                shutil.move(str(self.debug_dir), str(new_debug_dir))
+                self.debug_dir = new_debug_dir
+
+                # 로거의 파일 핸들러 업데이트
+                for handler in self.logger.handlers[:]:
+                    if isinstance(handler, logging.FileHandler):
+                        handler.close()
+                        self.logger.removeHandler(handler)
+
+                # 새 파일 핸들러 추가
+                log_file = self.debug_dir / "debug.log"
+                file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
+                file_handler.setLevel(logging.DEBUG)
+                formatter = logging.Formatter(
+                    '%(asctime)s - %(levelname)s - %(message)s',
+                    datefmt='%Y-%m-%d %H:%M:%S'
+                )
+                file_handler.setFormatter(formatter)
+                self.logger.addHandler(file_handler)
+
+                self.logger.info(f"\n📁 폴더명 업데이트: {new_dir_name}")
+
+        except Exception as e:
+            self.logger.warning(f"폴더명 업데이트 실패: {e}")
 
     def start_step(self, step_name: str, description: str):
         """처리 단계 시작"""
@@ -342,6 +416,9 @@ def debug_url(url: str, category: str = "notice"):
             }
             tracker.log_output(parsed_result, "파싱 결과")
             tracker.end_step()
+
+            # 제목을 얻었으므로 폴더명 업데이트
+            tracker.update_folder_name_with_title(title)
         else:
             tracker.log_error(Exception("크롤링 실패: crawl_page가 None 반환"))
             return
