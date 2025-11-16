@@ -236,7 +236,7 @@ class DebugTracker:
             "category": self.category,
             "debug_dir": str(self.debug_dir),
             "total_steps": len(self.steps),
-            "successful_steps": sum(1 for s in s.steps if s.get("success")),
+            "successful_steps": sum(1 for s in self.steps if s.get("success")),
             "failed_steps": sum(1 for s in self.steps if not s.get("success")),
             "steps": self.steps
         }

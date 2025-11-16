@@ -346,7 +346,36 @@ class UpstageClient:
                 if texts:
                     return "\n\n".join(texts)
 
-            # 3. Fallback: 최상위 text 필드
+            # 3. HTML에서 텍스트 추출 (text 필드가 비어있을 때)
+            # content.text와 elements[].content.text가 비어있어도 HTML에 텍스트가 있을 수 있음
+            html_texts = []
+
+            # 3-1. content.html에서 추출
+            if "content" in result:
+                content = result["content"]
+                if isinstance(content, dict):
+                    html = content.get("html", "")
+                    if html:
+                        html_text = self._extract_text_from_html(html)
+                        if html_text:
+                            html_texts.append(html_text)
+
+            # 3-2. elements[].content.html에서 추출
+            if "elements" in result and not html_texts:
+                for element in result.get("elements", []):
+                    if isinstance(element, dict) and "content" in element:
+                        elem_content = element["content"]
+                        if isinstance(elem_content, dict):
+                            elem_html = elem_content.get("html", "")
+                            if elem_html:
+                                elem_text = self._extract_text_from_html(elem_html)
+                                if elem_text:
+                                    html_texts.append(elem_text)
+
+            if html_texts:
+                return "\n\n".join(html_texts)
+
+            # 4. Fallback: 최상위 text 필드
             if "text" in result:
                 return result["text"]
 
@@ -355,6 +384,50 @@ class UpstageClient:
 
         except Exception as e:
             logger.error(f"텍스트 추출 오류: {e}")
+            return ""
+
+    def _extract_text_from_html(self, html: str) -> str:
+        """
+        HTML에서 텍스트 추출 (BeautifulSoup 사용)
+
+        Upstage API가 text 필드를 비워두고 HTML만 제공하는 경우가 있음
+        특히 이미지 OCR 결과의 경우 <img alt="..."> 속성에 텍스트가 들어있음
+
+        Args:
+            html: HTML 문자열
+
+        Returns:
+            추출된 텍스트
+        """
+        try:
+            from bs4 import BeautifulSoup
+
+            soup = BeautifulSoup(html, 'html.parser')
+
+            # 텍스트 추출 (여러 방법 시도)
+            texts = []
+
+            # 1. img 태그의 alt 속성에서 추출 (OCR 결과가 여기 들어있을 수 있음)
+            for img in soup.find_all('img'):
+                alt_text = img.get('alt', '').strip()
+                if alt_text and alt_text != 'x':  # 'x'는 의미없는 플레이스홀더
+                    texts.append(alt_text)
+
+            # 2. 일반 텍스트 추출 (태그 제거)
+            body_text = soup.get_text(separator='\n', strip=True)
+            if body_text and not texts:  # alt에서 추출 못했을 경우만
+                texts.append(body_text)
+
+            # 중복 제거 및 결합
+            unique_texts = []
+            for text in texts:
+                if text and text not in unique_texts:
+                    unique_texts.append(text)
+
+            return '\n\n'.join(unique_texts)
+
+        except Exception as e:
+            logger.warning(f"HTML 텍스트 추출 오류: {e}")
             return ""
 
     def is_document_url(self, url: str) -> bool:
