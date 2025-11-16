@@ -151,9 +151,12 @@ class UpstageClient:
                             else:
                                 logger.warning(f"⚠️  텍스트 추출 실패. 응답 구조: {result}")
 
+                            # RAG용으로 텍스트와 HTML 둘 다 반환
                             return {
-                                "text": extracted_text,
-                                "html": result.get("content", {}).get("html", ""),
+                                "text": extracted_text,  # 검색용 순수 텍스트
+                                "html": result.get("content", {}).get("html", ""),  # 구조 보존용 HTML
+                                "full_html": result.get("content", {}).get("html", ""),  # 원본 HTML (별칭)
+                                "markdown": result.get("content", {}).get("markdown", ""),  # Markdown (있으면)
                                 "elements": result.get("elements", []),
                                 "source_url": url
                             }
@@ -269,9 +272,11 @@ class UpstageClient:
                             if extracted_text:
                                 logger.info(f"✅ OCR 성공: {len(extracted_text)}자 추출")
 
+                                # RAG용으로 텍스트와 HTML 둘 다 반환
                                 return {
-                                    "text": extracted_text,
-                                    "html": result.get("content", {}).get("html", ""),
+                                    "text": extracted_text,  # 검색용 순수 텍스트
+                                    "html": result.get("content", {}).get("html", ""),  # 구조 보존용 HTML
+                                    "full_html": result.get("content", {}).get("html", ""),  # 원본 HTML (별칭)
                                     "elements": result.get("elements", []),
                                     "source_url": url
                                 }
@@ -404,7 +409,10 @@ class UpstageClient:
 
             soup = BeautifulSoup(html, 'html.parser')
 
-            # 텍스트 추출 (여러 방법 시도)
+            # 텍스트 추출 전략:
+            # 1. img[alt] 속성 우선 (OCR 결과)
+            # 2. 모든 텍스트 노드 추출 (구조 유지)
+
             texts = []
 
             # 1. img 태그의 alt 속성에서 추출 (OCR 결과가 여기 들어있을 수 있음)
@@ -413,18 +421,21 @@ class UpstageClient:
                 if alt_text and alt_text != 'x':  # 'x'는 의미없는 플레이스홀더
                     texts.append(alt_text)
 
-            # 2. 일반 텍스트 추출 (태그 제거)
-            body_text = soup.get_text(separator='\n', strip=True)
-            if body_text and not texts:  # alt에서 추출 못했을 경우만
-                texts.append(body_text)
+            # 2. h1, h2, p, li 등 구조화된 텍스트 추출 (순서 유지)
+            for elem in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'li', 'td', 'th']):
+                elem_text = elem.get_text(strip=True)
+                if elem_text:
+                    # 중복 방지: alt에서 이미 추출한 텍스트는 제외
+                    if not any(elem_text in existing for existing in texts):
+                        texts.append(elem_text)
 
-            # 중복 제거 및 결합
-            unique_texts = []
-            for text in texts:
-                if text and text not in unique_texts:
-                    unique_texts.append(text)
+            # 3. 위에서 추출 못했으면 전체 텍스트 추출
+            if not texts:
+                body_text = soup.get_text(separator='\n', strip=True)
+                if body_text:
+                    texts.append(body_text)
 
-            return '\n\n'.join(unique_texts)
+            return '\n\n'.join(texts)
 
         except Exception as e:
             logger.warning(f"HTML 텍스트 추출 오류: {e}")

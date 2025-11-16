@@ -423,9 +423,11 @@ def debug_url(url: str, category: str = "notice"):
                             "url": img_url,
                             "success": True,
                             "text_length": len(ocr_result["text"]),
-                            "text_preview": ocr_result["text"][:200]
+                            "text_full": ocr_result["text"],  # 전체 텍스트
+                            "html_full": ocr_result.get("html", "")  # HTML 원본도 저장
                         }
                         tracker.logger.info(f"     ✅ OCR 성공: {ocr_data['text_length']}자 추출")
+                        tracker.logger.info(f"     텍스트: {ocr_result['text']}")  # 전체 텍스트 로그
                     else:
                         ocr_data = {
                             "url": img_url,
@@ -480,9 +482,12 @@ def debug_url(url: str, category: str = "notice"):
                             "success": True,
                             "file_type": Path(att_url).suffix.lower()[1:] if Path(att_url).suffix else "unknown",
                             "text_length": len(parse_result["text"]),
-                            "text_preview": parse_result["text"][:200]
+                            "text_full": parse_result["text"],  # 전체 텍스트
+                            "html_full": parse_result.get("html", ""),  # HTML 원본도 저장
+                            "markdown": parse_result.get("markdown", "")  # Markdown (있으면)
                         }
                         tracker.logger.info(f"     ✅ 파싱 성공: {parse_data['file_type']} - {parse_data['text_length']}자 추출")
+                        tracker.logger.info(f"     텍스트: {parse_result['text']}")  # 전체 텍스트 로그
                     else:
                         parse_data = {
                             "url": att_url,
@@ -559,7 +564,7 @@ def debug_url(url: str, category: str = "notice"):
                 "content_type": metadata.get("content_type"),
                 "source": metadata.get("source"),
                 "text_length": len(text),
-                "text_preview": text[:200],
+                "text_full": text,  # 전체 텍스트 (preview 아님!)
                 "metadata": metadata
             })
 
