@@ -88,11 +88,12 @@ class NoticeCrawler(BaseCrawler):
                             img_url = src
 
                     if img_url:
-                        # 상대 경로를 절대 경로로 변환
-                        if img_url.startswith('/'):
-                            img_url = f"https://cse.knu.ac.kr{img_url}"
-                        elif not img_url.startswith('http'):
-                            img_url = f"https://cse.knu.ac.kr/{img_url}"
+                        # 상대 경로를 절대 경로로 변환 (Data URI 제외)
+                        if not img_url.startswith(('http', 'data:')):
+                            if img_url.startswith('/'):
+                                img_url = f"https://cse.knu.ac.kr{img_url}"
+                            else:
+                                img_url = f"https://cse.knu.ac.kr/{img_url}"
 
                         # thumb- URL은 원본을 못 찾은 경우만 추가 (일단 제외)
                         if '/thumb-' not in img_url:
