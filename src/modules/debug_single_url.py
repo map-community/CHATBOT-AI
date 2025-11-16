@@ -262,6 +262,52 @@ class DebugTracker:
 
         self.current_step_data["output"] = self._serialize(output_data)
 
+    def _format_for_log(self, value: Any, max_depth: int = 2, current_depth: int = 0) -> str:
+        """
+        로그 출력용으로 값을 포맷 (Data URI 짧게 표시)
+
+        Args:
+            value: 포맷할 값
+            max_depth: 최대 재귀 깊이
+            current_depth: 현재 재귀 깊이
+
+        Returns:
+            포맷된 문자열
+        """
+        if current_depth > max_depth:
+            return "..."
+
+        if isinstance(value, str):
+            return self._truncate_data_uri(value, max_length=50)
+        elif isinstance(value, (list, tuple)):
+            if not value:
+                return "[]"
+            # 리스트의 각 항목을 짧게 표시
+            items = []
+            for item in value[:3]:  # 최대 3개만 표시
+                items.append(self._format_for_log(item, max_depth, current_depth + 1))
+            result = f"[{', '.join(items)}"
+            if len(value) > 3:
+                result += f", ... ({len(value)}개 항목)"
+            else:
+                result += "]"
+            return result
+        elif isinstance(value, dict):
+            if not value:
+                return "{}"
+            items = []
+            for k, v in list(value.items())[:3]:  # 최대 3개만 표시
+                formatted_v = self._format_for_log(v, max_depth, current_depth + 1)
+                items.append(f"{k}: {formatted_v}")
+            result = f"{{{', '.join(items)}"
+            if len(value) > 3:
+                result += f", ... ({len(value)}개 항목)"
+            else:
+                result += "}"
+            return result
+        else:
+            return str(value)[:100]
+
     def log_function_call(self, module: str, function: str, args: Dict[str, Any] = None):
         """함수 호출 로깅"""
         self.logger.info(f"\n🔧 함수 호출")
@@ -270,12 +316,8 @@ class DebugTracker:
         if args:
             self.logger.info(f"  인자:")
             for key, value in args.items():
-                if isinstance(value, str):
-                    # Data URI는 짧게 표시
-                    display_value = self._truncate_data_uri(value, max_length=100)
-                    self.logger.info(f"    {key}: {display_value}")
-                else:
-                    self.logger.info(f"    {key}: {value}")
+                display_value = self._format_for_log(value)
+                self.logger.info(f"    {key}: {display_value}")
 
     def end_step(self, success: bool = True, save_to_file: bool = True):
         """처리 단계 종료"""
@@ -363,11 +405,11 @@ class DebugTracker:
             if ';base64,' in url:
                 parts = url.split(';base64,')
                 mime_type = parts[0].replace('data:', '')
-                data_preview = parts[1][:20] if len(parts) > 1 else ''
+                data_preview = parts[1][:10] if len(parts) > 1 else ''  # 10자로 축소
                 total_length = len(parts[1]) if len(parts) > 1 else 0
-                return f"data:{mime_type};base64,{data_preview}...({total_length} chars)"
+                return f"data:{mime_type};base64,{data_preview}...({total_length}자)"
             else:
-                return f"{url[:50]}... (Data URI, {len(url)} chars)"
+                return f"data:... ({len(url)}자)"
         elif len(url) > max_length:
             return f"{url[:max_length]}..."
         return url
