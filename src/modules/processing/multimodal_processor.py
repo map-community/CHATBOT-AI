@@ -45,20 +45,24 @@ class MultimodalContent:
         if text and text.strip():
             self.text_chunks.append(text)
 
-    def add_image_content(self, url: str, ocr_text: str = "", description: str = ""):
-        """이미지 콘텐츠 추가"""
+    def add_image_content(self, url: str, ocr_text: str = "", ocr_html: str = "", ocr_elements: List = None, description: str = ""):
+        """이미지 콘텐츠 추가 (HTML 구조 포함)"""
         self.image_contents.append({
             "url": url,
             "ocr_text": ocr_text,
+            "ocr_html": ocr_html,  # HTML 구조 (표, 레이아웃 등)
+            "ocr_elements": ocr_elements or [],  # 요소 정보
             "description": description
         })
 
-    def add_attachment_content(self, url: str, file_type: str, text: str):
-        """첨부파일 콘텐츠 추가"""
+    def add_attachment_content(self, url: str, file_type: str, text: str, html: str = "", elements: List = None):
+        """첨부파일 콘텐츠 추가 (HTML 구조 포함)"""
         self.attachment_contents.append({
             "url": url,
             "type": file_type,
-            "text": text
+            "text": text,
+            "html": html,  # HTML 구조 (표, 레이아웃 등)
+            "elements": elements or []  # 요소 정보
         })
 
     def to_embedding_items(self) -> List[Tuple[str, Dict]]:
@@ -105,7 +109,9 @@ class MultimodalContent:
                         "content_type": "image",
                         "image_url": img["url"],
                         "image_index": idx,
-                        "source": "image_ocr"  # OCR 결과
+                        "source": "image_ocr",  # OCR 결과
+                        "html": img.get("ocr_html", ""),  # HTML 구조 보존 (표, 레이아웃)
+                        "html_available": bool(img.get("ocr_html"))  # HTML 존재 여부
                     }
                 ))
 
@@ -122,7 +128,9 @@ class MultimodalContent:
                         "attachment_url": att["url"],
                         "attachment_type": att["type"],
                         "attachment_index": idx,
-                        "source": "document_parse"  # Document Parse 결과
+                        "source": "document_parse",  # Document Parse 결과
+                        "html": att.get("html", ""),  # HTML 구조 보존 (표, 레이아웃)
+                        "html_available": bool(att.get("html"))  # HTML 존재 여부
                     }
                 ))
 
@@ -267,10 +275,12 @@ class MultimodalProcessor:
                     text_length = len(ocr_result.get("text", ""))
 
                     if text_length > 0:
-                        # 성공: 텍스트 추출 완료
+                        # 성공: 텍스트 추출 완료 (HTML 구조도 함께 저장)
                         content = {
                             "url": img_url,
                             "ocr_text": ocr_result.get("text", ""),
+                            "ocr_html": ocr_result.get("html", ""),  # HTML 구조 보존 (표, 레이아웃 등)
+                            "ocr_elements": ocr_result.get("elements", []),  # 요소 정보
                             "description": ""
                         }
                         successful.append(content)
@@ -453,13 +463,23 @@ class MultimodalProcessor:
 
                     if ocr_result and ocr_result.get("text"):
                         text = ocr_result.get("text", "")
+                        html = ocr_result.get("html", "")
+                        elements = ocr_result.get("elements", [])
+
                         content = {
                             "url": att_url,
                             "type": "image",
-                            "text": text
+                            "text": text,
+                            "html": html,  # HTML 구조 보존 (표, 레이아웃 등)
+                            "elements": elements  # 요소 정보
                         }
                         successful.append(content)
-                        self._save_to_cache(att_url, {"ocr_text": text, "type": "image"}, file_hash=file_hash)
+                        self._save_to_cache(att_url, {
+                            "ocr_text": text,
+                            "ocr_html": html,
+                            "ocr_elements": elements,
+                            "type": "image"
+                        }, file_hash=file_hash)
 
                         if logger:
                             url_display = att_url[:50] + "..." if len(att_url) > 50 else att_url
@@ -541,11 +561,13 @@ class MultimodalProcessor:
                     file_type = Path(att_url).suffix.lower()[1:] if Path(att_url).suffix else "unknown"
 
                     if text_length > 0:
-                        # 성공: 텍스트 추출 완료
+                        # 성공: 텍스트 추출 완료 (HTML 구조도 함께 저장)
                         content = {
                             "url": att_url,
                             "type": file_type,
-                            "text": parse_result.get("text", "")
+                            "text": parse_result.get("text", ""),
+                            "html": parse_result.get("html", ""),  # HTML 구조 보존 (표, 레이아웃 등)
+                            "elements": parse_result.get("elements", [])  # 요소 정보
                         }
                         successful.append(content)
                         self._save_to_cache(att_url, content)
@@ -787,11 +809,13 @@ class MultimodalProcessor:
         # 2. 이미지 처리 및 추가
         if image_urls:
             image_result = self.process_images(image_urls, logger=logger, category=category)
-            # 성공한 이미지만 추가
+            # 성공한 이미지만 추가 (HTML 구조 포함)
             for img_content in image_result["successful"]:
                 content.add_image_content(
                     url=img_content["url"],
                     ocr_text=img_content.get("ocr_text", ""),
+                    ocr_html=img_content.get("ocr_html", ""),  # HTML 구조
+                    ocr_elements=img_content.get("ocr_elements", []),  # 요소 정보
                     description=img_content.get("description", "")
                 )
             # 실패 정보 저장
@@ -801,12 +825,14 @@ class MultimodalProcessor:
         # 3. 첨부파일 처리 및 추가
         if attachment_urls:
             attachment_result = self.process_attachments(attachment_urls, logger=logger, category=category)
-            # 성공한 첨부파일만 추가
+            # 성공한 첨부파일만 추가 (HTML 구조 포함)
             for att_content in attachment_result["successful"]:
                 content.add_attachment_content(
                     url=att_content["url"],
                     file_type=att_content["type"],
-                    text=att_content["text"]
+                    text=att_content["text"],
+                    html=att_content.get("html", ""),  # HTML 구조
+                    elements=att_content.get("elements", [])  # 요소 정보
                 )
             # 실패 정보 저장
             failures["attachment_failed"] = attachment_result["failed"]
