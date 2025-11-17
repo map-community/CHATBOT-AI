@@ -86,13 +86,33 @@ def fetch_titles_from_pinecone():
         include_metadata=True  # 메타데이터 포함
     )
 
-    # 메타데이터에서 필요한 값들 추출.
-    titles = [match["metadata"]["title"] for match in query_results["matches"]]
-    texts = [match["metadata"]["text"] for match in query_results["matches"]]
-    urls = [match["metadata"]["url"] for match in query_results["matches"]]
-    dates = [match["metadata"]["date"] for match in query_results["matches"]]
+    # 메타데이터에서 필요한 값들 추출 (멀티모달 RAG를 위한 확장)
+    titles = []
+    texts = []
+    urls = []
+    dates = []
+    htmls = []  # HTML 구조 데이터 (표, 레이아웃 등)
+    content_types = []  # text, image, attachment
+    sources = []  # original_post, image_ocr, document_parse
+    image_urls = []  # 이미지 URL
+    attachment_urls = []  # 첨부파일 URL
+    attachment_types = []  # pdf, hwp, docx 등
 
-    return titles, texts, urls, dates
+    for match in query_results["matches"]:
+        metadata = match["metadata"]
+        titles.append(metadata["title"])
+        texts.append(metadata["text"])
+        urls.append(metadata["url"])
+        dates.append(metadata["date"])
+        # 멀티모달 메타데이터 (없으면 기본값 사용)
+        htmls.append(metadata.get("html", ""))
+        content_types.append(metadata.get("content_type", "text"))
+        sources.append(metadata.get("source", "original_post"))
+        image_urls.append(metadata.get("image_url", ""))
+        attachment_urls.append(metadata.get("attachment_url", ""))
+        attachment_types.append(metadata.get("attachment_type", ""))
+
+    return titles, texts, urls, dates, htmls, content_types, sources, image_urls, attachment_urls, attachment_types
 
 
 # 캐싱 데이터 초기화 함수
@@ -101,9 +121,14 @@ def initialize_cache():
     try:
         logger.info("🔄 캐시 초기화 시작...")
 
-        # Pinecone에서 데이터를 가져옴
-        storage.cached_titles, storage.cached_texts, storage.cached_urls, storage.cached_dates = fetch_titles_from_pinecone()
+        # Pinecone에서 데이터를 가져옴 (멀티모달 메타데이터 포함)
+        (storage.cached_titles, storage.cached_texts, storage.cached_urls, storage.cached_dates,
+         storage.cached_htmls, storage.cached_content_types, storage.cached_sources,
+         storage.cached_image_urls, storage.cached_attachment_urls, storage.cached_attachment_types) = fetch_titles_from_pinecone()
         logger.info(f"✅ Pinecone에서 {len(storage.cached_titles)}개 문서 메타데이터를 가져왔습니다.")
+        logger.info(f"   - HTML 구조 있는 문서: {sum(1 for html in storage.cached_htmls if html)}개")
+        logger.info(f"   - 이미지 OCR 문서: {sum(1 for ct in storage.cached_content_types if ct == 'image')}개")
+        logger.info(f"   - 첨부파일 문서: {sum(1 for ct in storage.cached_content_types if ct == 'attachment')}개")
 
         # BM25Retriever 초기화
         from modules.retrieval import (
@@ -153,11 +178,16 @@ def initialize_cache():
         # QueryTransformer와 KeywordFilter는 StorageManager 초기화 시 자동 생성됨
         # (여기서는 재설정하지 않음)
 
-        # Redis에 저장 시도
+        # Redis에 저장 시도 (멀티모달 메타데이터 포함)
         if storage.redis_client is not None:
             try:
-                storage.redis_client.set('pinecone_metadata', pickle.dumps((storage.cached_titles, storage.cached_texts, storage.cached_urls, storage.cached_dates)))
-                logger.info("✅ Redis에 캐시 데이터를 저장했습니다.")
+                cache_data = (
+                    storage.cached_titles, storage.cached_texts, storage.cached_urls, storage.cached_dates,
+                    storage.cached_htmls, storage.cached_content_types, storage.cached_sources,
+                    storage.cached_image_urls, storage.cached_attachment_urls, storage.cached_attachment_types
+                )
+                storage.redis_client.set('pinecone_metadata', pickle.dumps(cache_data))
+                logger.info("✅ Redis에 멀티모달 캐시 데이터를 저장했습니다.")
             except Exception as e:
                 logger.warning(f"⚠️  Redis 저장 실패 (메모리 캐시만 사용): {e}")
         else:
@@ -172,6 +202,12 @@ def initialize_cache():
         storage.cached_texts = []
         storage.cached_urls = []
         storage.cached_dates = []
+        storage.cached_htmls = []
+        storage.cached_content_types = []
+        storage.cached_sources = []
+        storage.cached_image_urls = []
+        storage.cached_attachment_urls = []
+        storage.cached_attachment_types = []
         logger.warning("⚠️  캐시를 빈 상태로 초기화했습니다.")
 
                     #################################   24.11.16기준 정확도 측정완료 #####################################################
@@ -490,6 +526,16 @@ prompt_template = """당신은 경북대학교 컴퓨터학부 공지사항을 �
 5. 답변은 친절하게 존댓말로 제공하세요.
 6. 질문이 공지사항의 내용과 전혀 관련이 없다고 판단하면 응답하지 말아주세요. 예를 들면 "너는 무엇을 알까", "점심메뉴 추천"과 같이 일반 상식을 요구하는 질문은 거절해주세요.
 7. 에이빅 인정 관련 질문이 들어오면 계절학기인지 그냥 학기를 묻는것인지 질문을 체크해야합니다. 계절학기가 아닌 경우에 심컴,글솝,인컴 개설이 아니면 에이빅 인정이 안됩니다.
+
+**멀티모달 컨텍스트 활용 가이드:**
+8. 컨텍스트에 HTML 표(<table>, <tr>, <td> 등)가 포함되어 있으면, 표 구조를 정확히 파싱하여 정보를 추출하세요.
+  - 예시: <tr><td>성적우수장학금</td><td>300만원</td></tr>는 "성적우수장학금: 300만원"을 의미합니다.
+  - 표의 행(row)과 열(column) 관계를 정확히 파악하여 답변하세요.
+9. 컨텍스트 출처 라벨([본문], [이미지 OCR 텍스트], [첨부파일: PDF])을 참고하여 정보의 신뢰도를 고려하세요.
+  - [본문]: 원본 게시글 텍스트 (가장 신뢰도 높음)
+  - [이미지 OCR 텍스트]: 이미지에서 추출한 텍스트 (OCR 오류 가능성 고려)
+  - [첨부파일: PDF/HWP/DOCX]: 첨부파일에서 추출한 텍스트 및 구조 (공식 문서로 신뢰도 높음)
+10. HTML 리스트(<ul>, <ol>, <li>)나 중첩 구조가 있으면, 계층 구조를 유지하여 답변하세요.
 답변:"""
 
 # PromptTemplate 객체 생성
@@ -499,7 +545,37 @@ PROMPT = PromptTemplate(
 )
 
 def format_docs(docs):
-    return "\n\n".join(doc.page_content for doc in docs)
+    """
+    문서 리스트를 LLM이 이해하기 쉬운 형식으로 포맷팅
+    출처(원본/이미지OCR/첨부파일)를 라벨로 표시하여 맥락 제공
+
+    Args:
+        docs: Document 객체 리스트
+
+    Returns:
+        str: 포맷팅된 컨텍스트 문자열
+    """
+    formatted = []
+
+    for doc in docs:
+        # 출처에 따라 라벨 생성
+        source = doc.metadata.get('source', 'original_post')
+        content_type = doc.metadata.get('content_type', 'text')
+
+        if source == "image_ocr":
+            label = "[이미지 OCR 텍스트]"
+        elif source == "document_parse":
+            # 첨부파일 타입 표시
+            attachment_type = doc.metadata.get('attachment_type', 'document')
+            label = f"[첨부파일: {attachment_type.upper()}]"
+        else:
+            # 원본 게시글
+            label = "[본문]"
+
+        # 라벨 + 내용
+        formatted.append(f"{label}\n{doc.page_content}")
+
+    return "\n\n".join(formatted)
 
 
 def get_answer_from_chain(best_docs, user_question,query_noun):
@@ -520,10 +596,49 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
         doc_texts.append(text)    # 본문
         doc_urls.append(url)     # URL
 
-    documents = [
-        Document(page_content=text, metadata={"title": title, "url": url, "doc_date": datetime.strptime(date, '작성일%y-%m-%d %H:%M')})
-        for title, text, url, date in zip(doc_titles, doc_texts, doc_urls, doc_dates)
-    ]
+    # 멀티모달 메타데이터를 포함한 Document 객체 생성
+    documents = []
+    for title, text, url, date in zip(doc_titles, doc_texts, doc_urls, doc_dates):
+        # URL로 캐시된 데이터에서 해당 문서의 멀티모달 메타데이터 찾기
+        try:
+            idx = storage.cached_urls.index(url)
+            html = storage.cached_htmls[idx] if idx < len(storage.cached_htmls) else ""
+            content_type = storage.cached_content_types[idx] if idx < len(storage.cached_content_types) else "text"
+            source = storage.cached_sources[idx] if idx < len(storage.cached_sources) else "original_post"
+            attachment_type = storage.cached_attachment_types[idx] if idx < len(storage.cached_attachment_types) else ""
+        except (ValueError, IndexError):
+            # URL을 찾지 못하면 기본값 사용
+            html = ""
+            content_type = "text"
+            source = "original_post"
+            attachment_type = ""
+
+        # HTML이 있으면 HTML을 page_content로, 없으면 text를 사용
+        page_content = html if html else text
+
+        # 날짜 파싱 (ISO 8601과 레거시 형식 모두 지원)
+        try:
+            if date.startswith("작성일"):
+                doc_date = datetime.strptime(date, '작성일%y-%m-%d %H:%M')
+            else:
+                doc_date = datetime.fromisoformat(date)
+        except:
+            doc_date = datetime.now()
+
+        # Document 객체 생성 (멀티모달 메타데이터 포함)
+        doc = Document(
+            page_content=page_content,  # HTML 우선, 없으면 text
+            metadata={
+                "title": title,
+                "url": url,
+                "doc_date": doc_date,
+                "content_type": content_type,
+                "source": source,
+                "attachment_type": attachment_type,
+                "plain_text": text  # 원본 텍스트도 보관
+            }
+        )
+        documents.append(doc)
 
     relevant_docs = [doc for doc in documents if any(keyword in doc.page_content for keyword in query_noun)]
     if not relevant_docs:
@@ -531,7 +646,7 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
 
     llm = ChatUpstage(api_key=storage.upstage_api_key)
     relevant_docs_content=format_docs(relevant_docs)
-    
+
     qa_chain = (
         {
             "current_time": lambda _: get_korean_time().strftime("%Y년 %m월 %d일 %H시 %M분"),
