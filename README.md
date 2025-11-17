@@ -212,50 +212,83 @@ tail -f logs/app.log
 
 ## 🚀 AWS 배포 (CI/CD)
 
-### GitHub Actions를 통한 자동 배포
+### CI/CD 파이프라인 (분리형)
 
-이 프로젝트는 GitHub Actions를 사용하여 AWS EC2에 자동 배포됩니다.
+이 프로젝트는 **CI (테스트)**와 **CD (배포)**를 분리하여 안전하게 관리합니다.
 
-#### 📚 배포 가이드
-- **완전 초보자용 가이드**: [AWS_CICD_COMPLETE_GUIDE.md](./AWS_CICD_COMPLETE_GUIDE.md)
-  - AWS 계정 생성부터 최종 배포까지 모든 단계를 상세히 설명
-  - EC2 서버 생성, Docker 설치, GitHub Secrets 설정 등 포함
+#### 🔄 CI/CD 흐름
 
-- **빠른 참고 가이드**: [QUICK_DEPLOYMENT_GUIDE.md](./QUICK_DEPLOYMENT_GUIDE.md)
-  - 이미 설정을 완료한 경우 빠른 참고용
-  - 유용한 명령어 모음
+```
+코드 작성 → Push → CI 자동 실행 (테스트, 빌드 검증) ✅
+                      ↓
+              AWS 설정 완료됐나요?
+                ↓             ↓
+              YES           NO
+                ↓             ↓
+        수동 배포 실행    나중에 배포
+```
 
-#### 🔧 배포 스크립트
-- **자동 배포**: `.github/workflows/deploy.yml` (GitHub Actions)
-- **수동 배포**: `./scripts/deploy-manual.sh` (EC2 서버에서 실행)
-- **서버 상태 확인**: `./scripts/server-status.sh`
-- **로그 확인**: `./scripts/view-logs.sh`
+#### 📚 가이드 문서
 
-#### ⚡ 배포 방법
+1. **🆘 배포 실패 해결**: [TROUBLESHOOTING_DEPLOYMENT.md](./TROUBLESHOOTING_DEPLOYMENT.md)
+   - 에러가 났나요? 여기부터 보세요!
+   - 일반적인 실패 원인과 해결 방법
 
-**자동 배포** (권장):
+2. **🔄 CI/CD 사용법**: [CI_CD_SEPARATION_GUIDE.md](./CI_CD_SEPARATION_GUIDE.md)
+   - CI와 CD가 뭔지, 어떻게 사용하는지 상세 설명
+   - 수동 배포 방법 (버튼 클릭)
+
+3. **🌟 완전 초보자용**: [AWS_CICD_COMPLETE_GUIDE.md](./AWS_CICD_COMPLETE_GUIDE.md)
+   - AWS 계정 생성부터 최종 배포까지 모든 단계
+   - EC2 서버 생성, Docker 설치, GitHub Secrets 설정
+
+4. **⚡ 빠른 참고**: [QUICK_DEPLOYMENT_GUIDE.md](./QUICK_DEPLOYMENT_GUIDE.md)
+   - 자주 사용하는 명령어 모음
+   - 디버깅 체크리스트
+
+#### 🤖 GitHub Actions 워크플로우
+
+| 이름 | 실행 방식 | 목적 | 파일 |
+|------|----------|------|------|
+| **CI** | 🔄 자동 (모든 push) | 코드 품질 검사, 빌드 테스트 | `.github/workflows/ci.yml` |
+| **CD** | 👆 수동 (버튼 클릭) | AWS EC2에 배포 | `.github/workflows/deploy.yml` |
+
+#### ⚡ 사용 방법
+
+**1. 코드 작성 및 Push** (CI 자동 실행):
 ```bash
 git add .
 git commit -m "feat: 새 기능 추가"
 git push origin main
-# GitHub Actions가 자동으로 AWS EC2에 배포
+# → CI 자동 실행 (1-2분 소요)
+# → GitHub Actions에서 초록색 체크 확인 ✅
 ```
 
-**수동 배포** (EC2 서버에서):
-```bash
-ssh -i ~/path/to/key.pem ubuntu@YOUR_SERVER_IP
-cd /opt/knu-chatbot/CHATBOT-AI
-./scripts/deploy-manual.sh
+**2. 배포** (수동 실행):
+```
+GitHub → Actions → "CD (Deploy to AWS)" → Run workflow
+→ "deploy" 입력 → Run workflow 클릭
+→ 배포 시작! (2-3분 소요)
 ```
 
-#### 🔍 배포 확인
+**3. 배포 확인**:
 ```bash
-# 헬스체크
 curl http://YOUR_SERVER_IP:5000/health
-
-# 서버 상태
-./scripts/server-status.sh
-
-# 로그 확인
-./scripts/view-logs.sh app
 ```
+
+#### 🔧 유틸리티 스크립트
+
+- **수동 배포**: `./scripts/deploy-manual.sh` (EC2 서버에서 실행)
+- **서버 상태 확인**: `./scripts/server-status.sh`
+- **로그 확인**: `./scripts/view-logs.sh [app|mongodb|redis]`
+
+#### ⚠️ 중요: 배포 전 체크리스트
+
+- [ ] AWS EC2 서버 실행 중
+- [ ] Docker 설치 완료
+- [ ] GitHub Secrets 6개 설정 완료
+  - `AWS_EC2_HOST`, `AWS_EC2_USERNAME`, `AWS_EC2_SSH_KEY`
+  - `UPSTAGE_API_KEY`, `PINECONE_API_KEY`, `PINECONE_INDEX_NAME`
+- [ ] SSH 접속 테스트 성공
+
+**설정 안 되었다면?** → `AWS_CICD_COMPLETE_GUIDE.md` 참고!

@@ -1,11 +1,29 @@
-name: Deploy to AWS EC2
+name: CD (Deploy to AWS)
 
-# 이 워크플로우가 언제 실행될지 정의
+# ⚠️ 이 워크플로우는 수동으로만 실행됩니다!
+# 자동 배포를 원하면 아래 주석을 해제하세요.
 on:
-  push:
-    branches:
-      - main  # main 브랜치에 push될 때마다 실행
-  workflow_dispatch:  # 수동으로도 실행 가능
+  workflow_dispatch:  # 수동 실행 전용 (Actions 탭에서 버튼 클릭)
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+      confirm:
+        description: 'Type "deploy" to confirm'
+        required: true
+        default: ''
+
+  # 자동 배포를 원하면 아래 주석 해제
+  # push:
+  #   branches:
+  #     - main
+  #   tags:
+  #     - 'v*.*.*'  # v1.0.0 같은 태그에서만 배포
 
 # 환경변수 정의
 env:
@@ -17,6 +35,27 @@ jobs:
     runs-on: ubuntu-latest  # GitHub Actions 실행 환경
 
     steps:
+      # Step 0: 배포 확인 (안전장치)
+      - name: ⚠️ Confirm deployment
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "deploy" ]; then
+            echo "========================================="
+            echo "❌ Deployment cancelled!"
+            echo "========================================="
+            echo "You must type 'deploy' to confirm deployment."
+            echo "You typed: '${{ github.event.inputs.confirm }}'"
+            exit 1
+          fi
+
+          echo "========================================="
+          echo "✅ Deployment confirmed!"
+          echo "========================================="
+          echo "Environment: ${{ github.event.inputs.environment }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "========================================="
+
       # Step 1: 코드 체크아웃
       - name: 📥 Checkout code
         uses: actions/checkout@v4
