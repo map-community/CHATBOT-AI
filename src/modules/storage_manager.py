@@ -59,11 +59,19 @@ class StorageManager:
         self._mongo_collection = None
         self._redis_client = None
 
-        # 캐시 변수 초기화
+        # 캐시 변수 초기화 (기본 필드)
         self.cached_titles = []
         self.cached_texts = []
         self.cached_urls = []
         self.cached_dates = []
+
+        # 멀티모달 RAG를 위한 추가 캐시 필드
+        self.cached_htmls = []  # HTML 구조 데이터 (표, 레이아웃 등)
+        self.cached_content_types = []  # text, image, attachment
+        self.cached_sources = []  # original_post, image_ocr, document_parse
+        self.cached_image_urls = []  # 이미지 URL
+        self.cached_attachment_urls = []  # 첨부파일 URL
+        self.cached_attachment_types = []  # pdf, hwp, docx 등
 
         # Retriever 인스턴스 (캐시 초기화 후 생성됨)
         self._bm25_retriever = None

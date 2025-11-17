@@ -309,7 +309,7 @@ class DocumentProcessor:
                 # MongoDB에 처리 완료 표시
                 self.mark_as_processed(title, first_image)
 
-                # 성공 로그
+                # 성공 로그 (부분 실패 정보 포함)
                 logger.log_post_success(
                     category=category,
                     title=title,
@@ -317,7 +317,15 @@ class DocumentProcessor:
                     text_length=text_length,
                     image_count=len(image_list) if image_list else 0,
                     attachment_count=len(attachment_list) if attachment_list else 0,
-                    embedding_items=len(items)
+                    embedding_items=len(items),
+                    failures=failures  # 부분 실패 정보 전달
+                )
+
+                # 저장될 데이터 구조 상세 로그
+                logger.log_embedding_item_structure(
+                    title=title,
+                    embedding_items=items,
+                    show_sample=True
                 )
 
             except Exception as e:

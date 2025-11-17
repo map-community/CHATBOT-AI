@@ -35,6 +35,10 @@
     "content_type": "text",  # text, image, attachment
     "source": "original_post",  # original_post, image_ocr, document_parse
 
+    # 구조화 데이터 (Document Parse API 사용 시)
+    "html": "<table><tr><td>...</td></tr></table>",  # HTML 구조 (표, 레이아웃 등)
+    "html_available": True,  # HTML 데이터 존재 여부
+
     # 위치 정보 (텍스트인 경우)
     "chunk_index": 0,
     "total_chunks": 5,
@@ -62,18 +66,30 @@
    }
    ```
 
-2. **multimodal_cache**: Upstage API 처리 결과 캐시
+2. **multimodal_cache**: Upstage API 처리 결과 캐시 (HTML 구조 포함)
    ```python
+   # 문서 파일 (PDF, DOCX, HWP 등)
    {
        "url": "https://cse.knu.ac.kr/file.pdf",
        "type": "pdf",
        "text": "파싱된 텍스트...",
-       # 또는
+       "html": "<table><tr><td>...</td></tr></table>",  # HTML 구조 (표, 레이아웃)
+       "elements": [...]  # 문서 요소 정보
+   }
+
+   # 이미지 파일
+   {
        "url": "https://cse.knu.ac.kr/image.jpg",
        "ocr_text": "추출된 텍스트...",
-       "description": ""
+       "ocr_html": "<table><tr><td>...</td></tr></table>",  # 이미지 내 표 등의 HTML 구조
+       "ocr_elements": [...],  # 이미지 요소 정보
+       "description": "",
+       "file_hash": "a1b2c3d4..."  # 파일 해시 (중복 감지용)
    }
    ```
+
+   **중요**: Document Parse API는 비싼 API($0.01/페이지)이지만 HTML 구조를 제공합니다.
+   이 HTML 구조는 표, 레이아웃 등의 맥락을 보존하여 RAG 품질을 향상시킵니다.
 
 3. **crawl_state**: 증분 크롤링 상태 관리
    ```python
@@ -162,22 +178,26 @@ python run_crawler.py
   ↓
 ┌─────────────────────────────────┐
 │ 2. 이미지                         │
-│    - Upstage OCR API             │
+│    - Upstage Document Parse API  │
+│      (이미지도 document-parse 사용)│
+│    - 파일 해시 기반 중복 감지     │
 │    - MongoDB 캐시 확인           │
+│    - text + html + elements 저장 │
 │    - category: notice            │
 │    - content_type: image         │
 │    - source: image_ocr           │
-│    - image_url 저장              │
+│    - image_url, html 저장        │
 └─────────────────────────────────┘
   ↓
 ┌─────────────────────────────────┐
 │ 3. 첨부파일 (PDF, HWP, etc)       │
 │    - Upstage Document Parse API  │
 │    - MongoDB 캐시 확인           │
+│    - text + html + elements 저장 │
 │    - category: notice            │
 │    - content_type: attachment    │
 │    - source: document_parse      │
-│    - attachment_url, type 저장   │
+│    - attachment_url, type, html 저장│
 └─────────────────────────────────┘
   ↓
 Upstage Embedding API
@@ -202,6 +222,27 @@ Pinecone 벡터 DB 저장
 ### 4. 멀티모달 결과 통합
 - 같은 게시글의 텍스트 + 이미지 OCR + 첨부파일을 함께 제공
 - `title`과 `url`로 그룹핑 가능
+
+### 5. HTML 구조 활용 (NEW!)
+- **표(Table) 맥락 보존**: `html` 필드에 표 구조가 HTML로 저장됨
+- **레이아웃 정보**: 문서의 시각적 구조 (헤더, 리스트, 중첩 등) 보존
+- **RAG 응답 품질 향상**: AI가 표 데이터를 이해하고 정확한 답변 생성 가능
+- **비용 정당화**: Document Parse API($0.01/페이지)의 비용이 HTML 구조로 정당화
+- **활용 방법**:
+  ```python
+  # HTML 구조가 있는 문서만 필터링
+  filter = {"html_available": True}
+
+  # 검색 결과에서 HTML 구조 활용
+  if result["html"]:
+      # 표 형식 데이터를 파싱하여 구조화된 답변 생성
+      parse_html_table(result["html"])
+  ```
+
+### 6. 중복 이미지 감지
+- **파일 해시 기반**: 동일한 이미지가 여러 게시글에 사용되어도 한 번만 OCR 처리
+- **비용 절감**: 중복 OCR API 호출 방지
+- **캐시 효율**: MongoDB의 `file_hash` 인덱스로 빠른 중복 검색
 
 ## 주요 개선 파일
 
@@ -322,6 +363,6 @@ dt2 = parse_date_change_korea_time("작성일25-10-17 15:48")
 
 ---
 
-**작성일**: 2025-01-15
-**최종 수정**: 2025-01-15
+**작성일**: 2025-11-17
+**최종 수정**: 2025-11-17
 **버전**: 1.1 (멀티모달 RAG + ISO 8601 날짜 형식)

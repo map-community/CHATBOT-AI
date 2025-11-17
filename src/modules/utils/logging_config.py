@@ -5,9 +5,10 @@
 """
 import logging
 import sys
+import json
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List, Dict
 
 
 class CrawlerLogger:
@@ -71,6 +72,9 @@ class CrawlerLogger:
             'professor': {'total': 0, 'success': 0, 'failure': 0, 'skipped': 0}
         }
 
+        # 부분 실패 게시글 추적
+        self.partial_failures: List[Dict] = []
+
         self.logger.info("="*80)
         self.logger.info(f"📝 로그 파일 생성: {self.log_file}")
         self.logger.info("="*80)
@@ -107,10 +111,11 @@ class CrawlerLogger:
         text_length: int = 0,
         image_count: int = 0,
         attachment_count: int = 0,
-        embedding_items: int = 0
+        embedding_items: int = 0,
+        failures: Dict = None
     ):
         """
-        게시글 처리 성공 로그
+        게시글 처리 성공 로그 (부분 실패 포함)
 
         Args:
             category: 카테고리 (notice, job, seminar, professor)
@@ -120,6 +125,7 @@ class CrawlerLogger:
             image_count: 이미지 개수
             attachment_count: 첨부파일 개수
             embedding_items: 임베딩 아이템 개수
+            failures: 실패 정보 딕셔너리 (image_failed, attachment_failed 등)
         """
         self.stats[category]['success'] += 1
         self.stats[category]['total'] += 1
@@ -139,6 +145,49 @@ class CrawlerLogger:
         self.logger.info(f"✅ 성공: {title}")
         self.logger.info(f"   URL: {url}")
         self.logger.info(f"   처리 내용: {details_str}")
+
+        # 부분 실패 추적
+        if failures:
+            has_partial_failure = False
+            failure_details = []
+
+            if failures.get("image_failed"):
+                has_partial_failure = True
+                failed_count = len(failures["image_failed"])
+                failure_details.append(f"이미지 OCR 실패 {failed_count}개")
+                self.logger.warning(f"   ⚠️  이미지 OCR 실패: {failed_count}개")
+
+            if failures.get("attachment_failed"):
+                has_partial_failure = True
+                failed_count = len(failures["attachment_failed"])
+                failure_details.append(f"첨부파일 파싱 실패 {failed_count}개")
+                self.logger.warning(f"   ⚠️  첨부파일 파싱 실패: {failed_count}개")
+
+            if failures.get("image_unsupported"):
+                unsupported_count = len(failures["image_unsupported"])
+                failure_details.append(f"이미지 지원안함 {unsupported_count}개")
+                self.logger.warning(f"   ℹ️  지원하지 않는 이미지: {unsupported_count}개")
+
+            if failures.get("attachment_unsupported"):
+                unsupported_count = len(failures["attachment_unsupported"])
+                failure_details.append(f"첨부파일 지원안함 {unsupported_count}개")
+                self.logger.warning(f"   ℹ️  지원하지 않는 첨부파일: {unsupported_count}개")
+
+            # 부분 실패 기록
+            if has_partial_failure:
+                self.partial_failures.append({
+                    "category": category,
+                    "title": title,
+                    "url": url,
+                    "text_length": text_length,
+                    "image_total": image_count,
+                    "attachment_total": attachment_count,
+                    "image_failed": failures.get("image_failed", []),
+                    "attachment_failed": failures.get("attachment_failed", []),
+                    "image_unsupported": failures.get("image_unsupported", []),
+                    "attachment_unsupported": failures.get("attachment_unsupported", []),
+                    "failure_summary": " / ".join(failure_details)
+                })
 
     def log_post_failure(
         self,
@@ -198,6 +247,104 @@ class CrawlerLogger:
         if detail:
             self.logger.info(f"      상세: {detail}")
 
+    def log_embedding_item_structure(
+        self,
+        title: str,
+        embedding_items: list,
+        show_sample: bool = True
+    ):
+        """
+        임베딩 아이템 구조 로그 (MongoDB 캐시 및 Pinecone 저장 데이터)
+
+        Args:
+            title: 게시글 제목
+            embedding_items: [(text, metadata), ...] 리스트
+            show_sample: 첫 번째 아이템 샘플 출력 여부
+        """
+        self.logger.info(f"\n   📦 저장될 데이터 구조 ({len(embedding_items)}개 임베딩 아이템):")
+
+        # 콘텐츠 타입별 개수 집계
+        content_types = {}
+        html_count = 0
+
+        for _, metadata in embedding_items:
+            content_type = metadata.get('content_type', 'unknown')
+            content_types[content_type] = content_types.get(content_type, 0) + 1
+
+            # HTML 구조 존재 여부 확인
+            if metadata.get('html_available') or metadata.get('html'):
+                html_count += 1
+
+        # 타입별 개수 출력
+        for content_type, count in content_types.items():
+            self.logger.info(f"      - {content_type}: {count}개")
+
+        # HTML 구조 저장 여부
+        if html_count > 0:
+            self.logger.info(f"      - HTML 구조 보존: {html_count}개 (표/레이아웃 맥락 포함) ✅")
+
+        # 샘플 데이터 출력
+        if show_sample and embedding_items:
+            text, metadata = embedding_items[0]
+            self.logger.info(f"\n   📋 저장 데이터 샘플 (첫 번째 아이템):")
+            self.logger.info(f"      제목: {metadata.get('title', 'N/A')}")
+            self.logger.info(f"      타입: {metadata.get('content_type', 'N/A')}")
+            self.logger.info(f"      소스: {metadata.get('source', 'N/A')}")
+            self.logger.info(f"      텍스트 길이: {len(text)}자")
+
+            # HTML 필드 상세 정보
+            html_data = metadata.get('html', '')
+            if html_data:
+                self.logger.info(f"      HTML 구조: ✅ 있음 ({len(html_data)}자)")
+            else:
+                self.logger.info(f"      HTML 구조: ❌ 없음 (평문 텍스트만)")
+
+            # 텍스트 미리보기
+            preview = text[:100].replace('\n', ' ')
+            if len(text) > 100:
+                preview += "..."
+            self.logger.info(f"      텍스트 미리보기: {preview}")
+
+    def log_pinecone_metadata_sample(
+        self,
+        vector_id: str,
+        metadata: dict
+    ):
+        """
+        Pinecone 업로드 메타데이터 샘플 로그
+
+        Args:
+            vector_id: 벡터 ID
+            metadata: Pinecone 메타데이터
+        """
+        self.logger.info(f"\n   🔍 Pinecone 메타데이터 샘플 (벡터 ID: {vector_id}):")
+        self.logger.info(f"      제목: {metadata.get('title', 'N/A')}")
+        self.logger.info(f"      카테고리: {metadata.get('category', 'N/A')}")
+        self.logger.info(f"      콘텐츠 타입: {metadata.get('content_type', 'N/A')}")
+        self.logger.info(f"      날짜: {metadata.get('date', 'N/A')}")
+        self.logger.info(f"      URL: {metadata.get('url', 'N/A')}")
+
+        # 텍스트 필드
+        text_data = metadata.get('text', '')
+        self.logger.info(f"      텍스트 길이: {len(text_data)}자")
+
+        # HTML 필드 (중요!)
+        html_data = metadata.get('html', '')
+        if html_data:
+            self.logger.info(f"      HTML 구조: ✅ 저장됨 ({len(html_data)}자) - 표/레이아웃 맥락 포함")
+        else:
+            self.logger.info(f"      HTML 구조: ❌ 없음")
+
+        # html_available 플래그
+        if metadata.get('html_available'):
+            self.logger.info(f"      HTML 활용 가능: ✅")
+
+        # 이미지/첨부파일 URL
+        if metadata.get('image_url'):
+            self.logger.info(f"      이미지 URL: {metadata.get('image_url', '')[:50]}...")
+        if metadata.get('attachment_url'):
+            self.logger.info(f"      첨부파일 URL: {metadata.get('attachment_url', '')[:50]}...")
+
     def print_summary(self):
         """최종 통계 출력"""
         self.logger.info("\n" + "="*80)
@@ -229,6 +376,71 @@ class CrawlerLogger:
         self.logger.info(f"  실패: {failure_all}개")
         self.logger.info(f"  스킵: {skipped_all}개")
         self.logger.info("="*80)
+
+        # 부분 실패 게시글 통계 및 로그 파일 생성
+        if self.partial_failures:
+            self.logger.info(f"\n⚠️  부분 실패 게시글: {len(self.partial_failures)}개")
+            self.logger.info("   (이미지/첨부파일 일부만 처리 성공)")
+
+            # 부분 실패 로그 파일 생성
+            partial_failure_file = self.log_dir / f"partial_failures_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json"
+
+            # 상세 정보 구성
+            partial_failure_report = {
+                "생성_시각": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                "총_부분실패_게시글_수": len(self.partial_failures),
+                "게시글_목록": []
+            }
+
+            for failure in self.partial_failures:
+                # 실패 상세 정보
+                failure_detail = {
+                    "제목": failure["title"],
+                    "URL": failure["url"],
+                    "카테고리": failure["category"],
+                    "텍스트_길이": failure["text_length"],
+                    "이미지": {
+                        "전체": failure["image_total"],
+                        "실패": len(failure["image_failed"]),
+                        "실패_목록": [
+                            {
+                                "URL": item.get("url", "N/A"),
+                                "사유": item.get("reason", "알 수 없음")
+                            }
+                            for item in failure["image_failed"]
+                        ]
+                    },
+                    "첨부파일": {
+                        "전체": failure["attachment_total"],
+                        "실패": len(failure["attachment_failed"]),
+                        "실패_목록": [
+                            {
+                                "URL": item.get("url", "N/A"),
+                                "사유": item.get("reason", "알 수 없음")
+                            }
+                            for item in failure["attachment_failed"]
+                        ]
+                    },
+                    "요약": failure["failure_summary"]
+                }
+
+                partial_failure_report["게시글_목록"].append(failure_detail)
+
+            # JSON 파일로 저장
+            with open(partial_failure_file, 'w', encoding='utf-8') as f:
+                json.dump(partial_failure_report, f, ensure_ascii=False, indent=2)
+
+            self.logger.info(f"   📄 부분 실패 로그 파일: {partial_failure_file}")
+
+            # 콘솔에 요약 출력
+            self.logger.info("\n   부분 실패 게시글 목록:")
+            for i, failure in enumerate(self.partial_failures[:5], 1):  # 최대 5개만 표시
+                self.logger.info(f"   {i}. {failure['title']}")
+                self.logger.info(f"      URL: {failure['url']}")
+                self.logger.info(f"      실패: {failure['failure_summary']}")
+
+            if len(self.partial_failures) > 5:
+                self.logger.info(f"   ... 외 {len(self.partial_failures) - 5}개 (상세 내용은 로그 파일 참조)")
 
         self.logger.info(f"\n✅ 로그 파일 저장 완료: {self.log_file}\n")
 

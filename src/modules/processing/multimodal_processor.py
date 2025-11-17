@@ -7,6 +7,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import logging
+import hashlib
+import requests
 from typing import List, Tuple, Dict, Optional
 from pymongo import MongoClient
 from config import CrawlerConfig
@@ -43,20 +45,24 @@ class MultimodalContent:
         if text and text.strip():
             self.text_chunks.append(text)
 
-    def add_image_content(self, url: str, ocr_text: str = "", description: str = ""):
-        """이미지 콘텐츠 추가"""
+    def add_image_content(self, url: str, ocr_text: str = "", ocr_html: str = "", ocr_elements: List = None, description: str = ""):
+        """이미지 콘텐츠 추가 (HTML 구조 포함)"""
         self.image_contents.append({
             "url": url,
             "ocr_text": ocr_text,
+            "ocr_html": ocr_html,  # HTML 구조 (표, 레이아웃 등)
+            "ocr_elements": ocr_elements or [],  # 요소 정보
             "description": description
         })
 
-    def add_attachment_content(self, url: str, file_type: str, text: str):
-        """첨부파일 콘텐츠 추가"""
+    def add_attachment_content(self, url: str, file_type: str, text: str, html: str = "", elements: List = None):
+        """첨부파일 콘텐츠 추가 (HTML 구조 포함)"""
         self.attachment_contents.append({
             "url": url,
             "type": file_type,
-            "text": text
+            "text": text,
+            "html": html,  # HTML 구조 (표, 레이아웃 등)
+            "elements": elements or []  # 요소 정보
         })
 
     def to_embedding_items(self) -> List[Tuple[str, Dict]]:
@@ -103,7 +109,9 @@ class MultimodalContent:
                         "content_type": "image",
                         "image_url": img["url"],
                         "image_index": idx,
-                        "source": "image_ocr"  # OCR 결과
+                        "source": "image_ocr",  # OCR 결과
+                        "html": img.get("ocr_html", ""),  # HTML 구조 보존 (표, 레이아웃)
+                        "html_available": bool(img.get("ocr_html"))  # HTML 존재 여부
                     }
                 ))
 
@@ -120,7 +128,9 @@ class MultimodalContent:
                         "attachment_url": att["url"],
                         "attachment_type": att["type"],
                         "attachment_index": idx,
-                        "source": "document_parse"  # Document Parse 결과
+                        "source": "document_parse",  # Document Parse 결과
+                        "html": att.get("html", ""),  # HTML 구조 보존 (표, 레이아웃)
+                        "html_available": bool(att.get("html"))  # HTML 존재 여부
                     }
                 ))
 
@@ -165,6 +175,7 @@ class MultimodalProcessor:
 
         # 캐시 인덱스 생성
         self.cache_collection.create_index("url", unique=True)
+        self.cache_collection.create_index("file_hash")  # 파일 해시 인덱스 (중복 이미지 감지용)
 
         logger.info(f"MultimodalProcessor 초기화 - 이미지: {self.enable_image}, 첨부파일: {self.enable_attachment}")
 
@@ -194,7 +205,7 @@ class MultimodalProcessor:
 
         for img_url in image_urls:
             try:
-                # 캐시 확인
+                # 1. URL 기반 캐시 확인 (빠른 경로)
                 cached = self._get_from_cache(img_url)
                 if cached:
                     # 캐시에서 가져온 데이터에 url 키 추가 (캐시 메서드에서 제거되므로)
@@ -205,28 +216,75 @@ class MultimodalProcessor:
                         successful.append(cached)
                         if logger:
                             logger.log_multimodal_detail(
-                                "이미지 OCR (캐시)",
+                                "이미지 OCR (URL 캐시)",
                                 img_url[:50] + "..." if len(img_url) > 50 else img_url,
                                 success=True,
                                 detail=f"{len(cached.get('ocr_text', ''))}자"
                             )
                     continue
 
-                # Upstage OCR API 호출
+                # 2. 파일 다운로드 및 해시 계산
+                file_data = self._download_file(img_url)
+                if not file_data:
+                    failed.append({
+                        "url": img_url,
+                        "reason": "파일 다운로드 실패"
+                    })
+                    if logger:
+                        url_display = img_url[:50] + "..." if len(img_url) > 50 else img_url
+                        logger.log_multimodal_detail(
+                            "이미지 OCR",
+                            url_display,
+                            success=False,
+                            detail="다운로드 실패"
+                        )
+                    continue
+
+                file_hash = self._calculate_file_hash(file_data)
+
+                # 3. 파일 해시 기반 캐시 확인 (중복 이미지 감지)
+                cached_by_hash = self._get_from_cache_by_file_hash(file_hash)
+                if cached_by_hash:
+                    # 중복 이미지 발견! OCR 생략
+                    content = {
+                        "url": img_url,
+                        "ocr_text": cached_by_hash.get("ocr_text", ""),
+                        "description": cached_by_hash.get("description", "")
+                    }
+                    successful.append(content)
+                    # 현재 URL도 캐시에 추가 (빠른 조회용)
+                    self._save_to_cache(img_url, content, file_hash=file_hash)
+
+                    if logger:
+                        url_display = img_url[:50] + "..." if len(img_url) > 50 else img_url
+                        logger.log_multimodal_detail(
+                            "이미지 OCR (파일 해시 캐시)",
+                            url_display,
+                            success=True,
+                            detail=f"중복 이미지 - {len(content['ocr_text'])}자"
+                        )
+                    else:
+                        # 로거 없을 때 콘솔 출력
+                        print(f"ℹ️  중복 이미지 감지 (파일 해시): OCR 생략 - {len(content['ocr_text'])}자")
+                    continue
+
+                # 4. 새 이미지 → Upstage OCR API 호출
                 ocr_result = self.upstage_client.extract_text_from_image_url(img_url)
 
                 if ocr_result:
                     text_length = len(ocr_result.get("text", ""))
 
                     if text_length > 0:
-                        # 성공: 텍스트 추출 완료
+                        # 성공: 텍스트 추출 완료 (HTML 구조도 함께 저장)
                         content = {
                             "url": img_url,
                             "ocr_text": ocr_result.get("text", ""),
+                            "ocr_html": ocr_result.get("html", ""),  # HTML 구조 보존 (표, 레이아웃 등)
+                            "ocr_elements": ocr_result.get("elements", []),  # 요소 정보
                             "description": ""
                         }
                         successful.append(content)
-                        self._save_to_cache(img_url, content)
+                        self._save_to_cache(img_url, content, file_hash=file_hash)
 
                         if logger:
                             url_display = img_url[:50] + "..." if len(img_url) > 50 else img_url
@@ -299,7 +357,10 @@ class MultimodalProcessor:
 
     def process_attachments(self, attachment_urls: List[str], logger=None, category: str = "notice") -> Dict:
         """
-        첨부파일 리스트 처리 (Document Parse)
+        첨부파일 리스트 처리 (Document Parse 또는 OCR)
+
+        이미지 확장자 첨부파일은 OCR로 처리하고,
+        문서 확장자는 Document Parse로 처리합니다.
 
         Args:
             attachment_urls: 첨부파일 URL 리스트
@@ -322,6 +383,152 @@ class MultimodalProcessor:
         unsupported = []
 
         for att_url in attachment_urls:
+            # 이미지 확장자 확인 (대소문자 무관)
+            is_image = self.upstage_client.is_image_url(att_url)
+
+            # 이미지 첨부파일은 OCR로 처리
+            if is_image:
+                # 이미지로 처리 (process_images 로직과 동일)
+                try:
+                    # 1. URL 기반 캐시 확인
+                    cached = self._get_from_cache(att_url)
+                    if cached:
+                        cached["url"] = att_url
+                        if cached.get('text') or cached.get('ocr_text'):
+                            # 이미지는 ocr_text 키 사용, 첨부파일은 text 키 사용
+                            text = cached.get('text') or cached.get('ocr_text', '')
+                            content = {
+                                "url": att_url,
+                                "type": "image",
+                                "text": text
+                            }
+                            successful.append(content)
+                            if logger:
+                                url_display = att_url[:50] + "..." if len(att_url) > 50 else att_url
+                                logger.log_multimodal_detail(
+                                    "이미지 첨부 OCR (URL 캐시)",
+                                    url_display,
+                                    success=True,
+                                    detail=f"이미지 - {len(text)}자"
+                                )
+                        continue
+
+                    # 2. 파일 다운로드 및 해시 계산
+                    file_data = self._download_file(att_url)
+                    if not file_data:
+                        failed.append({
+                            "url": att_url,
+                            "reason": "파일 다운로드 실패"
+                        })
+                        if logger:
+                            url_display = att_url[:50] + "..." if len(att_url) > 50 else att_url
+                            logger.log_multimodal_detail(
+                                "이미지 첨부 OCR",
+                                url_display,
+                                success=False,
+                                detail="다운로드 실패"
+                            )
+                        continue
+
+                    file_hash = self._calculate_file_hash(file_data)
+
+                    # 3. 파일 해시 기반 캐시 확인 (중복 이미지 감지)
+                    cached_by_hash = self._get_from_cache_by_file_hash(file_hash)
+                    if cached_by_hash:
+                        # 중복 이미지 발견! OCR 생략
+                        text = cached_by_hash.get("ocr_text") or cached_by_hash.get("text", "")
+                        content = {
+                            "url": att_url,
+                            "type": "image",
+                            "text": text
+                        }
+                        successful.append(content)
+                        # 현재 URL도 캐시에 추가
+                        self._save_to_cache(att_url, {"ocr_text": text, "type": "image"}, file_hash=file_hash)
+
+                        if logger:
+                            url_display = att_url[:50] + "..." if len(att_url) > 50 else att_url
+                            logger.log_multimodal_detail(
+                                "이미지 첨부 OCR (파일 해시 캐시)",
+                                url_display,
+                                success=True,
+                                detail=f"중복 이미지 - {len(text)}자"
+                            )
+                        else:
+                            print(f"ℹ️  중복 이미지 감지 (파일 해시): OCR 생략 - {len(text)}자")
+                        continue
+
+                    # 4. 새 이미지 → OCR API 호출
+                    ocr_result = self.upstage_client.extract_text_from_image_url(att_url)
+
+                    if ocr_result and ocr_result.get("text"):
+                        text = ocr_result.get("text", "")
+                        html = ocr_result.get("html", "")
+                        elements = ocr_result.get("elements", [])
+
+                        content = {
+                            "url": att_url,
+                            "type": "image",
+                            "text": text,
+                            "html": html,  # HTML 구조 보존 (표, 레이아웃 등)
+                            "elements": elements  # 요소 정보
+                        }
+                        successful.append(content)
+                        self._save_to_cache(att_url, {
+                            "ocr_text": text,
+                            "ocr_html": html,
+                            "ocr_elements": elements,
+                            "type": "image"
+                        }, file_hash=file_hash)
+
+                        if logger:
+                            url_display = att_url[:50] + "..." if len(att_url) > 50 else att_url
+                            logger.log_multimodal_detail(
+                                "이미지 첨부 OCR",
+                                url_display,
+                                success=True,
+                                detail=f"이미지 - {len(text)}자 추출"
+                            )
+                    else:
+                        failed.append({
+                            "url": att_url,
+                            "reason": "OCR 텍스트 추출 실패"
+                        })
+                        if logger:
+                            url_display = att_url[:50] + "..." if len(att_url) > 50 else att_url
+                            logger.log_multimodal_detail(
+                                "이미지 첨부 OCR",
+                                url_display,
+                                success=False,
+                                detail="텍스트 없음"
+                            )
+
+                except Exception as e:
+                    error_msg = str(e)
+                    if "지원하지 않는" in error_msg or "unsupported" in error_msg.lower():
+                        unsupported.append({
+                            "url": att_url,
+                            "reason": error_msg
+                        })
+                    else:
+                        failed.append({
+                            "url": att_url,
+                            "reason": error_msg
+                        })
+
+                    if logger:
+                        url_display = att_url[:50] + "..." if len(att_url) > 50 else att_url
+                        logger.log_multimodal_detail(
+                            "이미지 첨부 OCR",
+                            url_display,
+                            success=False,
+                            detail=error_msg[:100]
+                        )
+
+                # 이미지 처리 완료, 다음 첨부파일로
+                continue
+
+            # 문서 파일 처리 (PDF, DOCX, HWP 등)
             try:
                 # 파일 타입 확인 (download.php 같은 동적 URL은 Content-Type으로 확인)
                 # is_document_url은 확장자 체크이므로 일단 시도
@@ -354,11 +561,13 @@ class MultimodalProcessor:
                     file_type = Path(att_url).suffix.lower()[1:] if Path(att_url).suffix else "unknown"
 
                     if text_length > 0:
-                        # 성공: 텍스트 추출 완료
+                        # 성공: 텍스트 추출 완료 (HTML 구조도 함께 저장)
                         content = {
                             "url": att_url,
                             "type": file_type,
-                            "text": parse_result.get("text", "")
+                            "text": parse_result.get("text", ""),
+                            "html": parse_result.get("html", ""),  # HTML 구조 보존 (표, 레이아웃 등)
+                            "elements": parse_result.get("elements", [])  # 요소 정보
                         }
                         successful.append(content)
                         self._save_to_cache(att_url, content)
@@ -432,6 +641,93 @@ class MultimodalProcessor:
             "total": len(attachment_urls)
         }
 
+    def _calculate_file_hash(self, file_data: bytes) -> str:
+        """
+        파일 바이너리 데이터의 MD5 해시 계산
+
+        Args:
+            file_data: 파일 바이너리 데이터
+
+        Returns:
+            MD5 해시 문자열
+        """
+        return hashlib.md5(file_data).hexdigest()
+
+    def _download_file(self, url: str) -> Optional[bytes]:
+        """
+        URL에서 파일 다운로드
+
+        Args:
+            url: 다운로드할 URL (Data URI도 지원)
+
+        Returns:
+            파일 바이너리 데이터, 실패 시 None
+        """
+        try:
+            # Data URI 처리
+            if url.startswith('data:'):
+                import base64
+                import re
+
+                # data:image/png;base64,iVBORw0KGgo... 형식 파싱
+                if ';base64,' in url:
+                    parts = url.split(';base64,')
+                    if len(parts) == 2:
+                        base64_data = parts[1]
+                        return base64.b64decode(base64_data)
+                return None
+
+            # HTTP/HTTPS URL 처리
+            # view_image.php 같은 프록시 URL을 실제 이미지 URL로 변환
+            actual_url = url
+            from urllib.parse import urlparse, parse_qs, unquote as url_unquote
+
+            parsed = urlparse(url)
+
+            # view_image.php?fn=... 처리
+            if 'view_image.php' in parsed.path:
+                query_params = parse_qs(parsed.query)
+                if 'fn' in query_params:
+                    fn_value = query_params['fn'][0]
+                    decoded_path = url_unquote(fn_value)  # /data/editor/2511/...png
+
+                    # 절대 URL로 변환
+                    base_url = f"{parsed.scheme}://{parsed.netloc}"
+                    actual_url = f"{base_url}{decoded_path}"
+                    logger.info(f"🔍 프록시 URL 변환: view_image.php → {decoded_path}")
+
+            response = requests.get(actual_url, timeout=30, allow_redirects=True)
+            if response.status_code == 200:
+                return response.content
+            return None
+
+        except Exception as e:
+            logger.warning(f"파일 다운로드 오류 ({url[:50]}...): {e}")
+            return None
+
+    def _get_from_cache_by_file_hash(self, file_hash: str) -> Optional[Dict]:
+        """
+        파일 해시로 캐시 조회 (중복 이미지 감지)
+
+        Args:
+            file_hash: 파일 MD5 해시
+
+        Returns:
+            캐시된 처리 결과 또는 None
+        """
+        try:
+            cached = self.cache_collection.find_one({"file_hash": file_hash})
+            if cached:
+                # MongoDB _id, url, file_hash 제거
+                cached.pop("_id", None)
+                cached.pop("url", None)
+                cached.pop("file_hash", None)
+                return cached
+        except Exception as e:
+            logger.warning(f"파일 해시 캐시 조회 오류: {e}")
+
+        return None
+
     def _get_from_cache(self, url: str) -> Optional[Dict]:
         """캐시에서 처리 결과 조회"""
         try:
@@ -440,16 +736,27 @@ class MultimodalProcessor:
                 # MongoDB _id 제거
                 cached.pop("_id", None)
                 cached.pop("url", None)
+                cached.pop("file_hash", None)
                 return cached
         except Exception as e:
             logger.warning(f"캐시 조회 오류: {e}")
 
         return None
 
-    def _save_to_cache(self, url: str, content: Dict):
-        """처리 결과를 캐시에 저장"""
+    def _save_to_cache(self, url: str, content: Dict, file_hash: Optional[str] = None):
+        """
+        처리 결과를 캐시에 저장
+
+        Args:
+            url: 원본 URL
+            content: 처리 결과 (ocr_text, text 등)
+            file_hash: 파일 해시 (선택)
+        """
         try:
             cache_data = {"url": url, **content}
+            if file_hash:
+                cache_data["file_hash"] = file_hash
+
             self.cache_collection.update_one(
                 {"url": url},
                 {"$set": cache_data},
@@ -502,11 +809,13 @@ class MultimodalProcessor:
         # 2. 이미지 처리 및 추가
         if image_urls:
             image_result = self.process_images(image_urls, logger=logger, category=category)
-            # 성공한 이미지만 추가
+            # 성공한 이미지만 추가 (HTML 구조 포함)
             for img_content in image_result["successful"]:
                 content.add_image_content(
                     url=img_content["url"],
                     ocr_text=img_content.get("ocr_text", ""),
+                    ocr_html=img_content.get("ocr_html", ""),  # HTML 구조
+                    ocr_elements=img_content.get("ocr_elements", []),  # 요소 정보
                     description=img_content.get("description", "")
                 )
             # 실패 정보 저장
@@ -516,12 +825,14 @@ class MultimodalProcessor:
         # 3. 첨부파일 처리 및 추가
         if attachment_urls:
             attachment_result = self.process_attachments(attachment_urls, logger=logger, category=category)
-            # 성공한 첨부파일만 추가
+            # 성공한 첨부파일만 추가 (HTML 구조 포함)
             for att_content in attachment_result["successful"]:
                 content.add_attachment_content(
                     url=att_content["url"],
                     file_type=att_content["type"],
-                    text=att_content["text"]
+                    text=att_content["text"],
+                    html=att_content.get("html", ""),  # HTML 구조
+                    elements=att_content.get("elements", [])  # 요소 정보
                 )
             # 실패 정보 저장
             failures["attachment_failed"] = attachment_result["failed"]

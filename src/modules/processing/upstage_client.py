@@ -140,12 +140,38 @@ class UpstageClient:
                         elif regular_filename:
                             filename = regular_filename.strip('"\'')
 
-                # 2. URL 경로에서 추출 (쿼리 파라미터 제거!)
+                # 2. URL 경로에서 추출 (쿼리 파라미터에서 실제 파일명 추출)
                 if not filename:
-                    filename = Path(url).name
-                    # 쿼리 파라미터 제거 (download.php?... → download.php)
-                    if '?' in filename:
-                        filename = filename.split('?')[0]
+                    from urllib.parse import urlparse, parse_qs, unquote
+
+                    parsed_url = urlparse(url)
+                    query_params = parse_qs(parsed_url.query)
+
+                    # download.php?..., view_image.php?fn=... 같은 프록시 URL 처리
+                    # 우선순위: fn > file > 경로
+                    actual_filename = None
+
+                    if 'fn' in query_params:
+                        # fn 파라미터에서 실제 파일명 추출 (view_image.php)
+                        fn_value = query_params['fn'][0]
+                        decoded_fn = unquote(fn_value)
+                        actual_filename = Path(decoded_fn).name
+                        logger.info(f"🔍 프록시 URL 감지 (fn) - 실제 파일명: {actual_filename}")
+                    elif 'file' in query_params:
+                        # file 파라미터에서 추출 (일부 다운로드 스크립트)
+                        file_value = query_params['file'][0]
+                        decoded_file = unquote(file_value)
+                        actual_filename = Path(decoded_file).name
+                        logger.info(f"🔍 프록시 URL 감지 (file) - 실제 파일명: {actual_filename}")
+
+                    if actual_filename:
+                        filename = actual_filename
+                    else:
+                        # 일반 URL: 경로에서 파일명 추출
+                        filename = Path(parsed_url.path).name
+                        # 쿼리 파라미터 제거
+                        if '?' in filename:
+                            filename = filename.split('?')[0]
 
                 # 3. Content-Type에서 확장자 유추 (최후의 수단)
                 if not filename or filename == 'download.php' or not Path(filename).suffix:
@@ -165,6 +191,71 @@ class UpstageClient:
 
                 logger.info(f"📄 최종 파일명: {filename}")
 
+                # 파일 확장자 확인
+                file_ext = Path(filename).suffix.lower()
+
+                # 이미지 파일인지 확인
+                supported_image_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/bmp', 'image/webp']
+                is_image = (
+                    any(t in content_type for t in supported_image_types) or
+                    file_ext in self.SUPPORTED_IMAGE_TYPES
+                )
+
+                # 이미지 파일이면 OCR로 자동 전환
+                if is_image:
+                    logger.info(f"📊 이미지 파일 감지 ({file_ext}) - OCR로 전환")
+
+                    # OCR API 호출 (이미 다운로드한 파일 사용)
+                    files = {
+                        "document": (filename, file_response.content)
+                    }
+                    data_param = {
+                        "model": "document-parse",
+                        "ocr": "auto"
+                    }
+
+                    for attempt in range(self.max_retries):
+                        try:
+                            response = requests.post(
+                                self.API_URL,
+                                headers=self.headers,
+                                files=files,
+                                data=data_param,
+                                timeout=30
+                            )
+
+                            if response.status_code == 200:
+                                result = response.json()
+                                logger.info(f"📊 OCR API 응답 키: {list(result.keys())}")
+
+                                extracted_text = self._extract_text_from_response(result)
+
+                                if extracted_text:
+                                    logger.info(f"✅ OCR 성공 (이미지 첨부파일): {len(extracted_text)}자 추출")
+                                    return {
+                                        "text": extracted_text,
+                                        "html": result.get("content", {}).get("html", ""),
+                                        "full_html": result.get("content", {}).get("html", ""),
+                                        "elements": result.get("elements", []),
+                                        "source_url": url
+                                    }
+                                else:
+                                    logger.warning("⚠️  OCR 결과가 비어있음 (이미지 첨부파일)")
+                                    return None
+                            else:
+                                logger.warning(f"OCR API 오류: {response.status_code} - {response.text[:200]}")
+
+                        except Exception as e:
+                            if attempt < self.max_retries - 1:
+                                wait_time = 2 ** attempt
+                                logger.warning(f"재시도 {attempt + 1}/{self.max_retries} (대기: {wait_time}초)")
+                                time.sleep(wait_time)
+                            else:
+                                logger.error(f"OCR 실패 (이미지 첨부파일): {e}")
+                                raise
+
+                    return None
+
                 # Content-Type으로 문서 타입 확인
                 supported_types = [
                     'application/pdf',
@@ -178,8 +269,7 @@ class UpstageClient:
                     'application/haansofthwp',  # HWP
                 ]
 
-                # 파일 확장자로도 체크
-                file_ext = Path(filename).suffix.lower()
+                # 문서 타입 확인
                 is_supported = (
                     any(t in content_type for t in supported_types) or
                     file_ext in self.SUPPORTED_DOCUMENT_TYPES
@@ -275,7 +365,12 @@ class UpstageClient:
             실패 시 None
         """
         try:
-            logger.info(f"🖼️  OCR 시작: {url[:100]}...")
+            # Data URI는 짧게 로깅
+            if url.startswith('data:'):
+                log_url = "Data URI (Base64 이미지)"
+            else:
+                log_url = url[:100] + "..." if len(url) > 100 else url
+            logger.info(f"🖼️  OCR 시작: {log_url}")
 
             # Data URI Scheme 처리 (data:image/png;base64,...)
             if url.startswith('data:'):
@@ -384,11 +479,28 @@ class UpstageClient:
                     return None
 
             # 일반 HTTP/HTTPS URL 처리
+            # view_image.php 같은 프록시 URL을 실제 이미지 URL로 변환
+            actual_url = url
+            from urllib.parse import urlparse, parse_qs, unquote
+
+            parsed = urlparse(url)
+
+            # view_image.php?fn=... 처리
+            if 'view_image.php' in parsed.path and 'fn' in parse_qs(parsed.query):
+                fn_value = parse_qs(parsed.query)['fn'][0]
+                decoded_path = unquote(fn_value)  # /data/editor/2511/...png
+
+                # 절대 URL로 변환
+                base_url = f"{parsed.scheme}://{parsed.netloc}"
+                actual_url = f"{base_url}{decoded_path}"
+                logger.info(f"🔍 프록시 URL 변환: view_image.php → {decoded_path}")
+
             # URL에서 이미지 다운로드 (리다이렉트 따라가기!)
             try:
-                file_response = requests.get(url, timeout=30, allow_redirects=True)
+                file_response = requests.get(actual_url, timeout=30, allow_redirects=True)
                 if file_response.status_code != 200:
-                    logger.error(f"이미지 다운로드 실패: {url}")
+                    log_url = url[:100] + "..." if len(url) > 100 else url
+                    logger.error(f"이미지 다운로드 실패: {log_url}")
                     return None
 
                 # Content-Type 확인
@@ -412,11 +524,28 @@ class UpstageClient:
                         elif regular_filename:
                             filename = regular_filename.strip('"\'')
 
-                # 2. URL 경로 (쿼리 파라미터 제거)
+                # 2. URL 경로 (쿼리 파라미터에서 실제 파일명 추출)
                 if not filename:
-                    filename = Path(url).name
-                    if '?' in filename:
-                        filename = filename.split('?')[0]
+                    from urllib.parse import urlparse, parse_qs, unquote
+
+                    parsed_url = urlparse(url)
+                    query_params = parse_qs(parsed_url.query)
+
+                    # view_image.php?fn=... 같은 프록시 URL 처리
+                    if 'fn' in query_params:
+                        # fn 파라미터에서 실제 파일명 추출
+                        fn_value = query_params['fn'][0]
+                        # URL 디코딩 (%2F → /)
+                        decoded_fn = unquote(fn_value)
+                        # 경로에서 파일명만 추출
+                        filename = Path(decoded_fn).name
+                        logger.info(f"🔍 프록시 URL 감지 - 실제 파일명: {filename}")
+                    else:
+                        # 일반 URL: 경로에서 파일명 추출
+                        filename = Path(parsed_url.path).name
+                        # 쿼리 파라미터 제거
+                        if '?' in filename:
+                            filename = filename.split('?')[0]
 
                 # 이미지 타입 확인
                 supported_image_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/bmp', 'image/webp']
@@ -428,13 +557,15 @@ class UpstageClient:
                 )
 
                 if not is_image:
-                    logger.warning(f"이미지가 아님: {content_type}, 확장자: {file_ext}, URL: {url}")
+                    log_url = url[:100] + "..." if len(url) > 100 else url
+                    logger.warning(f"이미지가 아님: {content_type}, 확장자: {file_ext}, URL: {log_url}")
                     return None
 
                 # 파일 크기 확인 (너무 작으면 손상되었을 가능성)
                 content_length = len(file_response.content)
                 if content_length < 100:
-                    logger.warning(f"이미지 파일이 너무 작음 ({content_length} bytes): {url}")
+                    log_url = url[:100] + "..." if len(url) > 100 else url
+                    logger.warning(f"이미지 파일이 너무 작음 ({content_length} bytes): {log_url}")
                     return None
 
                 # 파일명이 길면 줄임
@@ -504,7 +635,12 @@ class UpstageClient:
             return None
 
         except Exception as e:
-            logger.error(f"이미지 OCR 중 오류: {url} - {e}")
+            # Data URI는 짧게 로깅
+            if url.startswith('data:'):
+                log_url = "Data URI (Base64 이미지)"
+            else:
+                log_url = url[:100] + "..." if len(url) > 100 else url
+            logger.error(f"이미지 OCR 중 오류: {log_url} - {e}")
             return None
 
     def _extract_text_from_response(self, result: Dict) -> str:

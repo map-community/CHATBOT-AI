@@ -88,11 +88,12 @@ class JobCrawler(BaseCrawler):
                             img_url = src
 
                     if img_url:
-                        # 상대 경로를 절대 경로로 변환
-                        if img_url.startswith('/'):
-                            img_url = f"https://cse.knu.ac.kr{img_url}"
-                        elif not img_url.startswith('http'):
-                            img_url = f"https://cse.knu.ac.kr/{img_url}"
+                        # 상대 경로를 절대 경로로 변환 (Data URI 제외)
+                        if not img_url.startswith(('http', 'data:')):
+                            if img_url.startswith('/'):
+                                img_url = f"https://cse.knu.ac.kr{img_url}"
+                            else:
+                                img_url = f"https://cse.knu.ac.kr/{img_url}"
 
                         # thumb- URL은 원본을 못 찾은 경우만 추가 (일단 제외)
                         if '/thumb-' not in img_url:
@@ -111,6 +112,16 @@ class JobCrawler(BaseCrawler):
                         elif not href.startswith('http'):
                             href = f"https://cse.knu.ac.kr/{href}"
                         attachment_content.append(href)
+
+            # 중복 제거: 본문 이미지와 첨부파일에서 중복되는 URL 제거
+            # (같은 이미지가 본문과 첨부파일에 모두 있는 경우)
+            original_attachment_count = len(attachment_content)
+            image_urls_set = set(image_content)
+            attachment_content = [url for url in attachment_content if url not in image_urls_set]
+            removed_count = original_attachment_count - len(attachment_content)
+
+            if removed_count > 0:
+                print(f"ℹ️  중복 제거: 본문과 중복되는 첨부파일 {removed_count}개 제거 (본문 이미지로 처리)")
 
             # 날짜 추출
             date_element = soup.select_one("strong.if_date")

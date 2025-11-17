@@ -417,5 +417,209 @@ docker exec -it knu-chatbot-app python /app/src/modules/debug_single_url.py \
 
 ---
 
-**작성 일시**: 2025-11-16
+## 📦 추가 구현 사항 (2025-01-17)
+
+### 6. Document Parse API HTML 구조 데이터 저장 ✅
+
+**문제점**:
+- Document Parse API($0.01/페이지)를 사용하면서 HTML 구조 데이터를 버리고 text만 저장
+- 표, 레이아웃 등의 구조 정보 손실
+- 비용 대비 가치 미활용 (85% 낭비)
+
+**해결 방법**:
+
+**파일 수정**:
+- `src/modules/processing/multimodal_processor.py`
+- `src/modules/processing/upstage_client.py`
+
+**변경 내용**:
+
+1. **multimodal_processor.py - MongoDB 캐시 구조 확장**:
+```python
+# Before
+content = {
+    "url": img_url,
+    "ocr_text": ocr_result.get("text", ""),
+    "description": ""
+}
+
+# After
+content = {
+    "url": img_url,
+    "ocr_text": ocr_result.get("text", ""),
+    "ocr_html": ocr_result.get("html", ""),  # HTML 구조 추가
+    "ocr_elements": ocr_result.get("elements", []),  # 요소 정보 추가
+    "description": ""
+}
+```
+
+2. **Pinecone 메타데이터에 HTML 필드 추가**:
+```python
+metadata = {
+    "title": self.title,
+    "content_type": "image",
+    "html": img.get("ocr_html", ""),  # HTML 구조
+    "html_available": bool(img.get("ocr_html"))  # HTML 존재 여부
+}
+```
+
+**효과**:
+- MongoDB 캐시에 HTML 구조 저장 (재사용 가능)
+- Pinecone에 html 필드로 구조 정보 보존
+- RAG 시스템에서 표, 레이아웃 맥락 활용 가능
+- 비싼 API 비용 정당화
+
+**커밋**: `fix: Document Parse API의 HTML 구조 데이터를 Pinecone에 저장하도록 수정`
+
+---
+
+### 7. 게시글별 MongoDB/Pinecone 저장 데이터 구조 상세 로그 추가 ✅
+
+**문제점**:
+- 각 게시글이 처리될 때 MongoDB 캐시와 Pinecone에 무엇이 저장되는지 로그 없음
+- HTML 구조 데이터가 실제로 저장되는지 확인 불가
+- 최종 저장 데이터의 구조를 파악하기 어려움
+
+**해결 방법**:
+
+**파일 수정**:
+- `src/modules/utils/logging_config.py`
+- `src/modules/processing/document_processor.py`
+- `src/modules/processing/embedding_manager.py`
+
+**새로운 로그 메서드**:
+
+1. **log_embedding_item_structure()** - 임베딩 아이템 구조 로깅:
+```python
+def log_embedding_item_structure(self, title: str, embedding_items: list):
+    """
+    임베딩 아이템 구조 및 타입별 집계
+    - 콘텐츠 타입별 개수 (text, image, attachment)
+    - HTML 구조 보존된 아이템 개수
+    - 첫 번째 아이템의 메타데이터 샘플
+    """
+```
+
+2. **_log_metadata_sample()** - Pinecone 메타데이터 샘플 로깅:
+```python
+def _log_metadata_sample(self, vector_id: str, metadata: dict):
+    """
+    Pinecone 업로드 시 첫 번째 벡터의 메타데이터 출력
+    - 텍스트/HTML 필드 존재 여부, 길이, 미리보기
+    - 이미지URL/첨부파일URL 등 모든 필드 표시
+    """
+```
+
+**로그 출력 내용**:
+```
+   📦 저장될 데이터 구조 (5개 임베딩 아이템):
+      - text: 3개
+      - image: 1개
+      - attachment: 1개
+      - HTML 구조 보존: 2개 (표/레이아웃 맥락 포함) ✅
+
+   📋 저장 데이터 샘플 (첫 번째 아이템):
+      제목: 2024학년도 학사 일정
+      타입: text
+      소스: original_post
+      텍스트 길이: 850자
+      HTML 구조: ❌ 없음 (평문 텍스트만)
+
+   🔍 Pinecone 저장 데이터 샘플 (벡터 ID: 1234)
+      제목: 2024학년도 학사 일정
+      HTML 구조: ✅ 저장됨 (567자)
+      용도: 표, 레이아웃 맥락 보존 → RAG 품질 향상
+```
+
+**커밋**: `feat: 게시글별 MongoDB/Pinecone 저장 데이터 구조 상세 로그 추가`
+
+---
+
+### 8. 부분 실패 게시글 추적 로그 시스템 추가 ✅
+
+**문제점**:
+- 이미지/첨부파일 일부만 실패한 게시글 추적 불가
+- 어떤 게시글의 어느 부분이 실패했는지 한눈에 확인 어려움
+- 부분 실패 게시글을 재처리하기 위한 정보 부족
+
+**해결 방법**:
+
+**파일 수정**:
+- `src/modules/utils/logging_config.py`
+- `src/modules/processing/document_processor.py`
+
+**새로운 기능**:
+
+1. **부분 실패 추적 리스트**:
+```python
+self.partial_failures: List[Dict] = []  # 부분 실패 게시글 추적
+```
+
+2. **log_post_success()에 failures 파라미터 추가**:
+```python
+def log_post_success(self, category, title, url, ..., failures: Dict = None):
+    if failures:
+        if failures.get("image_failed"):
+            self.logger.warning(f"   ⚠️  이미지 OCR 실패: {len(failures['image_failed'])}개")
+        if failures.get("attachment_failed"):
+            self.logger.warning(f"   ⚠️  첨부파일 파싱 실패: {len(failures['attachment_failed'])}개")
+```
+
+3. **부분 실패 로그 파일 자동 생성** (`logs/partial_failures_TIMESTAMP.json`):
+```json
+{
+  "생성_시각": "2024-03-01 12:34:56",
+  "총_부분실패_게시글_수": 3,
+  "게시글_목록": [
+    {
+      "제목": "입학 설명회 안내",
+      "URL": "https://...",
+      "이미지": {
+        "전체": 5,
+        "실패": 2,
+        "실패_목록": [
+          {"URL": "...", "사유": "이미지 다운로드 실패"}
+        ]
+      }
+    }
+  ]
+}
+```
+
+**로그 출력**:
+```
+⚠️  부분 실패 게시글: 3개
+   (이미지/첨부파일 일부만 처리 성공)
+   📄 부분 실패 로그 파일: logs/partial_failures_2024-03-01_12-34-56.json
+
+   부분 실패 게시글 목록:
+   1. 입학 설명회 안내
+      URL: https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_1&wr_id=1235
+      실패: 이미지 OCR 실패 2개 / 첨부파일 파싱 실패 1개
+```
+
+**효과**:
+- 부분 실패 게시글을 한눈에 확인 가능
+- 실패 원인 파악 용이 (URL, 사유 명시)
+- 재처리 대상 게시글 선별 가능
+- 데이터 품질 관리 개선
+
+**커밋**: `feat: 부분 실패 게시글 추적 로그 시스템 추가`
+
+---
+
+## ✅ 최신 완료 체크리스트 (2025-01-17)
+
+- [x] Document Parse API HTML 구조 데이터 저장
+- [x] 게시글별 MongoDB/Pinecone 저장 데이터 구조 상세 로그
+- [x] 부분 실패 게시글 추적 로그 시스템
+- [x] MULTIMODAL_RAG_GUIDE.md 업데이트
+- [x] CRAWLER_README.md 로깅 시스템 섹션 추가
+- [x] 모든 변경사항 커밋 및 푸시
+
+**최종 상태**: ✅ 모든 작업 완료
+
+---
+
+**작성 일시**: 2025-11-16 (초안), 2025-01-17 (업데이트)
 **작성자**: Claude (AI Assistant)
