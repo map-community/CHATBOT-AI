@@ -223,6 +223,7 @@ class EmbeddingManager:
         print(f"{'='*80}\n")
 
         uploaded_count = 0
+        sample_logged = False  # 샘플 로그 출력 플래그
 
         for i, embedding in enumerate(embeddings):
             vector_id = start_id + i
@@ -235,6 +236,11 @@ class EmbeddingManager:
             self.index.upsert([(str(vector_id), embedding.tolist(), metadata)])
             uploaded_count += 1
 
+            # 첫 번째 벡터의 메타데이터 샘플 출력 (HTML 구조 확인용)
+            if not sample_logged:
+                self._log_metadata_sample(str(vector_id), metadata)
+                sample_logged = True
+
             # 진행 상황 출력
             if (i + 1) % CrawlerConfig.EMBEDDING_BATCH_SIZE == 0:
                 progress = (i + 1) / len(embeddings) * 100
@@ -245,3 +251,57 @@ class EmbeddingManager:
         print(f"{'='*80}\n")
 
         return uploaded_count
+
+    def _log_metadata_sample(self, vector_id: str, metadata: dict):
+        """
+        Pinecone 메타데이터 샘플 로그 (첫 번째 벡터)
+
+        Args:
+            vector_id: 벡터 ID
+            metadata: Pinecone 메타데이터
+        """
+        print(f"\n{'='*80}")
+        print(f"🔍 Pinecone 저장 데이터 샘플 (벡터 ID: {vector_id})")
+        print(f"{'='*80}")
+        print(f"제목: {metadata.get('title', 'N/A')}")
+        print(f"카테고리: {metadata.get('category', 'N/A')}")
+        print(f"콘텐츠 타입: {metadata.get('content_type', 'N/A')}")
+        print(f"소스: {metadata.get('source', 'N/A')}")
+        print(f"날짜: {metadata.get('date', 'N/A')}")
+        print(f"URL: {metadata.get('url', 'N/A')[:80]}..." if len(metadata.get('url', '')) > 80 else f"URL: {metadata.get('url', 'N/A')}")
+
+        # 텍스트 필드
+        text_data = metadata.get('text', '')
+        print(f"\n📝 텍스트 필드:")
+        print(f"   길이: {len(text_data)}자")
+        text_preview = text_data[:100].replace('\n', ' ')
+        if len(text_data) > 100:
+            text_preview += "..."
+        print(f"   미리보기: {text_preview}")
+
+        # HTML 필드 (중요!)
+        html_data = metadata.get('html', '')
+        print(f"\n🌐 HTML 구조 필드:")
+        if html_data:
+            print(f"   ✅ 저장됨 ({len(html_data)}자)")
+            print(f"   용도: 표, 레이아웃 맥락 보존 → RAG 품질 향상")
+            html_preview = html_data[:100].replace('\n', ' ')
+            if len(html_data) > 100:
+                html_preview += "..."
+            print(f"   미리보기: {html_preview}")
+        else:
+            print(f"   ❌ 없음 (평문 텍스트만)")
+
+        # html_available 플래그
+        if metadata.get('html_available'):
+            print(f"   HTML 활용 가능: ✅")
+
+        # 이미지/첨부파일 URL
+        if metadata.get('image_url'):
+            img_url = metadata.get('image_url', '')
+            print(f"\n🖼️ 이미지 URL: {img_url[:60]}..." if len(img_url) > 60 else f"\n🖼️ 이미지 URL: {img_url}")
+        if metadata.get('attachment_url'):
+            att_url = metadata.get('attachment_url', '')
+            print(f"\n📎 첨부파일 URL: {att_url[:60]}..." if len(att_url) > 60 else f"\n📎 첨부파일 URL: {att_url}")
+
+        print(f"{'='*80}\n")

@@ -320,6 +320,13 @@ class DocumentProcessor:
                     embedding_items=len(items)
                 )
 
+                # 저장될 데이터 구조 상세 로그
+                logger.log_embedding_item_structure(
+                    title=title,
+                    embedding_items=items,
+                    show_sample=True
+                )
+
             except Exception as e:
                 # 실패 로그
                 logger.log_post_failure(
