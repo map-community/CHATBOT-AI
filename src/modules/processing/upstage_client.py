@@ -140,12 +140,38 @@ class UpstageClient:
                         elif regular_filename:
                             filename = regular_filename.strip('"\'')
 
-                # 2. URL 경로에서 추출 (쿼리 파라미터 제거!)
+                # 2. URL 경로에서 추출 (쿼리 파라미터에서 실제 파일명 추출)
                 if not filename:
-                    filename = Path(url).name
-                    # 쿼리 파라미터 제거 (download.php?... → download.php)
-                    if '?' in filename:
-                        filename = filename.split('?')[0]
+                    from urllib.parse import urlparse, parse_qs, unquote
+
+                    parsed_url = urlparse(url)
+                    query_params = parse_qs(parsed_url.query)
+
+                    # download.php?..., view_image.php?fn=... 같은 프록시 URL 처리
+                    # 우선순위: fn > file > 경로
+                    actual_filename = None
+
+                    if 'fn' in query_params:
+                        # fn 파라미터에서 실제 파일명 추출 (view_image.php)
+                        fn_value = query_params['fn'][0]
+                        decoded_fn = unquote(fn_value)
+                        actual_filename = Path(decoded_fn).name
+                        logger.info(f"🔍 프록시 URL 감지 (fn) - 실제 파일명: {actual_filename}")
+                    elif 'file' in query_params:
+                        # file 파라미터에서 추출 (일부 다운로드 스크립트)
+                        file_value = query_params['file'][0]
+                        decoded_file = unquote(file_value)
+                        actual_filename = Path(decoded_file).name
+                        logger.info(f"🔍 프록시 URL 감지 (file) - 실제 파일명: {actual_filename}")
+
+                    if actual_filename:
+                        filename = actual_filename
+                    else:
+                        # 일반 URL: 경로에서 파일명 추출
+                        filename = Path(parsed_url.path).name
+                        # 쿼리 파라미터 제거
+                        if '?' in filename:
+                            filename = filename.split('?')[0]
 
                 # 3. Content-Type에서 확장자 유추 (최후의 수단)
                 if not filename or filename == 'download.php' or not Path(filename).suffix:
@@ -482,11 +508,28 @@ class UpstageClient:
                         elif regular_filename:
                             filename = regular_filename.strip('"\'')
 
-                # 2. URL 경로 (쿼리 파라미터 제거)
+                # 2. URL 경로 (쿼리 파라미터에서 실제 파일명 추출)
                 if not filename:
-                    filename = Path(url).name
-                    if '?' in filename:
-                        filename = filename.split('?')[0]
+                    from urllib.parse import urlparse, parse_qs, unquote
+
+                    parsed_url = urlparse(url)
+                    query_params = parse_qs(parsed_url.query)
+
+                    # view_image.php?fn=... 같은 프록시 URL 처리
+                    if 'fn' in query_params:
+                        # fn 파라미터에서 실제 파일명 추출
+                        fn_value = query_params['fn'][0]
+                        # URL 디코딩 (%2F → /)
+                        decoded_fn = unquote(fn_value)
+                        # 경로에서 파일명만 추출
+                        filename = Path(decoded_fn).name
+                        logger.info(f"🔍 프록시 URL 감지 - 실제 파일명: {filename}")
+                    else:
+                        # 일반 URL: 경로에서 파일명 추출
+                        filename = Path(parsed_url.path).name
+                        # 쿼리 파라미터 제거
+                        if '?' in filename:
+                            filename = filename.split('?')[0]
 
                 # 이미지 타입 확인
                 supported_image_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/bmp', 'image/webp']
