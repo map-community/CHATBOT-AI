@@ -1,0 +1,164 @@
+name: CI (Continuous Integration)
+
+# 모든 push와 Pull Request에서 자동 실행
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - 'claude/**'  # Claude 브랜치도 포함
+  pull_request:
+    branches:
+      - main
+      - develop
+
+# 동시 실행 제어 (같은 브랜치에서는 최신 것만 실행)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Job 1: 코드 품질 체크
+  code-quality:
+    name: Code Quality Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'  # pip 캐시 활성화
+
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 🔍 Check Python syntax
+        run: |
+          echo "Checking Python syntax..."
+          python -m py_compile src/app.py
+          python -m py_compile src/modules/ai_modules.py
+          python -m py_compile src/modules/storage_manager.py
+          echo "✅ All Python files have valid syntax!"
+
+      - name: 📊 Code statistics
+        run: |
+          echo "📊 Code Statistics:"
+          echo "-------------------"
+          echo "Total Python files:"
+          find . -name "*.py" | wc -l
+          echo "Total lines of code:"
+          find . -name "*.py" -exec wc -l {} + | tail -1
+          echo "-------------------"
+
+  # Job 2: Docker 이미지 빌드 검증
+  docker-build:
+    name: Docker Build Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐳 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🔨 Build Docker image (validation only)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false  # 빌드만 하고 push는 안 함
+          tags: knu-chatbot:test
+          cache-from: type=gha  # GitHub Actions 캐시 사용
+          cache-to: type=gha,mode=max
+
+      - name: ✅ Docker build successful
+        run: |
+          echo "✅ Docker image built successfully!"
+          echo "Image can be deployed safely."
+
+  # Job 3: 환경변수 검증
+  env-validation:
+    name: Environment Variables Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔍 Check .env.example exists
+        run: |
+          if [ -f ".env.example" ]; then
+            echo "✅ .env.example found"
+            cat .env.example
+          else
+            echo "❌ .env.example not found"
+            exit 1
+          fi
+
+      - name: 🔍 Check required files
+        run: |
+          echo "Checking required files..."
+          files=(
+            "requirements.txt"
+            "Dockerfile"
+            "docker-compose.yml"
+            "src/app.py"
+          )
+
+          for file in "${files[@]}"; do
+            if [ -f "$file" ]; then
+              echo "✅ $file exists"
+            else
+              echo "❌ $file missing!"
+              exit 1
+            fi
+          done
+
+  # Job 4: 결과 요약
+  ci-summary:
+    name: CI Summary
+    needs: [code-quality, docker-build, env-validation]
+    runs-on: ubuntu-latest
+    if: always()  # 이전 job이 실패해도 실행
+
+    steps:
+      - name: 📊 Check results
+        run: |
+          echo "========================================="
+          echo "🎯 CI Results Summary"
+          echo "========================================="
+          echo "Code Quality: ${{ needs.code-quality.result }}"
+          echo "Docker Build: ${{ needs.docker-build.result }}"
+          echo "Env Validation: ${{ needs.env-validation.result }}"
+          echo "========================================="
+
+          if [ "${{ needs.code-quality.result }}" == "success" ] && \
+             [ "${{ needs.docker-build.result }}" == "success" ] && \
+             [ "${{ needs.env-validation.result }}" == "success" ]; then
+            echo "✅ All CI checks passed!"
+            echo "Ready for deployment 🚀"
+          else
+            echo "❌ Some CI checks failed"
+            echo "Please fix the issues before deploying"
+            exit 1
+          fi
+
+      - name: 💬 Success message
+        if: success()
+        run: |
+          echo "========================================="
+          echo "🎉 CI Pipeline Completed Successfully!"
+          echo "========================================="
+          echo "Your code is ready to be deployed."
+          echo "To deploy:"
+          echo "  1. Go to Actions tab"
+          echo "  2. Select 'CD (Deploy to AWS)' workflow"
+          echo "  3. Click 'Run workflow'"
+          echo "========================================="
