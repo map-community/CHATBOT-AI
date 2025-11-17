@@ -27,7 +27,7 @@ echo ""
 # 2. 컨테이너 상태
 echo "${GREEN}[2] Container Status${NC}"
 echo "-------------------"
-docker-compose ps
+docker compose ps
 echo ""
 
 # 3. 디스크 사용량

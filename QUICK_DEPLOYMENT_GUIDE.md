@@ -50,7 +50,7 @@ cd /opt/knu-chatbot/CHATBOT-AI
 ./scripts/server-status.sh
 
 # 컨테이너 상태
-docker-compose ps
+docker compose ps
 
 # 헬스체크
 curl http://localhost:5000/health
@@ -77,22 +77,22 @@ curl http://localhost:5000/health
 ### 컨테이너 관리
 ```bash
 # 컨테이너 재시작
-docker-compose restart
+docker compose restart
 
 # 컨테이너 중지
-docker-compose down
+docker compose down
 
 # 컨테이너 시작
-docker-compose up -d
+docker compose up -d
 
 # 특정 컨테이너 재시작
-docker-compose restart app
+docker compose restart app
 ```
 
 ### 로그 확인 (단발성)
 ```bash
 # 전체 로그 (마지막 100줄)
-docker-compose logs --tail 100
+docker compose logs --tail 100
 
 # Flask 앱 로그
 docker logs knu-chatbot-app --tail 50
@@ -137,8 +137,8 @@ docker logs knu-chatbot-app --tail 100
 cat .env
 
 # 컨테이너 재빌드
-docker-compose build --no-cache
-docker-compose up -d
+docker compose build --no-cache
+docker compose up -d
 ```
 
 ### 포트 5000 접속 안 됨

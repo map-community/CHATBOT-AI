@@ -63,13 +63,13 @@ log_info ".env file found ✓"
 
 # 4. 기존 컨테이너 중지
 log_info "Stopping existing containers..."
-docker-compose down || log_warn "No containers to stop"
+docker compose down || log_warn "No containers to stop"
 
 # 5. Docker 이미지 빌드
 log_info "Building Docker images..."
 log_warn "This may take several minutes..."
 
-docker-compose build --no-cache
+docker compose build --no-cache
 
 if [ $? -eq 0 ]; then
     log_info "Docker images built successfully ✓"
@@ -80,7 +80,7 @@ fi
 
 # 6. 컨테이너 시작
 log_info "Starting containers..."
-docker-compose up -d
+docker compose up -d
 
 if [ $? -eq 0 ]; then
     log_info "Containers started successfully ✓"
@@ -92,7 +92,7 @@ fi
 # 7. 컨테이너 상태 확인
 echo ""
 log_info "Container status:"
-docker-compose ps
+docker compose ps
 
 # 8. 헬스체크 대기
 echo ""
@@ -136,7 +136,7 @@ echo "  - Health check: http://localhost:5000/health"
 echo "  - API endpoint: http://localhost:5000/ai/ai-response"
 echo ""
 log_info "Useful commands:"
-echo "  - View logs:       docker-compose logs -f"
-echo "  - Stop containers: docker-compose down"
-echo "  - Restart:         docker-compose restart"
+echo "  - View logs:       docker compose logs -f"
+echo "  - Stop containers: docker compose down"
+echo "  - Restart:         docker compose restart"
 echo "========================================="
