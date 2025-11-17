@@ -1,0 +1,184 @@
+name: Deploy to AWS EC2
+
+# 이 워크플로우가 언제 실행될지 정의
+on:
+  push:
+    branches:
+      - main  # main 브랜치에 push될 때마다 실행
+  workflow_dispatch:  # 수동으로도 실행 가능
+
+# 환경변수 정의
+env:
+  APP_DIR: /opt/knu-chatbot  # EC2 서버의 앱 디렉토리
+
+jobs:
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest  # GitHub Actions 실행 환경
+
+    steps:
+      # Step 1: 코드 체크아웃
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2: SSH 키 설정
+      - name: 🔑 Setup SSH key
+        run: |
+          # SSH 디렉토리 생성
+          mkdir -p ~/.ssh
+
+          # SSH 키 파일 생성 (GitHub Secrets에서 가져옴)
+          echo "${{ secrets.AWS_EC2_SSH_KEY }}" > ~/.ssh/deploy_key
+
+          # 키 파일 권한 설정 (보안상 중요!)
+          chmod 600 ~/.ssh/deploy_key
+
+          # known_hosts에 서버 추가 (처음 접속 시 확인 건너뛰기)
+          ssh-keyscan -H ${{ secrets.AWS_EC2_HOST }} >> ~/.ssh/known_hosts
+
+      # Step 3: EC2 서버 연결 테스트
+      - name: 🔌 Test SSH connection
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            -o StrictHostKeyChecking=no \
+            ${{ secrets.AWS_EC2_USERNAME }}@${{ secrets.AWS_EC2_HOST }} \
+            "echo '✅ SSH connection successful'"
+
+      # Step 4: 서버에 코드 배포
+      - name: 🚀 Deploy to EC2
+        run: |
+          # EC2 서버에서 실행할 명령어들
+          ssh -i ~/.ssh/deploy_key \
+            -o StrictHostKeyChecking=no \
+            ${{ secrets.AWS_EC2_USERNAME }}@${{ secrets.AWS_EC2_HOST }} << 'ENDSSH'
+
+          # 작업 시작 로그
+          echo "========================================="
+          echo "🚀 Starting deployment..."
+          echo "Time: $(date)"
+          echo "========================================="
+
+          # 앱 디렉토리로 이동 (없으면 생성)
+          mkdir -p ${{ env.APP_DIR }}
+          cd ${{ env.APP_DIR }}
+
+          # 기존 코드 백업 (안전장치)
+          if [ -d "CHATBOT-AI" ]; then
+            echo "📦 Backing up existing code..."
+            mv CHATBOT-AI CHATBOT-AI.backup.$(date +%Y%m%d_%H%M%S) || true
+          fi
+
+          # GitHub에서 최신 코드 클론
+          echo "📥 Cloning latest code from GitHub..."
+          git clone https://github.com/${{ github.repository }}.git
+
+          cd CHATBOT-AI
+
+          # .env 파일 생성 (GitHub Secrets에서 환경변수 가져오기)
+          echo "🔧 Creating .env file..."
+          cat > .env << 'EOF'
+          # Upstage API
+          UPSTAGE_API_KEY=${{ secrets.UPSTAGE_API_KEY }}
+
+          # Pinecone
+          PINECONE_API_KEY=${{ secrets.PINECONE_API_KEY }}
+          PINECONE_INDEX_NAME=${{ secrets.PINECONE_INDEX_NAME }}
+
+          # MongoDB (Docker Compose 내부)
+          MONGODB_URI=mongodb://mongodb:27017/
+
+          # Redis (Docker Compose 내부)
+          REDIS_HOST=redis
+          REDIS_PORT=6379
+
+          # Flask
+          FLASK_ENV=production
+          EOF
+
+          # 기존 컨테이너 중지 및 삭제
+          echo "🛑 Stopping existing containers..."
+          docker-compose down || true
+
+          # Docker 이미지 빌드
+          echo "🔨 Building Docker images..."
+          docker-compose build --no-cache
+
+          # 컨테이너 시작
+          echo "▶️  Starting containers..."
+          docker-compose up -d
+
+          # 컨테이너 상태 확인
+          echo ""
+          echo "📊 Container status:"
+          docker-compose ps
+
+          # 헬스체크 대기
+          echo ""
+          echo "⏳ Waiting for health check..."
+          sleep 30
+
+          # 헬스체크 확인
+          HEALTH_STATUS=$(curl -s http://localhost:5000/health | grep -o '"status":"healthy"' || echo "")
+
+          if [ -z "$HEALTH_STATUS" ]; then
+            echo "❌ Health check failed!"
+            echo "📋 Application logs:"
+            docker logs knu-chatbot-app --tail 50
+            exit 1
+          fi
+
+          echo "✅ Health check passed!"
+
+          # 배포 완료
+          echo ""
+          echo "========================================="
+          echo "✅ Deployment completed successfully!"
+          echo "Time: $(date)"
+          echo "========================================="
+
+          ENDSSH
+
+      # Step 5: 배포 결과 확인
+      - name: ✅ Verify deployment
+        run: |
+          # 서버 헬스체크 엔드포인트 호출
+          RESPONSE=$(curl -s http://${{ secrets.AWS_EC2_HOST }}:5000/health)
+          echo "Health check response: $RESPONSE"
+
+          # JSON 응답에서 status 필드 확인
+          if echo "$RESPONSE" | grep -q '"status":"healthy"'; then
+            echo "✅ Deployment verification successful!"
+          else
+            echo "❌ Deployment verification failed!"
+            exit 1
+          fi
+
+      # Step 6: 배포 성공 알림 (선택사항)
+      - name: 📢 Deployment notification
+        if: success()
+        run: |
+          echo "========================================="
+          echo "🎉 Deployment Successful!"
+          echo "========================================="
+          echo "Repository: ${{ github.repository }}"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Actor: ${{ github.actor }}"
+          echo "Server: ${{ secrets.AWS_EC2_HOST }}"
+          echo "========================================="
+          echo "Access your app at:"
+          echo "http://${{ secrets.AWS_EC2_HOST }}:5000"
+          echo "========================================="
+
+      # Step 7: 배포 실패 알림 (선택사항)
+      - name: ❌ Deployment failed notification
+        if: failure()
+        run: |
+          echo "========================================="
+          echo "❌ Deployment Failed!"
+          echo "========================================="
+          echo "Please check the logs above for details."
+          echo "Repository: ${{ github.repository }}"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "========================================="

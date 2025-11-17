@@ -209,3 +209,53 @@ pc.create_index(
 ```bash
 tail -f logs/app.log
 ```
+
+## 🚀 AWS 배포 (CI/CD)
+
+### GitHub Actions를 통한 자동 배포
+
+이 프로젝트는 GitHub Actions를 사용하여 AWS EC2에 자동 배포됩니다.
+
+#### 📚 배포 가이드
+- **완전 초보자용 가이드**: [AWS_CICD_COMPLETE_GUIDE.md](./AWS_CICD_COMPLETE_GUIDE.md)
+  - AWS 계정 생성부터 최종 배포까지 모든 단계를 상세히 설명
+  - EC2 서버 생성, Docker 설치, GitHub Secrets 설정 등 포함
+
+- **빠른 참고 가이드**: [QUICK_DEPLOYMENT_GUIDE.md](./QUICK_DEPLOYMENT_GUIDE.md)
+  - 이미 설정을 완료한 경우 빠른 참고용
+  - 유용한 명령어 모음
+
+#### 🔧 배포 스크립트
+- **자동 배포**: `.github/workflows/deploy.yml` (GitHub Actions)
+- **수동 배포**: `./scripts/deploy-manual.sh` (EC2 서버에서 실행)
+- **서버 상태 확인**: `./scripts/server-status.sh`
+- **로그 확인**: `./scripts/view-logs.sh`
+
+#### ⚡ 배포 방법
+
+**자동 배포** (권장):
+```bash
+git add .
+git commit -m "feat: 새 기능 추가"
+git push origin main
+# GitHub Actions가 자동으로 AWS EC2에 배포
+```
+
+**수동 배포** (EC2 서버에서):
+```bash
+ssh -i ~/path/to/key.pem ubuntu@YOUR_SERVER_IP
+cd /opt/knu-chatbot/CHATBOT-AI
+./scripts/deploy-manual.sh
+```
+
+#### 🔍 배포 확인
+```bash
+# 헬스체크
+curl http://YOUR_SERVER_IP:5000/health
+
+# 서버 상태
+./scripts/server-status.sh
+
+# 로그 확인
+./scripts/view-logs.sh app
+```
