@@ -656,7 +656,25 @@ class MultimodalProcessor:
                 return None
 
             # HTTP/HTTPS URL 처리
-            response = requests.get(url, timeout=30, allow_redirects=True)
+            # view_image.php 같은 프록시 URL을 실제 이미지 URL로 변환
+            actual_url = url
+            from urllib.parse import urlparse, parse_qs, unquote as url_unquote
+
+            parsed = urlparse(url)
+
+            # view_image.php?fn=... 처리
+            if 'view_image.php' in parsed.path:
+                query_params = parse_qs(parsed.query)
+                if 'fn' in query_params:
+                    fn_value = query_params['fn'][0]
+                    decoded_path = url_unquote(fn_value)  # /data/editor/2511/...png
+
+                    # 절대 URL로 변환
+                    base_url = f"{parsed.scheme}://{parsed.netloc}"
+                    actual_url = f"{base_url}{decoded_path}"
+                    logger.info(f"🔍 프록시 URL 변환: view_image.php → {decoded_path}")
+
+            response = requests.get(actual_url, timeout=30, allow_redirects=True)
             if response.status_code == 200:
                 return response.content
             return None

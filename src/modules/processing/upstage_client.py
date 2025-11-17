@@ -479,9 +479,25 @@ class UpstageClient:
                     return None
 
             # 일반 HTTP/HTTPS URL 처리
+            # view_image.php 같은 프록시 URL을 실제 이미지 URL로 변환
+            actual_url = url
+            from urllib.parse import urlparse, parse_qs, unquote
+
+            parsed = urlparse(url)
+
+            # view_image.php?fn=... 처리
+            if 'view_image.php' in parsed.path and 'fn' in parse_qs(parsed.query):
+                fn_value = parse_qs(parsed.query)['fn'][0]
+                decoded_path = unquote(fn_value)  # /data/editor/2511/...png
+
+                # 절대 URL로 변환
+                base_url = f"{parsed.scheme}://{parsed.netloc}"
+                actual_url = f"{base_url}{decoded_path}"
+                logger.info(f"🔍 프록시 URL 변환: view_image.php → {decoded_path}")
+
             # URL에서 이미지 다운로드 (리다이렉트 따라가기!)
             try:
-                file_response = requests.get(url, timeout=30, allow_redirects=True)
+                file_response = requests.get(actual_url, timeout=30, allow_redirects=True)
                 if file_response.status_code != 200:
                     log_url = url[:100] + "..." if len(url) > 100 else url
                     logger.error(f"이미지 다운로드 실패: {log_url}")
