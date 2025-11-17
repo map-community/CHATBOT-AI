@@ -136,20 +136,20 @@ jobs:
 
           # 기존 컨테이너 중지 및 삭제
           echo "🛑 Stopping existing containers..."
-          docker-compose down || true
+          docker compose down || true
 
           # Docker 이미지 빌드
           echo "🔨 Building Docker images..."
-          docker-compose build --no-cache
+          docker compose build --no-cache
 
           # 컨테이너 시작
           echo "▶️  Starting containers..."
-          docker-compose up -d
+          docker compose up -d
 
           # 컨테이너 상태 확인
           echo ""
           echo "📊 Container status:"
-          docker-compose ps
+          docker compose ps
 
           # 헬스체크 대기
           echo ""

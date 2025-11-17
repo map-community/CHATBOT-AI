@@ -33,6 +33,6 @@ case $SERVICE in
   *)
     echo "📋 All Logs (실시간)"
     echo "Press Ctrl+C to exit"
-    docker-compose logs -f
+    docker compose logs -f
     ;;
 esac
