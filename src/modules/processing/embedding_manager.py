@@ -205,6 +205,23 @@ class EmbeddingManager:
         texts = [item[0] for item in embedding_items]
         metadatas = [item[1] for item in embedding_items]
 
+        # 🔧 긴 텍스트 처리: 4000 tokens ≈ 1600자로 제한 (안전 마진)
+        MAX_TEXT_LENGTH = 1600
+        truncated_count = 0
+
+        for i, text in enumerate(texts):
+            if len(text) > MAX_TEXT_LENGTH:
+                truncated_count += 1
+                original_length = len(text)
+                texts[i] = text[:MAX_TEXT_LENGTH]
+                title = metadatas[i].get('title', 'N/A')
+                print(f"⚠️  긴 텍스트 자동 처리 ({truncated_count}번째)")
+                print(f"   제목: {title[:50]}...")
+                print(f"   원본: {original_length}자 → 처리: {MAX_TEXT_LENGTH}자")
+
+        if truncated_count > 0:
+            print(f"\n✂️  총 {truncated_count}개 텍스트를 안전한 길이로 조정했습니다.\n")
+
         print(f"\n{'='*80}")
         print(f"📊 임베딩 생성 시작: {len(texts)}개 문서")
         print(f"{'='*80}\n")
