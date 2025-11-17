@@ -17,6 +17,46 @@ from processing.upstage_client import UpstageClient
 logger = logging.getLogger(__name__)
 
 
+class CharacterTextSplitter:
+    """
+    텍스트 분할기
+
+    긴 텍스트를 chunk_size 단위로 분할하며,
+    chunk_overlap 만큼 겹치도록 분할
+    """
+
+    def __init__(self, chunk_size: int = 850, chunk_overlap: int = 100):
+        """
+        Args:
+            chunk_size: 청크 크기
+            chunk_overlap: 청크 간 겹침 크기
+        """
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+
+    def split_text(self, text: str) -> List[str]:
+        """
+        텍스트 분할
+
+        Args:
+            text: 분할할 텍스트
+
+        Returns:
+            분할된 텍스트 리스트
+        """
+        chunks = []
+
+        if len(text) <= self.chunk_size:
+            return [text]
+
+        for i in range(0, len(text), self.chunk_size - self.chunk_overlap):
+            chunk = text[i:i + self.chunk_size]
+            if chunk:
+                chunks.append(chunk)
+
+        return chunks
+
+
 class MultimodalContent:
     """
     멀티모달 콘텐츠 데이터 클래스
@@ -67,14 +107,20 @@ class MultimodalContent:
 
     def to_embedding_items(self) -> List[Tuple[str, Dict]]:
         """
-        임베딩할 항목들로 변환
+        임베딩할 항목들로 변환 (청킹 포함)
 
         Returns:
             [(text, metadata), ...]
         """
         items = []
 
-        # 1. 텍스트 청크
+        # 텍스트 분할기 초기화 (베스트 프랙티스: 850자 청킹)
+        text_splitter = CharacterTextSplitter(
+            chunk_size=CrawlerConfig.CHUNK_SIZE,
+            chunk_overlap=CrawlerConfig.CHUNK_OVERLAP
+        )
+
+        # 1. 텍스트 청크 (이미 청킹되어 있음)
         total_text_chunks = len(self.text_chunks)
         for idx, chunk in enumerate(self.text_chunks):
             items.append((
@@ -90,49 +136,96 @@ class MultimodalContent:
                 }
             ))
 
-        # 2. 이미지 OCR 결과
+        # 2. 이미지 OCR 결과 (🔧 청킹 추가!)
         for idx, img in enumerate(self.image_contents):
             if img["ocr_text"]:
-                # OCR 텍스트를 임베딩
+                # OCR 텍스트 준비
                 combined_text = f"[이미지 텍스트]\n{img['ocr_text']}"
 
                 # 설명도 있으면 추가
                 if img["description"]:
                     combined_text += f"\n\n[이미지 설명]\n{img['description']}"
 
-                items.append((
-                    combined_text,
-                    {
-                        "title": self.title,
-                        "url": self.url,
-                        "date": self.date,
-                        "content_type": "image",
-                        "image_url": img["url"],
-                        "image_index": idx,
-                        "source": "image_ocr",  # OCR 결과
-                        "html": img.get("ocr_html", ""),  # HTML 구조 보존 (표, 레이아웃)
-                        "html_available": bool(img.get("ocr_html"))  # HTML 존재 여부
-                    }
-                ))
+                # ✅ 긴 텍스트는 청킹! (베스트 프랙티스)
+                if len(combined_text) > CrawlerConfig.CHUNK_SIZE:
+                    chunks = text_splitter.split_text(combined_text)
+                    for chunk_idx, chunk in enumerate(chunks):
+                        items.append((
+                            chunk,
+                            {
+                                "title": self.title,
+                                "url": self.url,
+                                "date": self.date,
+                                "content_type": "image",
+                                "image_url": img["url"],
+                                "image_index": idx,
+                                "chunk_index": chunk_idx,
+                                "total_chunks": len(chunks),
+                                "source": "image_ocr",  # OCR 결과
+                                "html": img.get("ocr_html", ""),
+                                "html_available": bool(img.get("ocr_html"))
+                            }
+                        ))
+                else:
+                    # 짧은 텍스트는 그대로
+                    items.append((
+                        combined_text,
+                        {
+                            "title": self.title,
+                            "url": self.url,
+                            "date": self.date,
+                            "content_type": "image",
+                            "image_url": img["url"],
+                            "image_index": idx,
+                            "source": "image_ocr",
+                            "html": img.get("ocr_html", ""),
+                            "html_available": bool(img.get("ocr_html"))
+                        }
+                    ))
 
-        # 3. 첨부파일 내용
+        # 3. 첨부파일 내용 (🔧 청킹 추가!)
         for idx, att in enumerate(self.attachment_contents):
             if att["text"]:
-                items.append((
-                    f"[첨부파일: {att['type'].upper()}]\n{att['text']}",
-                    {
-                        "title": self.title,
-                        "url": self.url,
-                        "date": self.date,
-                        "content_type": "attachment",
-                        "attachment_url": att["url"],
-                        "attachment_type": att["type"],
-                        "attachment_index": idx,
-                        "source": "document_parse",  # Document Parse 결과
-                        "html": att.get("html", ""),  # HTML 구조 보존 (표, 레이아웃)
-                        "html_available": bool(att.get("html"))  # HTML 존재 여부
-                    }
-                ))
+                full_text = f"[첨부파일: {att['type'].upper()}]\n{att['text']}"
+
+                # ✅ 긴 텍스트는 청킹! (베스트 프랙티스)
+                if len(full_text) > CrawlerConfig.CHUNK_SIZE:
+                    chunks = text_splitter.split_text(full_text)
+                    for chunk_idx, chunk in enumerate(chunks):
+                        items.append((
+                            chunk,
+                            {
+                                "title": self.title,
+                                "url": self.url,
+                                "date": self.date,
+                                "content_type": "attachment",
+                                "attachment_url": att["url"],
+                                "attachment_type": att["type"],
+                                "attachment_index": idx,
+                                "chunk_index": chunk_idx,
+                                "total_chunks": len(chunks),
+                                "source": "document_parse",  # Document Parse 결과
+                                "html": att.get("html", ""),
+                                "html_available": bool(att.get("html"))
+                            }
+                        ))
+                else:
+                    # 짧은 텍스트는 그대로
+                    items.append((
+                        full_text,
+                        {
+                            "title": self.title,
+                            "url": self.url,
+                            "date": self.date,
+                            "content_type": "attachment",
+                            "attachment_url": att["url"],
+                            "attachment_type": att["type"],
+                            "attachment_index": idx,
+                            "source": "document_parse",
+                            "html": att.get("html", ""),
+                            "html_available": bool(att.get("html"))
+                        }
+                    ))
 
         return items
 
