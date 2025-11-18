@@ -241,6 +241,30 @@ class EmbeddingManager:
             text_preview = texts[i][:200] + "..." if len(texts[i]) > 200 else texts[i]
             metadata["text_preview"] = text_preview
 
+            # 🔍 메타데이터 크기 디버깅 (첫 번째만)
+            if not sample_logged:
+                import json
+                metadata_json = json.dumps(metadata, ensure_ascii=False)
+                metadata_size = len(metadata_json.encode('utf-8'))
+                print(f"\n{'='*80}")
+                print(f"🔍 메타데이터 크기 분석 (벡터 ID: {vector_id})")
+                print(f"{'='*80}")
+                print(f"전체 크기: {metadata_size:,} bytes ({metadata_size / 1024:.2f} KB)")
+                print(f"\n각 필드별 크기:")
+                for key, value in metadata.items():
+                    value_json = json.dumps(value, ensure_ascii=False)
+                    value_size = len(value_json.encode('utf-8'))
+                    print(f"  {key}: {value_size:,} bytes")
+                    if value_size > 1000:  # 1KB 이상인 필드 상세 출력
+                        preview = str(value)[:100] + "..." if len(str(value)) > 100 else str(value)
+                        print(f"    내용 미리보기: {preview}")
+                print(f"{'='*80}\n")
+
+                if metadata_size > 40960:
+                    print(f"❌ 경고: 메타데이터 크기가 40KB 제한을 초과합니다!")
+                    print(f"   크기: {metadata_size:,} bytes > 40,960 bytes")
+                    print(f"   큰 필드를 제거해야 합니다.\n")
+
             # Pinecone에 업로드
             self.index.upsert([(str(vector_id), embedding.tolist(), metadata)])
             uploaded_count += 1
