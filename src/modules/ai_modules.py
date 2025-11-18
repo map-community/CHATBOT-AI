@@ -77,40 +77,114 @@ def get_embeddings():
     )
 # dense_doc_vectors = np.array(embeddings.embed_documents(texts))  # 문서 임베딩
 
-
 def fetch_titles_from_pinecone():
-    # 메타데이터 기반 검색을 위한 임의 쿼리
-    query_results = storage.pinecone_index.query(
-        vector=[0] * 4096,  # Pinecone에서 사용 중인 벡터 크기에 맞게 0으로 채운 벡터
-        top_k=10000,        # 충분히 큰 값으로 설정하여 모든 벡터 가져오기
-        include_metadata=True  # 메타데이터 포함
-    )
+    """
+    Pinecone에서 전체 데이터(제목, 텍스트, 메타데이터)를 조회합니다.
+    - list() 메서드(Pagination)를 사용하여 개수 제한 없이 모든 ID를 가져옵니다.
+    - fetch() 메서드(Batch)를 사용하여 데이터를 효율적으로 가져옵니다.
+    """
+    logger.info("🔄 Pinecone 전체 데이터 조회 시작...")
+    
+    # ==========================================
+    # 1. 전체 ID 가져오기 (개수 제한 없음!)
+    # ==========================================
+    all_ids = []
+    
+    try:
+        # namespace가 있다면 지정해야 합니다. (기본값 "")
+        # list()는 전체 ID를 페이지네이션하여 모두 가져옵니다.
+        for ids in storage.pinecone_index.list(namespace=""): 
+            all_ids.extend(ids)
+        logger.info(f"📊 총 {len(all_ids)}개의 벡터 ID를 발견했습니다.")
 
-    # 메타데이터에서 필요한 값들 추출 (멀티모달 RAG를 위한 확장)
+    except Exception as e:
+        logger.error(f"❌ ID 리스팅 실패: {e}")
+        # 라이브러리 버전 문제일 경우를 대비한 안내
+        logger.error("👉 'requirements.txt'의 pinecone 버전을 확인하고 재빌드하세요.")
+        return [], [], [], [], [], [], [], [], [], []
+
+    # 데이터가 없으면 안전하게 종료
+    if not all_ids:
+        logger.warning("⚠️ 조회된 데이터가 0개입니다.")
+        return [], [], [], [], [], [], [], [], [], []
+
+
+    # ==========================================
+    # 2. ID로 메타데이터 가져오기 (Batch Fetch)
+    # ==========================================
+    # 결과를 담을 리스트 초기화
     titles = []
     texts = []
     urls = []
     dates = []
-    htmls = []  # HTML 구조 데이터 (표, 레이아웃 등)
-    content_types = []  # text, image, attachment
-    sources = []  # original_post, image_ocr, document_parse
-    image_urls = []  # 이미지 URL
-    attachment_urls = []  # 첨부파일 URL
-    attachment_types = []  # pdf, hwp, docx 등
+    htmls = []
+    content_types = []
+    sources = []
+    image_urls = []
+    attachment_urls = []
+    attachment_types = []
 
-    for match in query_results["matches"]:
-        metadata = match["metadata"]
-        titles.append(metadata["title"])
-        texts.append(metadata["text"])
-        urls.append(metadata["url"])
-        dates.append(metadata["date"])
-        # 멀티모달 메타데이터 (없으면 기본값 사용)
-        htmls.append(metadata.get("html", ""))
-        content_types.append(metadata.get("content_type", "text"))
-        sources.append(metadata.get("source", "original_post"))
-        image_urls.append(metadata.get("image_url", ""))
-        attachment_urls.append(metadata.get("attachment_url", ""))
-        attachment_types.append(metadata.get("attachment_type", ""))
+    # 한 번에 가져올 배치 크기
+    batch_size = 1000
+    
+    # 1,000개씩 끊어서 요청
+    for i in range(0, len(all_ids), batch_size):
+        logger.info(f"⏳ 데이터 가져오는 중... ({i} / {len(all_ids)})")
+        
+        batch_ids = all_ids[i:i + batch_size]
+        
+        try:
+            # Fetch 요청
+            fetch_response = storage.pinecone_index.fetch(ids=batch_ids)
+            
+            # 응답 객체를 딕셔너리로 변환 (v3 호환성 해결)
+            vectors = {}
+            if hasattr(fetch_response, 'to_dict'):
+                response_dict = fetch_response.to_dict()
+                vectors = response_dict.get('vectors', {})
+            elif hasattr(fetch_response, 'vectors'):
+                vectors = fetch_response.vectors
+            else:
+                vectors = fetch_response.get('vectors', {})
+
+            if vectors is None:
+                vectors = {}
+            
+            # 가져온 데이터 파싱
+            for vector_id in batch_ids:
+                if vector_id in vectors:
+                    vector_data = vectors[vector_id]
+                    
+                    # 메타데이터 추출
+                    if isinstance(vector_data, dict):
+                        metadata = vector_data.get('metadata', {})
+                    elif hasattr(vector_data, 'metadata'):
+                        metadata = vector_data.metadata
+                    else:
+                        metadata = {}
+
+                    if metadata is None:
+                        metadata = {}
+                    
+                    # 리스트에 데이터 추가
+                    titles.append(metadata.get("title", ""))
+                    texts.append(metadata.get("text", ""))
+                    urls.append(metadata.get("url", ""))
+                    dates.append(metadata.get("date", ""))
+                    
+                    # 멀티모달 메타데이터
+                    htmls.append(metadata.get("html", ""))
+                    content_types.append(metadata.get("content_type", "text"))
+                    sources.append(metadata.get("source", "original_post"))
+                    image_urls.append(metadata.get("image_url", ""))
+                    attachment_urls.append(metadata.get("attachment_url", ""))
+                    attachment_types.append(metadata.get("attachment_type", ""))
+                    
+        except Exception as e:
+            logger.error(f"⚠️ 배치 Fetch 실패 ({i}~{i+batch_size}): {e}")
+            continue
+
+    logger.info(f"✅ 전체 데이터 로드 완료: {len(titles)}개 문서")
 
     return titles, texts, urls, dates, htmls, content_types, sources, image_urls, attachment_urls, attachment_types
 
