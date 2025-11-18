@@ -54,7 +54,7 @@ def main():
     logger.info(f"\n⚠️  다음 작업을 수행합니다:")
     logger.info(f"   1. notice_collection 백업 → notice_collection_backup")
     logger.info(f"   2. notice_collection 삭제 (재생성 위해)")
-    logger.info(f"   3. last_crawled_collection 삭제 (전체 재크롤링 위해)")
+    logger.info(f"   3. crawl_state collection 삭제 (전체 재크롤링 위해)")
     logger.info(f"   4. Pinecone 전체 삭제 (중복 방지)")
     logger.info(f"   5. multimodal_cache는 유지 (API 재호출 방지)")
 
@@ -79,10 +79,10 @@ def main():
     notice_coll.drop()
     logger.info("✅ 삭제 완료")
 
-    # 3. last_crawled_collection 삭제 (크롤링 재시작 위해)
-    logger.info("\n🗑️  last_crawled_collection 삭제 중...")
-    last_crawled_coll = db['last_crawled']
-    last_crawled_coll.drop()
+    # 3. crawl_state collection 삭제 (크롤링 재시작 위해)
+    logger.info("\n🗑️  crawl_state collection 삭제 중...")
+    crawl_state_coll = db[CrawlerConfig.MONGODB_STATE_COLLECTION]
+    crawl_state_coll.drop()
     logger.info("✅ 삭제 완료 (모든 게시글 처음부터 재크롤링)")
 
     # 4. Pinecone 전체 삭제
