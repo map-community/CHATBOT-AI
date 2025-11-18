@@ -234,9 +234,12 @@ class EmbeddingManager:
         for i, embedding in enumerate(embeddings):
             vector_id = start_id + i
 
-            # 메타데이터에 텍스트 추가
+            # 메타데이터 준비 (텍스트는 임베딩 벡터에 이미 포함되므로 preview만 저장)
             metadata = metadatas[i].copy()
-            metadata["text"] = texts[i]
+
+            # 검색 결과 미리보기용으로 짧은 텍스트만 저장 (Pinecone 40KB 제한)
+            text_preview = texts[i][:200] + "..." if len(texts[i]) > 200 else texts[i]
+            metadata["text_preview"] = text_preview
 
             # Pinecone에 업로드
             self.index.upsert([(str(vector_id), embedding.tolist(), metadata)])
@@ -276,31 +279,19 @@ class EmbeddingManager:
         print(f"날짜: {metadata.get('date', 'N/A')}")
         print(f"URL: {metadata.get('url', 'N/A')[:80]}..." if len(metadata.get('url', '')) > 80 else f"URL: {metadata.get('url', 'N/A')}")
 
-        # 텍스트 필드
-        text_data = metadata.get('text', '')
+        # 텍스트 미리보기 필드
+        text_preview = metadata.get('text_preview', '')
         print(f"\n📝 텍스트 필드:")
-        print(f"   길이: {len(text_data)}자")
-        text_preview = text_data[:100].replace('\n', ' ')
-        if len(text_data) > 100:
-            text_preview += "..."
+        print(f"   길이: {len(text_preview)}자")
         print(f"   미리보기: {text_preview}")
 
-        # HTML 필드 (중요!)
-        html_data = metadata.get('html', '')
+        # HTML 구조 가용성
         print(f"\n🌐 HTML 구조 필드:")
-        if html_data:
-            print(f"   ✅ 저장됨 ({len(html_data)}자)")
-            print(f"   용도: 표, 레이아웃 맥락 보존 → RAG 품질 향상")
-            html_preview = html_data[:100].replace('\n', ' ')
-            if len(html_data) > 100:
-                html_preview += "..."
-            print(f"   미리보기: {html_preview}")
+        if metadata.get('html_available'):
+            print(f"   ✅ HTML 구조 가용 (캐시에 저장됨)")
+            print(f"   용도: 표, 레이아웃 맥락 보존 (필요시 캐시에서 조회)")
         else:
             print(f"   ❌ 없음 (평문 텍스트만)")
-
-        # html_available 플래그
-        if metadata.get('html_available'):
-            print(f"   HTML 활용 가능: ✅")
 
         # 이미지/첨부파일 URL
         if metadata.get('image_url'):

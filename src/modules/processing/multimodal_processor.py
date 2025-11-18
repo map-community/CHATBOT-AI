@@ -85,24 +85,93 @@ class MultimodalContent:
         if text and text.strip():
             self.text_chunks.append(text)
 
+    @staticmethod
+    def _html_table_to_markdown(html: str) -> str:
+        """
+        HTML 테이블을 Markdown 테이블로 변환 (캐시 데이터 활용용)
+
+        Args:
+            html: HTML 문자열 (테이블 포함)
+
+        Returns:
+            Markdown 테이블 문자열 (테이블 없으면 빈 문자열)
+        """
+        from bs4 import BeautifulSoup
+
+        try:
+            soup = BeautifulSoup(html, 'html.parser')
+            tables = soup.find_all('table')
+
+            if not tables:
+                return ""
+
+            markdown_tables = []
+            for table in tables:
+                rows = table.find_all('tr')
+                if not rows:
+                    continue
+
+                # 첫 행을 헤더로 사용
+                first_row = rows[0]
+                headers = [cell.get_text(strip=True) for cell in first_row.find_all(['th', 'td'])]
+
+                if not headers:
+                    continue
+
+                # Markdown 테이블 생성
+                md_table = "| " + " | ".join(headers) + " |\n"
+                md_table += "|" + "|".join([" --- " for _ in headers]) + "|\n"
+
+                # 데이터 행 (첫 행이 헤더가 아닌 경우도 고려)
+                data_rows = rows[1:] if len(rows) > 1 else []
+                for row in data_rows:
+                    cells = [cell.get_text(strip=True) for cell in row.find_all(['td', 'th'])]
+                    # 셀 개수가 헤더와 다르면 패딩
+                    while len(cells) < len(headers):
+                        cells.append("")
+                    md_table += "| " + " | ".join(cells[:len(headers)]) + " |\n"
+
+                markdown_tables.append(md_table)
+
+            return "\n\n".join(markdown_tables)
+        except Exception as e:
+            # 변환 실패 시 빈 문자열 반환
+            return ""
+
     def add_image_content(self, url: str, ocr_text: str = "", ocr_html: str = "", ocr_elements: List = None, description: str = ""):
-        """이미지 콘텐츠 추가 (HTML 구조 포함)"""
+        """이미지 콘텐츠 추가 (캐시 HTML → Markdown 변환)"""
+        # HTML 테이블이 있으면 markdown으로 변환하여 텍스트 앞에 추가
+        final_text = ocr_text
+        if ocr_html and '<table' in ocr_html.lower():
+            table_markdown = self._html_table_to_markdown(ocr_html)
+            if table_markdown:
+                # 테이블 markdown을 텍스트 앞에 추가 (구조 보존!)
+                final_text = table_markdown + "\n\n" + ocr_text
+
         self.image_contents.append({
             "url": url,
-            "ocr_text": ocr_text,
-            "ocr_html": ocr_html,  # HTML 구조 (표, 레이아웃 등)
-            "ocr_elements": ocr_elements or [],  # 요소 정보
+            "ocr_text": final_text,  # markdown 테이블 포함!
+            "ocr_html": ocr_html,  # 원본 HTML (참고용)
+            "ocr_elements": ocr_elements or [],
             "description": description
         })
 
     def add_attachment_content(self, url: str, file_type: str, text: str, html: str = "", elements: List = None):
-        """첨부파일 콘텐츠 추가 (HTML 구조 포함)"""
+        """첨부파일 콘텐츠 추가 (캐시 HTML → Markdown 변환)"""
+        # HTML 테이블이 있으면 markdown으로 변환하여 텍스트 앞에 추가
+        final_text = text
+        if html and '<table' in html.lower():
+            table_markdown = self._html_table_to_markdown(html)
+            if table_markdown:
+                # 테이블 markdown을 텍스트 앞에 추가 (구조 보존!)
+                final_text = table_markdown + "\n\n" + text
+
         self.attachment_contents.append({
             "url": url,
             "type": file_type,
-            "text": text,
-            "html": html,  # HTML 구조 (표, 레이아웃 등)
-            "elements": elements or []  # 요소 정보
+            "text": final_text,  # markdown 테이블 포함!
+            "html": html,  # 원본 HTML (참고용)
+            "elements": elements or []
         })
 
     def to_embedding_items(self) -> List[Tuple[str, Dict]]:
@@ -162,7 +231,6 @@ class MultimodalContent:
                                 "chunk_index": chunk_idx,
                                 "total_chunks": len(chunks),
                                 "source": "image_ocr",  # OCR 결과
-                                "html": img.get("ocr_html", ""),
                                 "html_available": bool(img.get("ocr_html"))
                             }
                         ))
@@ -178,7 +246,6 @@ class MultimodalContent:
                             "image_url": img["url"],
                             "image_index": idx,
                             "source": "image_ocr",
-                            "html": img.get("ocr_html", ""),
                             "html_available": bool(img.get("ocr_html"))
                         }
                     ))
@@ -205,7 +272,6 @@ class MultimodalContent:
                                 "chunk_index": chunk_idx,
                                 "total_chunks": len(chunks),
                                 "source": "document_parse",  # Document Parse 결과
-                                "html": att.get("html", ""),
                                 "html_available": bool(att.get("html"))
                             }
                         ))
@@ -222,7 +288,6 @@ class MultimodalContent:
                             "attachment_type": att["type"],
                             "attachment_index": idx,
                             "source": "document_parse",
-                            "html": att.get("html", ""),
                             "html_available": bool(att.get("html"))
                         }
                     ))
@@ -448,7 +513,7 @@ class MultimodalProcessor:
             "total": len(image_urls)
         }
 
-    def process_attachments(self, attachment_urls: List[str], logger=None, category: str = "notice") -> Dict:
+    def process_attachments(self, attachment_urls: List, logger=None, category: str = "notice") -> Dict:
         """
         첨부파일 리스트 처리 (Document Parse 또는 OCR)
 
@@ -456,7 +521,9 @@ class MultimodalProcessor:
         문서 확장자는 Document Parse로 처리합니다.
 
         Args:
-            attachment_urls: 첨부파일 URL 리스트
+            attachment_urls: 첨부파일 리스트 (str 또는 {"url": str, "filename": str} 형식)
+                           - HTML에서 filename 추출 시 딕셔너리로 전달 (HEAD 요청 생략)
+                           - filename 없으면 str URL로 전달 (HEAD 요청으로 확인)
             logger: 커스텀 로거
             category: 카테고리
 
@@ -475,9 +542,46 @@ class MultimodalProcessor:
         failed = []
         unsupported = []
 
-        for att_url in attachment_urls:
+        for att in attachment_urls:
+            # 🔧 하위 호환성: 딕셔너리 또는 문자열(URL) 처리
+            if isinstance(att, dict):
+                att_url = att["url"]
+                filename = att.get("filename")  # HTML에서 추출된 파일명 (있으면)
+            else:
+                att_url = att  # 하위 호환 (문자열 URL)
+                filename = None
+
+            # 🔧 파일 확장자 추출 (우선순위: filename > URL > HEAD 요청)
+            file_ext = None
+
+            # 1. filename에서 확장자 추출 (HTML에서 얻은 경우)
+            if filename:
+                file_ext = Path(filename).suffix.lower()
+
+            # 2. URL에서 확장자 추출 시도
+            if not file_ext:
+                url_ext = Path(att_url).suffix.lower()
+                if url_ext:
+                    file_ext = url_ext
+
+            # 3. 확장자 없으면 HEAD 요청으로 Content-Disposition 확인 (fallback)
+            if not file_ext:
+                try:
+                    import requests
+                    from urllib.parse import unquote
+                    head_response = requests.head(att_url, timeout=10, allow_redirects=True)
+                    content_disp = head_response.headers.get('Content-Disposition', '')
+                    if 'filename=' in content_disp:
+                        # filename="파일.zip" 형식
+                        parts = content_disp.split('filename=')
+                        if len(parts) > 1:
+                            filename = parts[1].strip('"').strip("'")
+                            filename = unquote(filename)  # URL 디코딩
+                            file_ext = Path(filename).suffix.lower()
+                except:
+                    pass  # HEAD 실패 시 계속 진행
+
             # 🔧 ZIP 파일 처리 (압축 해제 후 개별 파일 파싱)
-            file_ext = Path(att_url).suffix.lower()
             if file_ext == '.zip':
                 try:
                     if logger:
@@ -939,7 +1043,7 @@ class MultimodalProcessor:
         date: str,
         text_chunks: List[str],
         image_urls: List[str],
-        attachment_urls: List[str],
+        attachment_urls: List,
         category: str = "notice",
         logger=None
     ) -> Tuple[MultimodalContent, Dict]:
@@ -952,7 +1056,7 @@ class MultimodalProcessor:
             date: 날짜
             text_chunks: 텍스트 청크 리스트
             image_urls: 이미지 URL 리스트
-            attachment_urls: 첨부파일 URL 리스트
+            attachment_urls: 첨부파일 리스트 (str 또는 {"url": str, "filename": str} 형식)
             category: 카테고리
             logger: 커스텀 로거 (CrawlerLogger)
 

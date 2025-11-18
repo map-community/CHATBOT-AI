@@ -344,6 +344,11 @@ class UpstageClient:
                                 "elements": result.get("elements", []),
                                 "source_url": url
                             }
+                        elif response.status_code == 413:
+                            # 413: Payload Too Large (100페이지 초과)
+                            logger.warning(f"⚠️  문서 크기 초과 (100페이지 제한): {filename}")
+                            logger.warning(f"   → 학부 게시판과 무관한 대용량 문서로 판단하여 건너뜁니다.")
+                            return None  # gracefully skip
                         else:
                             logger.warning(f"Document Parse API 오류: {response.status_code} - {response.text[:200]}")
 
@@ -668,7 +673,7 @@ class UpstageClient:
         {
             "content": {
                 "html": "<h1>...</h1>",
-                "markdown": "...",
+                "markdown": "...",  # 표 구조 보존!
                 "text": "..."
             },
             "elements": [
@@ -676,6 +681,7 @@ class UpstageClient:
                     "category": "heading1",
                     "content": {
                         "html": "<h1>...</h1>",
+                        "markdown": "...",
                         "text": "..."
                     }
                 }
@@ -683,7 +689,16 @@ class UpstageClient:
         }
         """
         try:
-            # 1. content.text 우선 (전체 텍스트)
+            # 1. content.markdown 우선 (표 구조 보존!)
+            if "content" in result:
+                content = result["content"]
+                if isinstance(content, dict):
+                    markdown = content.get("markdown", "")
+                    if markdown:
+                        logger.info(f"✅ Markdown 사용 (표 구조 보존): {len(markdown)}자")
+                        return markdown
+
+            # 2. content.text (markdown 없으면)
             if "content" in result:
                 content = result["content"]
                 if isinstance(content, dict):
@@ -691,25 +706,32 @@ class UpstageClient:
                     if text:
                         return text
 
-            # 2. elements에서 텍스트 추출
+            # 3. elements에서 markdown 우선 추출 (표 구조 보존!)
             if "elements" in result:
                 texts = []
                 for element in result.get("elements", []):
                     if isinstance(element, dict) and "content" in element:
                         elem_content = element["content"]
                         if isinstance(elem_content, dict):
-                            elem_text = elem_content.get("text", "")
-                            if elem_text:
-                                texts.append(elem_text)
+                            # markdown 우선
+                            elem_markdown = elem_content.get("markdown", "")
+                            if elem_markdown:
+                                texts.append(elem_markdown)
+                            else:
+                                # markdown 없으면 text 사용
+                                elem_text = elem_content.get("text", "")
+                                if elem_text:
+                                    texts.append(elem_text)
 
                 if texts:
+                    logger.info(f"✅ Elements에서 추출 (표 구조 보존 가능): {len(texts)}개 요소")
                     return "\n\n".join(texts)
 
-            # 3. HTML에서 텍스트 추출 (text 필드가 비어있을 때)
-            # content.text와 elements[].content.text가 비어있어도 HTML에 텍스트가 있을 수 있음
+            # 4. HTML에서 텍스트 추출 (markdown/text 필드가 비어있을 때)
+            # Fallback: content.markdown, content.text, elements가 모두 비어있을 때만 사용
             html_texts = []
 
-            # 3-1. content.html에서 추출
+            # 4-1. content.html에서 추출
             if "content" in result:
                 content = result["content"]
                 if isinstance(content, dict):
@@ -719,7 +741,7 @@ class UpstageClient:
                         if html_text:
                             html_texts.append(html_text)
 
-            # 3-2. elements[].content.html에서 추출
+            # 4-2. elements[].content.html에서 추출
             if "elements" in result and not html_texts:
                 for element in result.get("elements", []):
                     if isinstance(element, dict) and "content" in element:
@@ -734,7 +756,7 @@ class UpstageClient:
             if html_texts:
                 return "\n\n".join(html_texts)
 
-            # 4. Fallback: 최상위 text 필드
+            # 5. Fallback: 최상위 text 필드
             if "text" in result:
                 return result["text"]
 
