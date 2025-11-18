@@ -85,24 +85,93 @@ class MultimodalContent:
         if text and text.strip():
             self.text_chunks.append(text)
 
+    @staticmethod
+    def _html_table_to_markdown(html: str) -> str:
+        """
+        HTML 테이블을 Markdown 테이블로 변환 (캐시 데이터 활용용)
+
+        Args:
+            html: HTML 문자열 (테이블 포함)
+
+        Returns:
+            Markdown 테이블 문자열 (테이블 없으면 빈 문자열)
+        """
+        from bs4 import BeautifulSoup
+
+        try:
+            soup = BeautifulSoup(html, 'html.parser')
+            tables = soup.find_all('table')
+
+            if not tables:
+                return ""
+
+            markdown_tables = []
+            for table in tables:
+                rows = table.find_all('tr')
+                if not rows:
+                    continue
+
+                # 첫 행을 헤더로 사용
+                first_row = rows[0]
+                headers = [cell.get_text(strip=True) for cell in first_row.find_all(['th', 'td'])]
+
+                if not headers:
+                    continue
+
+                # Markdown 테이블 생성
+                md_table = "| " + " | ".join(headers) + " |\n"
+                md_table += "|" + "|".join([" --- " for _ in headers]) + "|\n"
+
+                # 데이터 행 (첫 행이 헤더가 아닌 경우도 고려)
+                data_rows = rows[1:] if len(rows) > 1 else []
+                for row in data_rows:
+                    cells = [cell.get_text(strip=True) for cell in row.find_all(['td', 'th'])]
+                    # 셀 개수가 헤더와 다르면 패딩
+                    while len(cells) < len(headers):
+                        cells.append("")
+                    md_table += "| " + " | ".join(cells[:len(headers)]) + " |\n"
+
+                markdown_tables.append(md_table)
+
+            return "\n\n".join(markdown_tables)
+        except Exception as e:
+            # 변환 실패 시 빈 문자열 반환
+            return ""
+
     def add_image_content(self, url: str, ocr_text: str = "", ocr_html: str = "", ocr_elements: List = None, description: str = ""):
-        """이미지 콘텐츠 추가 (HTML 구조 포함)"""
+        """이미지 콘텐츠 추가 (캐시 HTML → Markdown 변환)"""
+        # HTML 테이블이 있으면 markdown으로 변환하여 텍스트 앞에 추가
+        final_text = ocr_text
+        if ocr_html and '<table' in ocr_html.lower():
+            table_markdown = self._html_table_to_markdown(ocr_html)
+            if table_markdown:
+                # 테이블 markdown을 텍스트 앞에 추가 (구조 보존!)
+                final_text = table_markdown + "\n\n" + ocr_text
+
         self.image_contents.append({
             "url": url,
-            "ocr_text": ocr_text,
-            "ocr_html": ocr_html,  # HTML 구조 (표, 레이아웃 등)
-            "ocr_elements": ocr_elements or [],  # 요소 정보
+            "ocr_text": final_text,  # markdown 테이블 포함!
+            "ocr_html": ocr_html,  # 원본 HTML (참고용)
+            "ocr_elements": ocr_elements or [],
             "description": description
         })
 
     def add_attachment_content(self, url: str, file_type: str, text: str, html: str = "", elements: List = None):
-        """첨부파일 콘텐츠 추가 (HTML 구조 포함)"""
+        """첨부파일 콘텐츠 추가 (캐시 HTML → Markdown 변환)"""
+        # HTML 테이블이 있으면 markdown으로 변환하여 텍스트 앞에 추가
+        final_text = text
+        if html and '<table' in html.lower():
+            table_markdown = self._html_table_to_markdown(html)
+            if table_markdown:
+                # 테이블 markdown을 텍스트 앞에 추가 (구조 보존!)
+                final_text = table_markdown + "\n\n" + text
+
         self.attachment_contents.append({
             "url": url,
             "type": file_type,
-            "text": text,
-            "html": html,  # HTML 구조 (표, 레이아웃 등)
-            "elements": elements or []  # 요소 정보
+            "text": final_text,  # markdown 테이블 포함!
+            "html": html,  # 원본 HTML (참고용)
+            "elements": elements or []
         })
 
     def to_embedding_items(self) -> List[Tuple[str, Dict]]:
