@@ -162,7 +162,6 @@ class MultimodalContent:
                                 "chunk_index": chunk_idx,
                                 "total_chunks": len(chunks),
                                 "source": "image_ocr",  # OCR 결과
-                                "html": img.get("ocr_html", ""),
                                 "html_available": bool(img.get("ocr_html"))
                             }
                         ))
@@ -178,7 +177,6 @@ class MultimodalContent:
                             "image_url": img["url"],
                             "image_index": idx,
                             "source": "image_ocr",
-                            "html": img.get("ocr_html", ""),
                             "html_available": bool(img.get("ocr_html"))
                         }
                     ))
@@ -205,7 +203,6 @@ class MultimodalContent:
                                 "chunk_index": chunk_idx,
                                 "total_chunks": len(chunks),
                                 "source": "document_parse",  # Document Parse 결과
-                                "html": att.get("html", ""),
                                 "html_available": bool(att.get("html"))
                             }
                         ))
@@ -222,7 +219,6 @@ class MultimodalContent:
                             "attachment_type": att["type"],
                             "attachment_index": idx,
                             "source": "document_parse",
-                            "html": att.get("html", ""),
                             "html_available": bool(att.get("html"))
                         }
                     ))
