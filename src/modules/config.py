@@ -55,7 +55,7 @@ class CrawlerConfig:
     ]
 
     # 동시 요청 설정
-    MAX_WORKERS = 10  # ThreadPoolExecutor 워커 수
+    MAX_WORKERS = 3  # ThreadPoolExecutor 워커 수 (API rate limit 고려)
 
     # 재시도 설정
     MAX_RETRIES = 3
