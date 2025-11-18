@@ -15,8 +15,10 @@ class BM25Retriever:
     """
     BM25 알고리즘을 사용하여 문서를 검색하는 클래스
 
-    제목 기반 토큰화를 수행하고, BM25 유사도를 계산하여
+    제목과 본문을 결합하여 토큰화하고, BM25 유사도를 계산하여
     가장 관련성 높은 문서를 반환합니다.
+
+    개선사항: 제목뿐만 아니라 본문도 검색하여 첨부파일 내용도 찾을 수 있습니다.
     """
 
     def __init__(self,
@@ -50,11 +52,14 @@ class BM25Retriever:
         self.k1 = k1
         self.b = b
 
-        # BM25 인덱스 생성
-        logger.info("🔄 BM25 인덱스 생성 중...")
-        self.tokenized_titles = [query_transformer(title) for title in titles]
-        self.bm25_index = BM25Okapi(self.tokenized_titles, k1=k1, b=b)
-        logger.info(f"✅ BM25 인덱스 생성 완료 ({len(titles)}개 문서)")
+        # BM25 인덱스 생성 (제목 + 본문 결합하여 검색)
+        logger.info("🔄 BM25 인덱스 생성 중 (제목+본문 검색)...")
+        self.tokenized_documents = [
+            query_transformer(title + " " + text)
+            for title, text in zip(titles, texts)
+        ]
+        self.bm25_index = BM25Okapi(self.tokenized_documents, k1=k1, b=b)
+        logger.info(f"✅ BM25 인덱스 생성 완료 ({len(titles)}개 문서, 첨부파일 내용 포함)")
 
     def search(self,
                query_nouns: List[str],
@@ -135,7 +140,11 @@ class BM25Retriever:
         self.urls = urls
         self.dates = dates
 
-        self.tokenized_titles = [self.query_transformer(title) for title in titles]
-        self.bm25_index = BM25Okapi(self.tokenized_titles, k1=self.k1, b=self.b)
+        # 제목 + 본문 결합하여 인덱스 생성 (첨부파일 내용 포함)
+        self.tokenized_documents = [
+            self.query_transformer(title + " " + text)
+            for title, text in zip(titles, texts)
+        ]
+        self.bm25_index = BM25Okapi(self.tokenized_documents, k1=self.k1, b=self.b)
 
-        logger.info(f"✅ BM25 인덱스 업데이트 완료 ({len(titles)}개 문서)")
+        logger.info(f"✅ BM25 인덱스 업데이트 완료 ({len(titles)}개 문서, 첨부파일 내용 포함)")
