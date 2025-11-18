@@ -99,7 +99,7 @@ class JobCrawler(BaseCrawler):
                         if '/thumb-' not in img_url:
                             image_content.append(img_url)
 
-            # 첨부파일 URL 추출
+            # 첨부파일 URL 추출 (범용성: HTML에서 파일명 추출)
             attachment_section = soup.find('section', id='bo_v_file') or soup.find('div', class_='bo_v_file')
             if attachment_section:
                 for link in attachment_section.find_all('a', href=True, class_='view_file_download'):
@@ -111,13 +111,23 @@ class JobCrawler(BaseCrawler):
                             href = f"https://cse.knu.ac.kr{href}"
                         elif not href.startswith('http'):
                             href = f"https://cse.knu.ac.kr/{href}"
-                        attachment_content.append(href)
+
+                        # 파일명 추출 (HTML에서 - 성능 최적화)
+                        filename = None
+                        strong_tag = link.find('strong')
+                        if strong_tag:
+                            filename = strong_tag.get_text(strip=True)
+
+                        # 딕셔너리 형태로 저장 (파일명 포함)
+                        attachment_content.append({
+                            "url": href,
+                            "filename": filename
+                        })
 
             # 중복 제거: 본문 이미지와 첨부파일에서 중복되는 URL 제거
-            # (같은 이미지가 본문과 첨부파일에 모두 있는 경우)
             original_attachment_count = len(attachment_content)
             image_urls_set = set(image_content)
-            attachment_content = [url for url in attachment_content if url not in image_urls_set]
+            attachment_content = [att for att in attachment_content if att["url"] not in image_urls_set]
             removed_count = original_attachment_count - len(attachment_content)
 
             if removed_count > 0:

@@ -513,7 +513,7 @@ class MultimodalProcessor:
             "total": len(image_urls)
         }
 
-    def process_attachments(self, attachment_urls: List[str], logger=None, category: str = "notice") -> Dict:
+    def process_attachments(self, attachment_urls: List, logger=None, category: str = "notice") -> Dict:
         """
         첨부파일 리스트 처리 (Document Parse 또는 OCR)
 
@@ -521,7 +521,9 @@ class MultimodalProcessor:
         문서 확장자는 Document Parse로 처리합니다.
 
         Args:
-            attachment_urls: 첨부파일 URL 리스트
+            attachment_urls: 첨부파일 리스트 (str 또는 {"url": str, "filename": str} 형식)
+                           - HTML에서 filename 추출 시 딕셔너리로 전달 (HEAD 요청 생략)
+                           - filename 없으면 str URL로 전달 (HEAD 요청으로 확인)
             logger: 커스텀 로거
             category: 카테고리
 
@@ -540,18 +542,30 @@ class MultimodalProcessor:
         failed = []
         unsupported = []
 
-        for att_url in attachment_urls:
-            # 🔧 파일 확장자 추출 (URL 또는 Content-Disposition에서)
-            # download.php 같은 동적 URL은 먼저 HEAD 요청으로 확인
-            file_ext = None
-            filename = None
-
-            # URL에서 확장자 추출 시도
-            url_ext = Path(att_url).suffix.lower()
-            if url_ext:
-                file_ext = url_ext
+        for att in attachment_urls:
+            # 🔧 하위 호환성: 딕셔너리 또는 문자열(URL) 처리
+            if isinstance(att, dict):
+                att_url = att["url"]
+                filename = att.get("filename")  # HTML에서 추출된 파일명 (있으면)
             else:
-                # 확장자 없으면 HEAD 요청으로 Content-Disposition 확인
+                att_url = att  # 하위 호환 (문자열 URL)
+                filename = None
+
+            # 🔧 파일 확장자 추출 (우선순위: filename > URL > HEAD 요청)
+            file_ext = None
+
+            # 1. filename에서 확장자 추출 (HTML에서 얻은 경우)
+            if filename:
+                file_ext = Path(filename).suffix.lower()
+
+            # 2. URL에서 확장자 추출 시도
+            if not file_ext:
+                url_ext = Path(att_url).suffix.lower()
+                if url_ext:
+                    file_ext = url_ext
+
+            # 3. 확장자 없으면 HEAD 요청으로 Content-Disposition 확인 (fallback)
+            if not file_ext:
                 try:
                     import requests
                     from urllib.parse import unquote
@@ -1029,7 +1043,7 @@ class MultimodalProcessor:
         date: str,
         text_chunks: List[str],
         image_urls: List[str],
-        attachment_urls: List[str],
+        attachment_urls: List,
         category: str = "notice",
         logger=None
     ) -> Tuple[MultimodalContent, Dict]:
@@ -1042,7 +1056,7 @@ class MultimodalProcessor:
             date: 날짜
             text_chunks: 텍스트 청크 리스트
             image_urls: 이미지 URL 리스트
-            attachment_urls: 첨부파일 URL 리스트
+            attachment_urls: 첨부파일 리스트 (str 또는 {"url": str, "filename": str} 형식)
             category: 카테고리
             logger: 커스텀 로거 (CrawlerLogger)
 
