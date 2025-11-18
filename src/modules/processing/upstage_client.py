@@ -344,6 +344,11 @@ class UpstageClient:
                                 "elements": result.get("elements", []),
                                 "source_url": url
                             }
+                        elif response.status_code == 413:
+                            # 413: Payload Too Large (100페이지 초과)
+                            logger.warning(f"⚠️  문서 크기 초과 (100페이지 제한): {filename}")
+                            logger.warning(f"   → 학부 게시판과 무관한 대용량 문서로 판단하여 건너뜁니다.")
+                            return None  # gracefully skip
                         else:
                             logger.warning(f"Document Parse API 오류: {response.status_code} - {response.text[:200]}")
 

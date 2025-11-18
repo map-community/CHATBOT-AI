@@ -541,8 +541,33 @@ class MultimodalProcessor:
         unsupported = []
 
         for att_url in attachment_urls:
+            # 🔧 파일 확장자 추출 (URL 또는 Content-Disposition에서)
+            # download.php 같은 동적 URL은 먼저 HEAD 요청으로 확인
+            file_ext = None
+            filename = None
+
+            # URL에서 확장자 추출 시도
+            url_ext = Path(att_url).suffix.lower()
+            if url_ext:
+                file_ext = url_ext
+            else:
+                # 확장자 없으면 HEAD 요청으로 Content-Disposition 확인
+                try:
+                    import requests
+                    from urllib.parse import unquote
+                    head_response = requests.head(att_url, timeout=10, allow_redirects=True)
+                    content_disp = head_response.headers.get('Content-Disposition', '')
+                    if 'filename=' in content_disp:
+                        # filename="파일.zip" 형식
+                        parts = content_disp.split('filename=')
+                        if len(parts) > 1:
+                            filename = parts[1].strip('"').strip("'")
+                            filename = unquote(filename)  # URL 디코딩
+                            file_ext = Path(filename).suffix.lower()
+                except:
+                    pass  # HEAD 실패 시 계속 진행
+
             # 🔧 ZIP 파일 처리 (압축 해제 후 개별 파일 파싱)
-            file_ext = Path(att_url).suffix.lower()
             if file_ext == '.zip':
                 try:
                     if logger:
