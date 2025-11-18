@@ -622,6 +622,7 @@ def format_docs(docs):
     """
     문서 리스트를 LLM이 이해하기 쉬운 형식으로 포맷팅
     출처(원본/이미지OCR/첨부파일)를 라벨로 표시하여 맥락 제공
+    각 청크에 제목 정보를 명시하여 문맥 단절(Context Fragmentation) 문제 해결
 
     Args:
         docs: Document 객체 리스트
@@ -632,6 +633,9 @@ def format_docs(docs):
     formatted = []
 
     for doc in docs:
+        # 메타데이터에서 제목 추출
+        title = doc.metadata.get('title', '제목 없음')
+
         # 출처에 따라 라벨 생성
         source = doc.metadata.get('source', 'original_post')
         content_type = doc.metadata.get('content_type', 'text')
@@ -646,8 +650,8 @@ def format_docs(docs):
             # 원본 게시글
             label = "[본문]"
 
-        # 라벨 + 내용
-        formatted.append(f"{label}\n{doc.page_content}")
+        # 제목 + 라벨 + 내용 (제목을 명시하여 청크의 문맥 제공)
+        formatted.append(f"문서 제목: {title}\n{label}\n{doc.page_content}")
 
     return "\n\n".join(formatted)
 
