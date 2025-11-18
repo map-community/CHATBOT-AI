@@ -7,6 +7,7 @@ import numpy as np
 from rank_bm25 import BM25Okapi
 from typing import List, Tuple
 import logging
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
@@ -15,10 +16,12 @@ class BM25Retriever:
     """
     BM25 알고리즘을 사용하여 문서를 검색하는 클래스
 
-    제목과 본문을 결합하여 토큰화하고, BM25 유사도를 계산하여
+    제목, 본문, HTML 구조화 데이터를 결합하여 토큰화하고, BM25 유사도를 계산하여
     가장 관련성 높은 문서를 반환합니다.
 
-    개선사항: 제목뿐만 아니라 본문도 검색하여 첨부파일 내용도 찾을 수 있습니다.
+    개선사항:
+    - 제목뿐만 아니라 본문도 검색하여 첨부파일 내용도 찾을 수 있습니다.
+    - HTML 구조화 데이터(표 등)도 검색하여 정확도를 높입니다.
     """
 
     def __init__(self,
@@ -28,6 +31,7 @@ class BM25Retriever:
                  dates: List[str],
                  query_transformer,
                  similarity_adjuster,
+                 htmls: List[str] = None,
                  k1: float = 1.5,
                  b: float = 0.75):
         """
@@ -40,6 +44,7 @@ class BM25Retriever:
             dates: 문서 날짜 리스트
             query_transformer: 질문을 명사로 변환하는 함수 (transformed_query)
             similarity_adjuster: 유사도를 조정하는 함수 (adjust_similarity_scores)
+            htmls: HTML 구조화 데이터 리스트 (선택, 표 검색 개선용)
             k1: BM25 k1 파라미터 (기본값: 1.5)
             b: BM25 b 파라미터 (기본값: 0.75)
         """
@@ -47,19 +52,32 @@ class BM25Retriever:
         self.texts = texts
         self.urls = urls
         self.dates = dates
+        self.htmls = htmls if htmls else []
         self.query_transformer = query_transformer
         self.similarity_adjuster = similarity_adjuster
         self.k1 = k1
         self.b = b
 
-        # BM25 인덱스 생성 (제목 + 본문 결합하여 검색)
-        logger.info("🔄 BM25 인덱스 생성 중 (제목+본문 검색)...")
-        self.tokenized_documents = [
-            query_transformer(title + " " + text)
-            for title, text in zip(titles, texts)
-        ]
+        # BM25 인덱스 생성 (제목 + 본문 + HTML 텍스트 결합하여 검색)
+        logger.info("🔄 BM25 인덱스 생성 중 (제목+본문+HTML 검색)...")
+        self.tokenized_documents = []
+        for i, (title, text) in enumerate(zip(titles, texts)):
+            # HTML에서 텍스트 추출
+            html_text = ""
+            if self.htmls and i < len(self.htmls) and self.htmls[i]:
+                try:
+                    soup = BeautifulSoup(self.htmls[i], 'html.parser')
+                    html_text = soup.get_text(separator=' ', strip=True)
+                except:
+                    html_text = ""
+
+            # 제목 + 본문 + HTML 텍스트 결합
+            combined = f"{title} {text} {html_text}".strip()
+            self.tokenized_documents.append(query_transformer(combined))
+
         self.bm25_index = BM25Okapi(self.tokenized_documents, k1=k1, b=b)
-        logger.info(f"✅ BM25 인덱스 생성 완료 ({len(titles)}개 문서, 첨부파일 내용 포함)")
+        html_count = sum(1 for h in self.htmls if h) if self.htmls else 0
+        logger.info(f"✅ BM25 인덱스 생성 완료 ({len(titles)}개 문서, HTML 구조: {html_count}개)")
 
     def search(self,
                query_nouns: List[str],
@@ -123,7 +141,8 @@ class BM25Retriever:
                      titles: List[str],
                      texts: List[str],
                      urls: List[str],
-                     dates: List[str]):
+                     dates: List[str],
+                     htmls: List[str] = None):
         """
         BM25 인덱스 업데이트 (문서 추가/삭제 시 사용)
 
@@ -132,6 +151,7 @@ class BM25Retriever:
             texts: 새로운 문서 본문 리스트
             urls: 새로운 문서 URL 리스트
             dates: 새로운 문서 날짜 리스트
+            htmls: HTML 구조화 데이터 리스트 (선택)
         """
         logger.info("🔄 BM25 인덱스 업데이트 중...")
 
@@ -139,12 +159,24 @@ class BM25Retriever:
         self.texts = texts
         self.urls = urls
         self.dates = dates
+        self.htmls = htmls if htmls else []
 
-        # 제목 + 본문 결합하여 인덱스 생성 (첨부파일 내용 포함)
-        self.tokenized_documents = [
-            self.query_transformer(title + " " + text)
-            for title, text in zip(titles, texts)
-        ]
+        # 제목 + 본문 + HTML 텍스트 결합하여 인덱스 생성
+        self.tokenized_documents = []
+        for i, (title, text) in enumerate(zip(titles, texts)):
+            # HTML에서 텍스트 추출
+            html_text = ""
+            if self.htmls and i < len(self.htmls) and self.htmls[i]:
+                try:
+                    soup = BeautifulSoup(self.htmls[i], 'html.parser')
+                    html_text = soup.get_text(separator=' ', strip=True)
+                except:
+                    html_text = ""
+
+            # 제목 + 본문 + HTML 텍스트 결합
+            combined = f"{title} {text} {html_text}".strip()
+            self.tokenized_documents.append(self.query_transformer(combined))
+
         self.bm25_index = BM25Okapi(self.tokenized_documents, k1=self.k1, b=self.b)
-
-        logger.info(f"✅ BM25 인덱스 업데이트 완료 ({len(titles)}개 문서, 첨부파일 내용 포함)")
+        html_count = sum(1 for h in self.htmls if h) if self.htmls else 0
+        logger.info(f"✅ BM25 인덱스 업데이트 완료 ({len(titles)}개 문서, HTML 구조: {html_count}개)")

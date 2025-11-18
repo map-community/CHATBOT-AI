@@ -18,6 +18,8 @@ from langchain.schema.output_parser import StrOutputParser
 from langchain.schema.runnable import RunnableSequence, RunnableMap
 from langchain_core.runnables import RunnableLambda
 from langchain_upstage import UpstageEmbeddings, ChatUpstage
+from pymongo import MongoClient
+from bs4 import BeautifulSoup
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -82,9 +84,23 @@ def fetch_titles_from_pinecone():
     Pinecone에서 전체 데이터(제목, 텍스트, 메타데이터)를 조회합니다.
     - list() 메서드(Pagination)를 사용하여 개수 제한 없이 모든 ID를 가져옵니다.
     - fetch() 메서드(Batch)를 사용하여 데이터를 효율적으로 가져옵니다.
+    - html_available=true인 경우 MongoDB에서 실제 HTML을 가져옵니다.
     """
     logger.info("🔄 Pinecone 전체 데이터 조회 시작...")
-    
+
+    # ==========================================
+    # MongoDB 연결 (HTML 조회용)
+    # ==========================================
+    mongo_collection = None
+    mongo_client = None
+    try:
+        if storage.mongo_collection is not None:
+            # StorageManager의 MongoDB connection 사용
+            mongo_collection = storage.mongo_collection.database["multimodal_cache"]
+            logger.info("✅ MongoDB 연결 성공 (HTML 조회용)")
+    except Exception as e:
+        logger.warning(f"⚠️  MongoDB 연결 실패 (HTML 없이 진행): {e}")
+
     # ==========================================
     # 1. 전체 ID 가져오기 (개수 제한 없음!)
     # ==========================================
@@ -169,11 +185,22 @@ def fetch_titles_from_pinecone():
                     # 리스트에 데이터 추가
                     titles.append(metadata.get("title", ""))
                     texts.append(metadata.get("text", ""))
-                    urls.append(metadata.get("url", ""))
+                    url = metadata.get("url", "")
+                    urls.append(url)
                     dates.append(metadata.get("date", ""))
-                    
-                    # 멀티모달 메타데이터
-                    htmls.append(metadata.get("html", ""))
+
+                    # 멀티모달 메타데이터: html_available이면 MongoDB에서 HTML 조회
+                    html = ""
+                    if metadata.get("html_available") and mongo_collection:
+                        try:
+                            cached = mongo_collection.find_one({"url": url})
+                            if cached:
+                                # 이미지 OCR인 경우 ocr_html, 문서인 경우 html
+                                html = cached.get("ocr_html") or cached.get("html", "")
+                        except Exception as e:
+                            logger.debug(f"MongoDB HTML 조회 실패 ({url[:50] if url else 'no-url'}...): {e}")
+
+                    htmls.append(html)
                     content_types.append(metadata.get("content_type", "text"))
                     sources.append(metadata.get("source", "original_post"))
                     image_urls.append(metadata.get("image_url", ""))
@@ -292,7 +319,7 @@ def _initialize_retrievers():
         DocumentClusterer
     )
 
-    # BM25Retriever 초기화
+    # BM25Retriever 초기화 (HTML 데이터 포함)
     bm25_retriever = BM25Retriever(
         titles=storage.cached_titles,
         texts=storage.cached_texts,
@@ -300,6 +327,7 @@ def _initialize_retrievers():
         dates=storage.cached_dates,
         query_transformer=transformed_query,
         similarity_adjuster=adjust_similarity_scores,
+        htmls=storage.cached_htmls,  # HTML 구조화 데이터 추가
         k1=1.5,
         b=0.75
     )
@@ -739,8 +767,43 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
             source = "original_post"
             attachment_type = ""
 
-        # HTML이 있으면 HTML을 page_content로, 없으면 text를 사용
-        page_content = html if html else text
+        # HTML이 있으면 Markdown으로 변환하여 사용, 없으면 text를 사용
+        if html:
+            # HTML을 구조화된 텍스트로 변환 (표 구조 보존)
+            try:
+                soup = BeautifulSoup(html, 'html.parser')
+
+                # 테이블이 있으면 Markdown 표로 변환
+                markdown_content = ""
+                for table in soup.find_all('table'):
+                    markdown_content += "\n\n**[표 데이터]**\n"
+                    rows = table.find_all('tr')
+                    for row_idx, row in enumerate(rows):
+                        cells = row.find_all(['th', 'td'])
+                        row_text = " | ".join([cell.get_text(strip=True) for cell in cells])
+                        markdown_content += f"| {row_text} |\n"
+                        # 헤더 행 다음에 구분선 추가
+                        if row_idx == 0:
+                            markdown_content += "| " + " | ".join(["---"] * len(cells)) + " |\n"
+                    markdown_content += "\n"
+
+                # 테이블 외 텍스트 추출
+                for table in soup.find_all('table'):
+                    table.decompose()  # 테이블 제거 (중복 방지)
+
+                plain_text_from_html = soup.get_text(separator='\n', strip=True)
+
+                # 최종 page_content: Markdown 표 + 평문
+                page_content = (markdown_content + "\n" + plain_text_from_html).strip()
+
+                # 내용이 없으면 원본 text 사용
+                if not page_content:
+                    page_content = text
+            except Exception as e:
+                logger.debug(f"HTML 변환 실패, 원본 텍스트 사용: {e}")
+                page_content = text
+        else:
+            page_content = text
 
         # 날짜 파싱 (ISO 8601과 레거시 형식 모두 지원)
         try:
