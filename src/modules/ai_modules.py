@@ -192,10 +192,49 @@ def fetch_titles_from_pinecone():
 # 캐싱 데이터 초기화 함수
 
 def initialize_cache():
+    """
+    캐시 초기화 함수 (Redis Fast Track 적용)
+    - Redis 캐시가 있으면 3초 로딩
+    - 없으면 Pinecone에서 다운로드 후 Redis에 저장 (20분 소요, 최초 1회만)
+    """
     try:
         logger.info("🔄 캐시 초기화 시작...")
 
-        # Pinecone에서 데이터를 가져옴 (멀티모달 메타데이터 포함)
+        # ==========================================
+        # 1. Redis 캐시 확인 (Fast Track)
+        # ==========================================
+        if storage.redis_client is not None:
+            try:
+                logger.info("🔍 Redis 캐시 확인 중...")
+                cached_data = storage.redis_client.get('pinecone_metadata')
+
+                if cached_data:
+                    logger.info("🚀 Redis 캐시 발견! 빠른 로딩을 시작합니다...")
+
+                    # Pickle로 저장된 데이터 복원
+                    (storage.cached_titles, storage.cached_texts, storage.cached_urls, storage.cached_dates,
+                     storage.cached_htmls, storage.cached_content_types, storage.cached_sources,
+                     storage.cached_image_urls, storage.cached_attachment_urls, storage.cached_attachment_types) = pickle.loads(cached_data)
+
+                    logger.info(f"✅ Redis 로드 완료! ({len(storage.cached_titles)}개 문서, Pinecone 다운로드 생략)")
+                    logger.info(f"   - HTML 구조 있는 문서: {sum(1 for html in storage.cached_htmls if html)}개")
+                    logger.info(f"   - 이미지 OCR 문서: {sum(1 for ct in storage.cached_content_types if ct == 'image')}개")
+                    logger.info(f"   - 첨부파일 문서: {sum(1 for ct in storage.cached_content_types if ct == 'attachment')}개")
+
+                    # Retriever 초기화로 점프 (Pinecone Fetch 생략!)
+                    _initialize_retrievers()
+                    logger.info(f"✅ 캐시 초기화 완료! (titles: {len(storage.cached_titles)}, texts: {len(storage.cached_texts)})")
+                    return
+                else:
+                    logger.info("⬇️  Redis에 캐시가 없습니다. Pinecone 다운로드를 시작합니다...")
+
+            except Exception as e:
+                logger.warning(f"⚠️  Redis 로드 실패 (Pinecone에서 새로 다운로드합니다): {e}")
+
+        # ==========================================
+        # 2. Pinecone에서 데이터 가져오기 (Slow Track)
+        # ==========================================
+        logger.info("⏳ Pinecone 전체 데이터 다운로드 시작 (최초 1회, 약 20분 소요)...")
         (storage.cached_titles, storage.cached_texts, storage.cached_urls, storage.cached_dates,
          storage.cached_htmls, storage.cached_content_types, storage.cached_sources,
          storage.cached_image_urls, storage.cached_attachment_urls, storage.cached_attachment_types) = fetch_titles_from_pinecone()
@@ -204,55 +243,9 @@ def initialize_cache():
         logger.info(f"   - 이미지 OCR 문서: {sum(1 for ct in storage.cached_content_types if ct == 'image')}개")
         logger.info(f"   - 첨부파일 문서: {sum(1 for ct in storage.cached_content_types if ct == 'attachment')}개")
 
-        # BM25Retriever 초기화
-        from modules.retrieval import (
-            BM25Retriever,
-            DenseRetriever,
-            DocumentCombiner,
-            DocumentClusterer
-        )
-
-        bm25_retriever = BM25Retriever(
-            titles=storage.cached_titles,
-            texts=storage.cached_texts,
-            urls=storage.cached_urls,
-            dates=storage.cached_dates,
-            query_transformer=transformed_query,
-            similarity_adjuster=adjust_similarity_scores,
-            k1=1.5,
-            b=0.75
-        )
-        storage.set_bm25_retriever(bm25_retriever)
-
-        # DenseRetriever 초기화
-        dense_retriever = DenseRetriever(
-            embeddings_factory=get_embeddings,
-            pinecone_index=storage.pinecone_index,
-            date_adjuster=adjust_date_similarity,
-            similarity_scale=3.26,
-            noun_weight=0.20,
-            digit_weight=0.24
-        )
-        storage.set_dense_retriever(dense_retriever)
-
-        # DocumentCombiner 초기화
-        document_combiner = DocumentCombiner(
-            keyword_filter=last_filter_keyword,
-            date_adjuster=adjust_date_similarity
-        )
-        storage.set_document_combiner(document_combiner)
-
-        # DocumentClusterer 초기화
-        document_clusterer = DocumentClusterer(
-            date_parser=parse_date_change_korea_time,
-            similarity_threshold=0.89
-        )
-        storage.set_document_clusterer(document_clusterer)
-
-        # QueryTransformer와 KeywordFilter는 StorageManager 초기화 시 자동 생성됨
-        # (여기서는 재설정하지 않음)
-
-        # Redis에 저장 시도 (멀티모달 메타데이터 포함)
+        # ==========================================
+        # 3. Redis에 저장 (다음 재시작을 위해)
+        # ==========================================
         if storage.redis_client is not None:
             try:
                 cache_data = (
@@ -260,13 +253,16 @@ def initialize_cache():
                     storage.cached_htmls, storage.cached_content_types, storage.cached_sources,
                     storage.cached_image_urls, storage.cached_attachment_urls, storage.cached_attachment_types
                 )
-                storage.redis_client.set('pinecone_metadata', pickle.dumps(cache_data))
-                logger.info("✅ Redis에 멀티모달 캐시 데이터를 저장했습니다.")
+                # 24시간 유효 (86400초)
+                storage.redis_client.setex('pinecone_metadata', 86400, pickle.dumps(cache_data))
+                logger.info("💾 데이터를 Redis에 저장했습니다. (다음 재시작부터는 3초 로딩!)")
             except Exception as e:
                 logger.warning(f"⚠️  Redis 저장 실패 (메모리 캐시만 사용): {e}")
         else:
             logger.warning("⚠️  Redis 미사용 (메모리 캐시만 사용)")
 
+        # Retriever 초기화
+        _initialize_retrievers()
         logger.info(f"✅ 캐시 초기화 완료! (titles: {len(storage.cached_titles)}, texts: {len(storage.cached_texts)})")
 
     except Exception as e:
@@ -283,6 +279,58 @@ def initialize_cache():
         storage.cached_attachment_urls = []
         storage.cached_attachment_types = []
         logger.warning("⚠️  캐시를 빈 상태로 초기화했습니다.")
+
+
+def _initialize_retrievers():
+    """Retriever 초기화 로직 (중복 제거를 위한 분리)"""
+    logger.info("🔧 검색 엔진(BM25/Dense) 구축 중...")
+
+    from modules.retrieval import (
+        BM25Retriever,
+        DenseRetriever,
+        DocumentCombiner,
+        DocumentClusterer
+    )
+
+    # BM25Retriever 초기화
+    bm25_retriever = BM25Retriever(
+        titles=storage.cached_titles,
+        texts=storage.cached_texts,
+        urls=storage.cached_urls,
+        dates=storage.cached_dates,
+        query_transformer=transformed_query,
+        similarity_adjuster=adjust_similarity_scores,
+        k1=1.5,
+        b=0.75
+    )
+    storage.set_bm25_retriever(bm25_retriever)
+
+    # DenseRetriever 초기화
+    dense_retriever = DenseRetriever(
+        embeddings_factory=get_embeddings,
+        pinecone_index=storage.pinecone_index,
+        date_adjuster=adjust_date_similarity,
+        similarity_scale=3.26,
+        noun_weight=0.20,
+        digit_weight=0.24
+    )
+    storage.set_dense_retriever(dense_retriever)
+
+    # DocumentCombiner 초기화
+    document_combiner = DocumentCombiner(
+        keyword_filter=last_filter_keyword,
+        date_adjuster=adjust_date_similarity
+    )
+    storage.set_document_combiner(document_combiner)
+
+    # DocumentClusterer 초기화
+    document_clusterer = DocumentClusterer(
+        date_parser=parse_date_change_korea_time,
+        similarity_threshold=0.89
+    )
+    storage.set_document_clusterer(document_clusterer)
+
+    logger.info("✅ 모든 검색 엔진 초기화 완료!")
 
                     #################################   24.11.16기준 정확도 측정완료 #####################################################
 ######################################################################################################################
@@ -622,6 +670,7 @@ def format_docs(docs):
     """
     문서 리스트를 LLM이 이해하기 쉬운 형식으로 포맷팅
     출처(원본/이미지OCR/첨부파일)를 라벨로 표시하여 맥락 제공
+    각 청크에 제목 정보를 명시하여 문맥 단절(Context Fragmentation) 문제 해결
 
     Args:
         docs: Document 객체 리스트
@@ -632,6 +681,9 @@ def format_docs(docs):
     formatted = []
 
     for doc in docs:
+        # 메타데이터에서 제목 추출
+        title = doc.metadata.get('title', '제목 없음')
+
         # 출처에 따라 라벨 생성
         source = doc.metadata.get('source', 'original_post')
         content_type = doc.metadata.get('content_type', 'text')
@@ -646,8 +698,8 @@ def format_docs(docs):
             # 원본 게시글
             label = "[본문]"
 
-        # 라벨 + 내용
-        formatted.append(f"{label}\n{doc.page_content}")
+        # 제목 + 라벨 + 내용 (제목을 명시하여 청크의 문맥 제공)
+        formatted.append(f"문서 제목: {title}\n{label}\n{doc.page_content}")
 
     return "\n\n".join(formatted)
 
