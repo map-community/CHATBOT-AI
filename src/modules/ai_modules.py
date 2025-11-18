@@ -191,7 +191,7 @@ def fetch_titles_from_pinecone():
 
                     # 멀티모달 메타데이터: html_available이면 MongoDB에서 HTML 조회
                     html = ""
-                    if metadata.get("html_available") and mongo_collection:
+                    if metadata.get("html_available") and mongo_collection is not None:
                         try:
                             cached = mongo_collection.find_one({"url": url})
                             if cached:
