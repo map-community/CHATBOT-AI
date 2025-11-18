@@ -237,15 +237,33 @@ class EmbeddingManager:
             # 메타데이터 준비 (텍스트는 임베딩 벡터에 이미 포함되므로 preview만 저장)
             metadata = metadatas[i].copy()
 
+            # 🚨 Pinecone 40KB 제한을 위한 강제 정리 (모든 큰 필드 제거)
+            # 이미지/첨부파일 처리 시 실수로 포함될 수 있는 거대한 필드들 제거
+            dangerous_fields = [
+                'ocr_html',      # 이미지 OCR HTML 원본 (232KB 가능)
+                'html',          # 첨부파일 HTML 원본 (232KB 가능)
+                'ocr_elements',  # OCR 요소 배열 (큼)
+                'elements',      # Document Parse 요소 배열 (큼)
+                'text',          # 원본 텍스트 전체 (text_preview로 대체)
+                'ocr_text',      # OCR 텍스트 전체 (text_preview로 대체)
+                'full_html',     # 전체 HTML
+                'content',       # 전체 콘텐츠
+            ]
+            for field in dangerous_fields:
+                if field in metadata:
+                    del metadata[field]
+
             # 검색 결과 미리보기용으로 짧은 텍스트만 저장 (Pinecone 40KB 제한)
             text_preview = texts[i][:200] + "..." if len(texts[i]) > 200 else texts[i]
             metadata["text_preview"] = text_preview
 
-            # 🔍 메타데이터 크기 디버깅 (첫 번째만)
+            # 🔍 메타데이터 크기 사전 체크 (모든 벡터)
+            import json
+            metadata_json = json.dumps(metadata, ensure_ascii=False)
+            metadata_size = len(metadata_json.encode('utf-8'))
+
+            # 첫 번째 벡터 샘플 출력
             if not sample_logged:
-                import json
-                metadata_json = json.dumps(metadata, ensure_ascii=False)
-                metadata_size = len(metadata_json.encode('utf-8'))
                 print(f"\n{'='*80}")
                 print(f"🔍 메타데이터 크기 분석 (벡터 ID: {vector_id})")
                 print(f"{'='*80}")
@@ -255,24 +273,48 @@ class EmbeddingManager:
                     value_json = json.dumps(value, ensure_ascii=False)
                     value_size = len(value_json.encode('utf-8'))
                     print(f"  {key}: {value_size:,} bytes")
-                    if value_size > 1000:  # 1KB 이상인 필드 상세 출력
-                        preview = str(value)[:100] + "..." if len(str(value)) > 100 else str(value)
-                        print(f"    내용 미리보기: {preview}")
                 print(f"{'='*80}\n")
-
-                if metadata_size > 40960:
-                    print(f"❌ 경고: 메타데이터 크기가 40KB 제한을 초과합니다!")
-                    print(f"   크기: {metadata_size:,} bytes > 40,960 bytes")
-                    print(f"   큰 필드를 제거해야 합니다.\n")
-
-            # Pinecone에 업로드
-            self.index.upsert([(str(vector_id), embedding.tolist(), metadata)])
-            uploaded_count += 1
-
-            # 첫 번째 벡터의 메타데이터 샘플 출력 (HTML 구조 확인용)
-            if not sample_logged:
                 self._log_metadata_sample(str(vector_id), metadata)
                 sample_logged = True
+
+            # 40KB 초과 시 상세 분석 및 스킵
+            if metadata_size > 40960:
+                print(f"\n{'='*80}")
+                print(f"❌ 메타데이터 크기 초과 (벡터 ID: {vector_id}) - 스킵")
+                print(f"{'='*80}")
+                print(f"전체 크기: {metadata_size:,} bytes ({metadata_size / 1024:.2f} KB)")
+                print(f"제한: 40,960 bytes (40 KB)")
+                print(f"\n각 필드별 크기:")
+                for key, value in metadata.items():
+                    value_json = json.dumps(value, ensure_ascii=False)
+                    value_size = len(value_json.encode('utf-8'))
+                    print(f"  {key}: {value_size:,} bytes")
+                    if value_size > 1000:  # 1KB 이상인 필드 상세 출력
+                        preview = str(value)[:200] + "..." if len(str(value)) > 200 else str(value)
+                        print(f"    내용 미리보기: {preview}")
+
+                print(f"\n🔍 메타데이터 전체 내용:")
+                print(f"  title: {metadata.get('title', 'N/A')}")
+                print(f"  url: {metadata.get('url', 'N/A')}")
+                print(f"  content_type: {metadata.get('content_type', 'N/A')}")
+                print(f"  source: {metadata.get('source', 'N/A')}")
+                print(f"{'='*80}\n")
+
+                # 이 벡터는 스킵하고 계속
+                print(f"⏭️  벡터 ID {vector_id} 스킵 (메타데이터 크기 초과)\n")
+                continue
+
+            # Pinecone에 업로드
+            try:
+                self.index.upsert([(str(vector_id), embedding.tolist(), metadata)])
+                uploaded_count += 1
+            except Exception as e:
+                print(f"\n❌ 벡터 업로드 실패 (ID: {vector_id}): {e}")
+                print(f"   메타데이터 크기: {metadata_size:,} bytes")
+                print(f"   제목: {metadata.get('title', 'N/A')}")
+                print(f"   URL: {metadata.get('url', 'N/A')}")
+                print(f"   스킵하고 계속 진행...\n")
+                continue
 
             # 진행 상황 출력
             if (i + 1) % CrawlerConfig.EMBEDDING_BATCH_SIZE == 0:
