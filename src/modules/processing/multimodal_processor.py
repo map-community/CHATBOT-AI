@@ -215,6 +215,24 @@ class MultimodalContent:
                 if img["description"]:
                     combined_text += f"\n\n[이미지 설명]\n{img['description']}"
 
+                # 🚨 Data URI 처리 (232KB 문자열을 메타데이터에 넣지 않음!)
+                img_url = img["url"]
+                is_data_uri = img_url.startswith('data:')
+
+                # Pinecone 메타데이터용: Data URI면 플래그만, 일반 URL이면 전체 저장
+                if is_data_uri:
+                    # Data URI는 저장하지 않음 (MongoDB에만 보관)
+                    image_metadata = {
+                        "is_data_uri": True,
+                        "image_index": idx  # MongoDB 조회용
+                    }
+                else:
+                    # 일반 URL은 저장 (크기 작음)
+                    image_metadata = {
+                        "image_url": img_url,
+                        "image_index": idx
+                    }
+
                 # ✅ 긴 텍스트는 청킹! (베스트 프랙티스)
                 if len(combined_text) > CrawlerConfig.CHUNK_SIZE:
                     chunks = text_splitter.split_text(combined_text)
@@ -226,8 +244,7 @@ class MultimodalContent:
                                 "url": self.url,
                                 "date": self.date,
                                 "content_type": "image",
-                                "image_url": img["url"],
-                                "image_index": idx,
+                                **image_metadata,  # Data URI 처리된 메타데이터
                                 "chunk_index": chunk_idx,
                                 "total_chunks": len(chunks),
                                 "source": "image_ocr",  # OCR 결과
@@ -243,8 +260,7 @@ class MultimodalContent:
                             "url": self.url,
                             "date": self.date,
                             "content_type": "image",
-                            "image_url": img["url"],
-                            "image_index": idx,
+                            **image_metadata,  # Data URI 처리된 메타데이터
                             "source": "image_ocr",
                             "html_available": bool(img.get("ocr_html"))
                         }
@@ -254,6 +270,26 @@ class MultimodalContent:
         for idx, att in enumerate(self.attachment_contents):
             if att["text"]:
                 full_text = f"[첨부파일: {att['type'].upper()}]\n{att['text']}"
+
+                # 🚨 Data URI 처리 (첨부파일도 Data URI 가능)
+                att_url = att["url"]
+                is_data_uri = att_url.startswith('data:')
+
+                # Pinecone 메타데이터용: Data URI면 플래그만, 일반 URL이면 전체 저장
+                if is_data_uri:
+                    # Data URI는 저장하지 않음 (MongoDB에만 보관)
+                    attachment_metadata = {
+                        "is_data_uri": True,
+                        "attachment_type": att["type"],
+                        "attachment_index": idx  # MongoDB 조회용
+                    }
+                else:
+                    # 일반 URL은 저장 (크기 작음)
+                    attachment_metadata = {
+                        "attachment_url": att_url,
+                        "attachment_type": att["type"],
+                        "attachment_index": idx
+                    }
 
                 # ✅ 긴 텍스트는 청킹! (베스트 프랙티스)
                 if len(full_text) > CrawlerConfig.CHUNK_SIZE:
@@ -266,9 +302,7 @@ class MultimodalContent:
                                 "url": self.url,
                                 "date": self.date,
                                 "content_type": "attachment",
-                                "attachment_url": att["url"],
-                                "attachment_type": att["type"],
-                                "attachment_index": idx,
+                                **attachment_metadata,  # Data URI 처리된 메타데이터
                                 "chunk_index": chunk_idx,
                                 "total_chunks": len(chunks),
                                 "source": "document_parse",  # Document Parse 결과
@@ -284,9 +318,7 @@ class MultimodalContent:
                             "url": self.url,
                             "date": self.date,
                             "content_type": "attachment",
-                            "attachment_url": att["url"],
-                            "attachment_type": att["type"],
-                            "attachment_index": idx,
+                            **attachment_metadata,  # Data URI 처리된 메타데이터
                             "source": "document_parse",
                             "html_available": bool(att.get("html"))
                         }

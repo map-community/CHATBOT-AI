@@ -237,15 +237,14 @@ class EmbeddingManager:
             # 메타데이터 준비 (텍스트는 임베딩 벡터에 이미 포함되므로 preview만 저장)
             metadata = metadatas[i].copy()
 
-            # 🚨 Pinecone 40KB 제한을 위한 강제 정리 (모든 큰 필드 제거)
-            # 이미지/첨부파일 처리 시 실수로 포함될 수 있는 거대한 필드들 제거
+            # 🚨 Pinecone 40KB 제한을 위한 강제 정리 (거대 필드만 제거)
+            # Data URI는 이미 multimodal_processor.py에서 제거됨
+            # 여기서는 HTML 원본과 큰 배열만 제거
             dangerous_fields = [
                 'ocr_html',      # 이미지 OCR HTML 원본 (232KB 가능)
                 'html',          # 첨부파일 HTML 원본 (232KB 가능)
                 'ocr_elements',  # OCR 요소 배열 (큼)
                 'elements',      # Document Parse 요소 배열 (큼)
-                'text',          # 원본 텍스트 전체 (text_preview로 대체)
-                'ocr_text',      # OCR 텍스트 전체 (text_preview로 대체)
                 'full_html',     # 전체 HTML
                 'content',       # 전체 콘텐츠
             ]
@@ -253,9 +252,9 @@ class EmbeddingManager:
                 if field in metadata:
                     del metadata[field]
 
-            # 검색 결과 미리보기용으로 짧은 텍스트만 저장 (Pinecone 40KB 제한)
-            text_preview = texts[i][:200] + "..." if len(texts[i]) > 200 else texts[i]
-            metadata["text_preview"] = text_preview
+            # ✅ 'text' 필드는 유지 (RAG가 읽음, 청킹되어 850자로 작음)
+            # text 필드에 임베딩 입력 텍스트 저장 (이미지/첨부파일 OCR 포함)
+            metadata["text"] = texts[i]
 
             # 🔍 메타데이터 크기 사전 체크 (모든 벡터)
             import json
