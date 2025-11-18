@@ -176,12 +176,21 @@ def main():
         # 합치기
         combined_professor_data = professor_data + guest_professor_data + staff_data
 
-        # 멀티모달 문서 처리
-        embedding_items, new_count = document_processor.process_documents_multimodal(combined_professor_data, category="professor")
+        # 교수/직원 정보는 텍스트만 처리 (이미지 OCR, 첨부파일 파싱 제외)
+        texts, titles, urls, dates, images, new_count = document_processor.process_documents(combined_professor_data)
 
-        all_embedding_items.extend(embedding_items)
+        # 임베딩 아이템으로 변환
+        for text, title, url, date in zip(texts, titles, urls, dates):
+            metadata = {
+                "title": title,
+                "url": url,
+                "date": date,
+                "content_type": "text",
+                "source": "professor_info"
+            }
+            all_embedding_items.append((text, metadata))
 
-        logger.info(f"✅ 교수/직원 정보 처리 완료: {new_count}개 새 문서, {len(embedding_items)}개 임베딩 아이템")
+        logger.info(f"✅ 교수/직원 정보 처리 완료: {new_count}개 새 문서, {len(texts)}개 텍스트")
 
         # ========== 5. 임베딩 생성 및 업로드 (멀티모달) ==========
         logger.section_start("🔄 5. 멀티모달 임베딩 생성 및 Pinecone 업로드")
