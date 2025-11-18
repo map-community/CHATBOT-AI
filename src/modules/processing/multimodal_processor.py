@@ -476,6 +476,80 @@ class MultimodalProcessor:
         unsupported = []
 
         for att_url in attachment_urls:
+            # 🔧 ZIP 파일 처리 (압축 해제 후 개별 파일 파싱)
+            file_ext = Path(att_url).suffix.lower()
+            if file_ext == '.zip':
+                try:
+                    if logger:
+                        url_display = att_url[:50] + "..." if len(att_url) > 50 else att_url
+                        logger.log_multimodal_detail(
+                            "ZIP 파일 처리",
+                            url_display,
+                            success=True,
+                            detail="압축 해제 중..."
+                        )
+
+                    # ZIP 파일 처리
+                    zip_result = self.upstage_client.process_zip_from_url(att_url)
+
+                    # 성공한 파일들 추가
+                    for item in zip_result["successful"]:
+                        # ZIP 내부 파일은 별도 URL로 구분
+                        content = {
+                            "url": f"{att_url}#{item['filename']}",  # ZIP#파일명
+                            "type": item["type"],
+                            "text": item["text"],
+                            "html": item.get("html", ""),
+                            "from_zip": True,
+                            "zip_url": att_url
+                        }
+                        successful.append(content)
+
+                        # 캐시 저장 (ZIP 내부 파일도 캐싱)
+                        self._save_to_cache(
+                            content["url"],
+                            {
+                                "text": item["text"],
+                                "html": item.get("html", ""),
+                                "type": item["type"],
+                                "from_zip": True
+                            }
+                        )
+
+                    # 실패한 파일들 기록
+                    for item in zip_result["failed"]:
+                        failed.append({
+                            "url": f"{att_url}#{item['filename']}",
+                            "reason": item["reason"]
+                        })
+
+                    if logger:
+                        logger.log_multimodal_detail(
+                            "ZIP 파일 처리",
+                            url_display,
+                            success=True,
+                            detail=f"성공 {len(zip_result['successful'])}개, 실패 {len(zip_result['failed'])}개"
+                        )
+
+                except Exception as e:
+                    error_msg = str(e)
+                    failed.append({
+                        "url": att_url,
+                        "reason": error_msg
+                    })
+
+                    if logger:
+                        url_display = att_url[:50] + "..." if len(att_url) > 50 else att_url
+                        logger.log_multimodal_detail(
+                            "ZIP 파일 처리",
+                            url_display,
+                            success=False,
+                            detail=error_msg[:100]
+                        )
+
+                # ZIP 파일 처리 완료, 다음 첨부파일로
+                continue
+
             # 이미지 확장자 확인 (대소문자 무관)
             is_image = self.upstage_client.is_image_url(att_url)
 

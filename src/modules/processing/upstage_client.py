@@ -8,6 +8,8 @@ import logging
 from typing import Optional, Dict, List
 from pathlib import Path
 import time
+import zipfile
+import io
 
 logger = logging.getLogger(__name__)
 
@@ -26,14 +28,18 @@ class UpstageClient:
     # Document Parse와 OCR 모두 이 엔드포인트 사용, model 파라미터로 구분
     API_URL = "https://api.upstage.ai/v1/document-digitization"
 
-    # 지원 파일 타입
+    # 지원 파일 타입 (Upstage 공식 문서 기준)
+    # Supported file formats: JPEG, PNG, BMP, PDF, TIFF, HEIC, DOCX, PPTX, XLSX, HWP, HWPX
     SUPPORTED_DOCUMENT_TYPES = {
         '.pdf', '.docx', '.doc', '.pptx', '.ppt',
-        '.hwp', '.xlsx', '.xls'
+        '.hwp', '.hwpx',  # ✅ HWPX 추가 (한컴오피스 2014+)
+        '.xlsx', '.xls'
     }
 
     SUPPORTED_IMAGE_TYPES = {
-        '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'
+        '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp',
+        '.tiff', '.tif',  # ✅ TIFF 추가
+        '.heic'  # ✅ HEIC 추가 (Apple 이미지 포맷)
     }
 
     def __init__(self, api_key: Optional[str] = None, max_retries: int = 3):
@@ -181,8 +187,12 @@ class UpstageClient:
                         'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
                         'application/x-hwp': '.hwp',
                         'application/haansofthwp': '.hwp',
+                        'application/vnd.hancom.hwp': '.hwp',
+                        'application/vnd.hancom.hwpx': '.hwpx',  # ✅ HWPX 추가
                         'application/vnd.ms-powerpoint': '.ppt',
-                        'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx'
+                        'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx',
+                        'application/vnd.ms-excel': '.xls',
+                        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx'
                     }
                     for mime_type, ext in type_to_ext.items():
                         if mime_type in content_type:
@@ -195,7 +205,12 @@ class UpstageClient:
                 file_ext = Path(filename).suffix.lower()
 
                 # 이미지 파일인지 확인
-                supported_image_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/bmp', 'image/webp']
+                supported_image_types = [
+                    'image/jpeg', 'image/jpg', 'image/png', 'image/gif',
+                    'image/bmp', 'image/webp',
+                    'image/tiff', 'image/tif',  # ✅ TIFF 추가
+                    'image/heic', 'image/heif'  # ✅ HEIC 추가
+                ]
                 is_image = (
                     any(t in content_type for t in supported_image_types) or
                     file_ext in self.SUPPORTED_IMAGE_TYPES
@@ -286,6 +301,8 @@ class UpstageClient:
                 logger.info(f"📄 다운로드 성공: {display_name}")
 
                 # Upstage Document Parse API 호출 (파일 업로드 방식)
+                # ✅ 100페이지 제한: Synchronous API는 자동으로 첫 100페이지만 처리
+                # (공식 문서: For files exceeding 100 pages, the first 100 pages are processed)
                 files = {
                     "document": (filename, file_response.content)
                 }
@@ -787,3 +804,230 @@ class UpstageClient:
         """URL이 지원되는 이미지 타입인지 확인"""
         file_ext = Path(url).suffix.lower()
         return file_ext in self.SUPPORTED_IMAGE_TYPES
+    def process_zip_from_url(self, zip_url: str) -> Dict:
+        """
+        ZIP 파일 처리 (압축 해제 후 개별 파일 파싱)
+
+        Args:
+            zip_url: ZIP 파일 URL
+
+        Returns:
+            {
+                "successful": [{"filename": "...", "type": "pdf", "text": "..."}],
+                "failed": [{"filename": "...", "reason": "..."}],
+                "total_files": N
+            }
+        """
+        MAX_ZIP_SIZE = 100 * 1024 * 1024  # 100MB
+        MAX_TOTAL_FILES = 50  # ZIP 내 최대 파일 수
+        MAX_EXTRACTION_SIZE = 500 * 1024 * 1024  # 압축 해제 후 최대 크기 (500MB, Zip Bomb 방지)
+
+        successful = []
+        failed = []
+
+        try:
+            logger.info(f"📦 ZIP 파일 다운로드 시작: {zip_url}")
+
+            # 1. ZIP 파일 다운로드
+            response = requests.get(zip_url, timeout=30, stream=True)
+
+            if response.status_code != 200:
+                logger.error(f"ZIP 다운로드 실패: {response.status_code}")
+                return {
+                    "successful": [],
+                    "failed": [{"filename": zip_url, "reason": f"다운로드 실패: {response.status_code}"}],
+                    "total_files": 0
+                }
+
+            # 2. 파일 크기 체크
+            content_length = response.headers.get('Content-Length')
+            if content_length and int(content_length) > MAX_ZIP_SIZE:
+                logger.warning(f"ZIP 파일이 너무 큼: {content_length} bytes (최대: {MAX_ZIP_SIZE})")
+                return {
+                    "successful": [],
+                    "failed": [{"filename": zip_url, "reason": f"파일 크기 초과: {content_length} bytes"}],
+                    "total_files": 0
+                }
+
+            # 3. 메모리에 로드
+            zip_data = response.content
+            logger.info(f"📦 ZIP 파일 다운로드 완료: {len(zip_data)} bytes")
+
+            # 4. ZIP 압축 해제 및 개별 파일 처리
+            with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
+                file_list = zf.namelist()
+
+                # 파일 개수 체크
+                if len(file_list) > MAX_TOTAL_FILES:
+                    logger.warning(f"ZIP 내 파일 개수 초과: {len(file_list)} (최대: {MAX_TOTAL_FILES})")
+                    return {
+                        "successful": [],
+                        "failed": [{"filename": zip_url, "reason": f"파일 개수 초과: {len(file_list)}"}],
+                        "total_files": len(file_list)
+                    }
+
+                logger.info(f"📦 ZIP 내 파일 개수: {len(file_list)}")
+
+                total_extraction_size = 0
+
+                for file_info in zf.infolist():
+                    # 디렉토리 스킵
+                    if file_info.is_dir():
+                        continue
+
+                    filename = file_info.filename
+                    file_size = file_info.file_size
+
+                    # 압축 해제 크기 누적 체크 (Zip Bomb 방지)
+                    total_extraction_size += file_size
+                    if total_extraction_size > MAX_EXTRACTION_SIZE:
+                        logger.warning(f"ZIP 압축 해제 크기 초과 (Zip Bomb 의심): {total_extraction_size}")
+                        failed.append({
+                            "filename": filename,
+                            "reason": "ZIP 압축 해제 크기 초과 (Zip Bomb 의심)"
+                        })
+                        continue
+
+                    try:
+                        # 파일 데이터 추출
+                        file_data = zf.read(file_info)
+                        file_ext = Path(filename).suffix.lower()
+
+                        logger.info(f"  📄 처리 중: {filename} ({file_ext}, {file_size} bytes)")
+
+                        # 지원 형식 확인
+                        if file_ext in self.SUPPORTED_DOCUMENT_TYPES:
+                            # 문서 파일 처리
+                            result = self._process_document_from_bytes(file_data, filename)
+                            if result:
+                                successful.append(result)
+                                logger.info(f"  ✅ 성공: {filename} ({len(result['text'])}자)")
+                            else:
+                                failed.append({
+                                    "filename": filename,
+                                    "reason": "문서 파싱 실패 (텍스트 없음)"
+                                })
+                                logger.warning(f"  ❌ 실패: {filename} (텍스트 없음)")
+
+                        elif file_ext in self.SUPPORTED_IMAGE_TYPES:
+                            # 이미지 파일 처리
+                            result = self._process_image_from_bytes(file_data, filename)
+                            if result:
+                                successful.append(result)
+                                logger.info(f"  ✅ 성공: {filename} ({len(result['text'])}자)")
+                            else:
+                                failed.append({
+                                    "filename": filename,
+                                    "reason": "이미지 OCR 실패 (텍스트 없음)"
+                                })
+                                logger.warning(f"  ❌ 실패: {filename} (텍스트 없음)")
+
+                        else:
+                            # 지원하지 않는 형식
+                            failed.append({
+                                "filename": filename,
+                                "reason": f"지원하지 않는 형식: {file_ext}"
+                            })
+                            logger.warning(f"  ⏭️  스킵: {filename} (지원하지 않는 형식)")
+
+                    except Exception as e:
+                        failed.append({
+                            "filename": filename,
+                            "reason": str(e)
+                        })
+                        logger.error(f"  ❌ 에러: {filename} - {e}")
+
+            logger.info(f"📦 ZIP 처리 완료: 성공 {len(successful)}개, 실패 {len(failed)}개")
+
+            return {
+                "successful": successful,
+                "failed": failed,
+                "total_files": len(file_list)
+            }
+
+        except zipfile.BadZipFile:
+            logger.error(f"손상된 ZIP 파일: {zip_url}")
+            return {
+                "successful": [],
+                "failed": [{"filename": zip_url, "reason": "손상된 ZIP 파일"}],
+                "total_files": 0
+            }
+        except Exception as e:
+            logger.error(f"ZIP 처리 에러: {e}")
+            return {
+                "successful": [],
+                "failed": [{"filename": zip_url, "reason": str(e)}],
+                "total_files": 0
+            }
+
+    def _process_document_from_bytes(self, file_data: bytes, filename: str) -> Optional[Dict]:
+        """바이너리 데이터로부터 문서 파싱"""
+        try:
+            files = {"document": (filename, file_data)}
+            data = {
+                "model": "document-parse",
+                "ocr": "auto"
+            }
+
+            response = requests.post(
+                self.API_URL,
+                headers=self.headers,
+                files=files,
+                data=data,
+                timeout=60
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                extracted_text = self._extract_text_from_response(result)
+
+                if extracted_text:
+                    return {
+                        "filename": filename,
+                        "type": Path(filename).suffix.lower()[1:],
+                        "text": extracted_text,
+                        "html": result.get("content", {}).get("html", ""),
+                        "from_zip": True
+                    }
+
+            return None
+
+        except Exception as e:
+            logger.error(f"문서 파싱 실패: {filename} - {e}")
+            return None
+
+    def _process_image_from_bytes(self, file_data: bytes, filename: str) -> Optional[Dict]:
+        """바이너리 데이터로부터 이미지 OCR"""
+        try:
+            files = {"document": (filename, file_data)}
+            data = {
+                "model": "document-parse",
+                "ocr": "auto"
+            }
+
+            response = requests.post(
+                self.API_URL,
+                headers=self.headers,
+                files=files,
+                data=data,
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                extracted_text = self._extract_text_from_response(result)
+
+                if extracted_text:
+                    return {
+                        "filename": filename,
+                        "type": "image",
+                        "text": extracted_text,
+                        "html": result.get("content", {}).get("html", ""),
+                        "from_zip": True
+                    }
+
+            return None
+
+        except Exception as e:
+            logger.error(f"이미지 OCR 실패: {filename} - {e}")
+            return None
