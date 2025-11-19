@@ -89,14 +89,28 @@ class StorageManager:
 
     def _initialize_preprocessing_modules(self):
         """전처리 모듈 초기화 (DB 연결 불필요)"""
+        logger.info("🔄 전처리 모듈 초기화 시작...")
         try:
-            # 순환 참조 방지를 위해 함수 내부에서 임포트
-            from modules.utils import transformed_query
-            # KeywordFilter는 retrieval 모듈에 있으므로 여기서 임포트하지 않거나,
-            # 필요하다면 여기서 임포트. 하지만 보통 Retriever 초기화 시점에 같이 초기화함.
-            pass
+            logger.info("  📦 preprocessing 모듈 import 시도...")
+            from modules.preprocessing import QueryTransformer
+            from modules.retrieval.keyword_filter import KeywordFilter
+            logger.info("  ✓ preprocessing 모듈 import 성공")
+
+            logger.info("  🔧 QueryTransformer 생성 시도...")
+            self._query_transformer = QueryTransformer(use_mecab=True)
+            logger.info("✅ QueryTransformer 초기화 완료")
+
+            logger.info("  🔧 KeywordFilter 생성 시도...")
+            self._keyword_filter = KeywordFilter()
+            logger.info("✅ KeywordFilter 초기화 완료")
+        except ImportError as e:
+            logger.error(f"❌ preprocessing 모듈 import 실패: {e}", exc_info=True)
+            logger.error(f"   sys.path: {__import__('sys').path}")
+            # 실패해도 None으로 유지하여 나중에 재시도 가능하도록
         except Exception as e:
             logger.error(f"❌ 전처리 모듈 초기화 실패: {e}", exc_info=True)
+            logger.error(f"   실패 위치: {type(e).__name__}")
+            # 실패해도 None으로 유지하여 나중에 재시도 가능하도록
 
     @property
     def pinecone_api_key(self) -> str:
