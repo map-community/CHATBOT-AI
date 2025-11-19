@@ -66,7 +66,7 @@ def migrate_html_to_markdown():
     # MongoDB 연결
     try:
         client = MongoClient(os.getenv('MONGODB_URI'))
-        db = client['chatbot']
+        db = client['knu_chatbot']  # ✅ 실제 DB 이름으로 수정
         collection = db['multimodal_cache']
         logger.info("✅ MongoDB 연결 성공")
     except Exception as e:

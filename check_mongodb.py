@@ -23,10 +23,10 @@ try:
 
     print()
 
-    # 2. chatbot DB의 컬렉션 목록
-    db = client['chatbot']
+    # 2. knu_chatbot DB의 컬렉션 목록
+    db = client['knu_chatbot']
     print("="*60)
-    print("📊 'chatbot' DB의 컬렉션 목록:")
+    print("📊 'knu_chatbot' DB의 컬렉션 목록:")
     print("="*60)
     for coll_name in db.list_collection_names():
         count = db[coll_name].count_documents({})
