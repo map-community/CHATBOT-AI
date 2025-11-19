@@ -851,6 +851,31 @@ def best_docs(user_question):
 
           logger.info(f"📅 날짜 필터링 완료: BM25 {original_bm25_count}→{len(Bm25_best_docs)}개, Dense {original_dense_count}→{len(combine_dense_docs)}개")
 
+      # ## 결과 출력
+      # print("\n통합된 파인콘문서 유사도:")
+      # for score, doc in combine_dense_docs:
+      #     title, date, text, url = doc
+      #     print(f"제목: {title}\n유사도: {score} {url}")
+      #     print('---------------------------------')
+
+
+      #################################################3#################################################3
+      #####################################################################################################3
+
+      # BM25와 Dense Retrieval 결과 결합 (리팩토링됨 - DocumentCombiner 사용)
+      combine_time = time.time()
+      final_best_docs = storage.document_combiner.combine(
+          dense_results=combine_dense_docs,
+          bm25_results=Bm25_best_docs,
+          bm25_similarities=adjusted_similarities,
+          titles_from_pinecone=titles_from_pinecone,
+          query_nouns=query_noun,
+          user_question=user_question,
+          top_k=30  # ✨ 20→30 증가: URL 중복 제거 전 후보군 확대
+      )
+      combine_f_time = time.time() - combine_time
+      print(f"Bm25랑 pinecone 결합 시간: {combine_f_time}")
+
       # ✅ 날짜 부스팅 (Recency Boost) - 시간 표현 없어도 최신 문서 우선!
       # 사용자 지적: "시간 맥락 없으면 당연히 최신순으로"
       from datetime import datetime
@@ -880,51 +905,18 @@ def best_docs(user_question):
               logger.debug(f"날짜 부스팅 계산 실패: {doc_date_str} - {e}")
               return 1.0  # 실패 시 중립
 
-      # BM25 결과에 날짜 부스팅 적용
-      boosted_bm25_docs = []
-      for score, title, date, text, url in Bm25_best_docs:
+      # 결합된 결과에 날짜 부스팅 적용
+      boosted_docs = []
+      for score, title, date, text, url in final_best_docs:
           boost = calculate_recency_boost(date)
           boosted_score = score * boost
-          boosted_bm25_docs.append((boosted_score, title, date, text, url))
+          boosted_docs.append((boosted_score, title, date, text, url))
 
-      # Dense 결과에 날짜 부스팅 적용
-      boosted_dense_docs = []
-      for score, doc in combine_dense_docs:
-          boost = calculate_recency_boost(doc[1])  # doc[1] = date
-          boosted_score = score * boost
-          boosted_dense_docs.append((boosted_score, doc))
-
-      # 부스팅된 결과로 교체
-      Bm25_best_docs = boosted_bm25_docs
-      combine_dense_docs = boosted_dense_docs
+      # 부스팅된 점수로 재정렬
+      boosted_docs.sort(key=lambda x: x[0], reverse=True)
+      final_best_docs = boosted_docs
 
       logger.info(f"🚀 날짜 부스팅 완료 (최신 문서 우선: 6개월 이내 +50%, 1년 이내 +30%)")
-
-
-      # ## 결과 출력
-      # print("\n통합된 파인콘문서 유사도:")
-      # for score, doc in combine_dense_docs:
-      #     title, date, text, url = doc
-      #     print(f"제목: {title}\n유사도: {score} {url}")
-      #     print('---------------------------------')
-
-
-      #################################################3#################################################3
-      #####################################################################################################3
-
-      # BM25와 Dense Retrieval 결과 결합 (리팩토링됨 - DocumentCombiner 사용)
-      combine_time = time.time()
-      final_best_docs = storage.document_combiner.combine(
-          dense_results=combine_dense_docs,
-          bm25_results=Bm25_best_docs,
-          bm25_similarities=adjusted_similarities,
-          titles_from_pinecone=titles_from_pinecone,
-          query_nouns=query_noun,
-          user_question=user_question,
-          top_k=30  # ✨ 20→30 증가: URL 중복 제거 전 후보군 확대
-      )
-      combine_f_time = time.time() - combine_time
-      print(f"Bm25랑 pinecone 결합 시간: {combine_f_time}")
 
       # ✨ 텍스트 유사도 기반 중복 제거 (Phase 1 개선 - 수정)
       # 문제: URL 기준 제한은 같은 게시글의 다른 첨부파일까지 차단함
