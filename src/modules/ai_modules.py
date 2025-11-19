@@ -681,47 +681,54 @@ def best_docs(user_question):
       combine_f_time = time.time() - combine_time
       print(f"Bm25랑 pinecone 결합 시간: {combine_f_time}")
 
-      # ✨ URL 기준 중복 제거 및 다양성 확보 (Phase 1 개선)
+      # ✨ 텍스트 유사도 기반 중복 제거 (Phase 1 개선 - 수정)
+      # 문제: URL 기준 제한은 같은 게시글의 다른 첨부파일까지 차단함
+      # 해결: 텍스트가 정말 비슷한 청크만 제거 (90% 이상 유사 시)
       dedup_time = time.time()
-      url_chunks = {}
 
-      # 1. URL별로 청크 그룹화
+      import hashlib
+      from difflib import SequenceMatcher
+
+      seen_text_hashes = set()
+      deduplicated_docs = []
+      duplicate_count = 0
+      original_count = len(final_best_docs)
+
       for score, title, date, text, url in final_best_docs:
-          if url not in url_chunks:
-              url_chunks[url] = []
-          url_chunks[url].append((score, title, date, text, url))
+          # 1. 완전 중복 체크 (텍스트 해시 - 빠름)
+          normalized_text = ''.join(text.split())  # 공백/줄바꿈 제거
+          text_hash = hashlib.md5(normalized_text.encode()).hexdigest()
 
-      # 2. 각 URL에서 최대 2개 청크만 선택 (다양성 확보)
-      diverse_docs = []
-      for url, chunks in url_chunks.items():
-          # 점수순 정렬 (높은 점수 우선)
-          chunks.sort(key=lambda x: x[0], reverse=True)
+          if text_hash in seen_text_hashes:
+              duplicate_count += 1
+              logger.debug(f"⏭️  완전 중복 청크 제거: {title[:30]}... (해시: {text_hash[:8]})")
+              continue
 
-          if len(chunks) == 1:
-              # 청크가 1개뿐이면 그대로 선택
-              diverse_docs.append(chunks[0])
-          else:
-              # 1등은 무조건 선택
-              diverse_docs.append(chunks[0])
+          # 2. 유사 중복 체크 (90% 이상 같으면 중복으로 판단)
+          is_similar_duplicate = False
+          for selected_doc in deduplicated_docs:
+              selected_text = selected_doc[3]
 
-              # 2등 선택 시 텍스트 다양성 체크
-              first_text_set = set(chunks[0][3])  # 1등 청크의 문자 집합
+              # 유사도 계산 (0.0~1.0)
+              similarity = SequenceMatcher(None, text, selected_text).ratio()
 
-              for chunk in chunks[1:]:
-                  chunk_text_set = set(chunk[3])
-                  # 두 청크 간 차이나는 문자가 100개 이상이면 다른 내용으로 판단
-                  unique_chars = len(chunk_text_set - first_text_set)
+              if similarity > 0.9:
+                  is_similar_duplicate = True
+                  duplicate_count += 1
+                  logger.debug(f"⏭️  유사 중복 청크 제거 ({similarity:.2%} 유사): {title[:30]}...")
+                  break
 
-                  if unique_chars > 100:
-                      diverse_docs.append(chunk)
-                      break  # 2개째 선택하면 중단
+          # 3. 중복이 아니면 선택
+          if not is_similar_duplicate:
+              seen_text_hashes.add(text_hash)
+              deduplicated_docs.append((score, title, date, text, url))
 
-      # 3. 점수순 재정렬 후 Top 20
-      diverse_docs.sort(key=lambda x: x[0], reverse=True)
-      final_best_docs = diverse_docs[:20]
+      # 4. 점수순 재정렬 후 Top 20
+      deduplicated_docs.sort(key=lambda x: x[0], reverse=True)
+      final_best_docs = deduplicated_docs[:20]
 
       dedup_f_time = time.time() - dedup_time
-      print(f"URL 중복 제거 시간: {dedup_f_time:.4f}초 (원본: {len(url_chunks)}개 URL, {sum(len(c) for c in url_chunks.values())}개 청크 → 최종: {len(final_best_docs)}개)")
+      print(f"중복 제거 시간: {dedup_f_time:.4f}초 (원본: {original_count}개 → 중복 {duplicate_count}개 제거 → 최종: {len(final_best_docs)}개)")
 
       # 문서 클러스터링 및 최적 클러스터 선택 (리팩토링됨 - DocumentClusterer 사용)
       cluster_time = time.time()
