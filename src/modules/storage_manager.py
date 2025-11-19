@@ -240,11 +240,42 @@ class StorageManager:
         logger.info("✅ DocumentClusterer 인스턴스 설정 완료")
 
     @property
+    def query_transformer(self):
+        """QueryTransformer 인스턴스 (StorageManager 초기화 시 자동 생성)"""
+        if self._query_transformer is None:
+            logger.warning("⚠️  QueryTransformer가 초기화되지 않았습니다. 재초기화를 시도합니다...")
+            # 재초기화 시도
+            self._initialize_preprocessing_modules()
+
+            # 재초기화도 실패한 경우
+            if self._query_transformer is None:
+                logger.error("❌ QueryTransformer 초기화 실패! preprocessing 모듈을 확인하세요.")
+                raise RuntimeError(
+                    "QueryTransformer 초기화에 실패했습니다. "
+                    "konlpy와 Mecab이 올바르게 설치되었는지 확인하세요."
+                )
+        return self._query_transformer
+
+    def set_query_transformer(self, transformer):
+        """QueryTransformer 인스턴스 재설정 (일반적으로 불필요)"""
+        self._query_transformer = transformer
+        logger.info("✅ QueryTransformer 인스턴스 재설정 완료")
+
+    @property
     def keyword_filter(self):
         """KeywordFilter 인스턴스"""
         if self._keyword_filter is None:
-             # 초기화되지 않았을 경우 경고 로그 (하지만 None 반환 허용)
-             pass
+            logger.warning("⚠️  KeywordFilter가 초기화되지 않았습니다. 재초기화를 시도합니다...")
+            # 재초기화 시도
+            self._initialize_preprocessing_modules()
+
+            # 재초기화도 실패한 경우
+            if self._keyword_filter is None:
+                logger.error("❌ KeywordFilter 초기화 실패! preprocessing 모듈을 확인하세요.")
+                raise RuntimeError(
+                    "KeywordFilter 초기화에 실패했습니다. "
+                    "preprocessing 모듈이 올바르게 설치되었는지 확인하세요."
+                )
         return self._keyword_filter
 
     def set_keyword_filter(self, filter_instance):
