@@ -584,6 +584,52 @@ def find_url(url, title, doc_date, text, doc_url, number):
 
 ########################################################################################  best_docs 시작 ##########################################################################################
 
+def parse_temporal_intent(query, current_date=None):
+    """
+    질문에서 시간 표현을 감지하고 필터 조건을 반환합니다.
+
+    Args:
+        query: 사용자 질문
+        current_date: 현재 날짜 (기본값: 현재 시각)
+
+    Returns:
+        dict: {"year": int, "semester": int, "date_from": datetime} 또는 None
+    """
+    from datetime import datetime
+
+    if current_date is None:
+        current_date = datetime.now()
+
+    current_year = current_date.year
+    current_month = current_date.month
+
+    # 한국 학기 계산: 1학기(3-8월), 2학기(9-2월)
+    # 단, 1-2월은 전년도 2학기로 간주
+    if 3 <= current_month <= 8:
+        current_semester = 1
+    else:  # 9-12월 또는 1-2월
+        current_semester = 2
+        if current_month <= 2:
+            current_year -= 1  # 1-2월은 전년도 2학기
+
+    # 시간 표현 감지
+    temporal_keywords = {
+        '이번학기': {'year': current_year, 'semester': current_semester},
+        '이번 학기': {'year': current_year, 'semester': current_semester},
+        '이번학년': {'year': current_year, 'semester': current_semester},
+        '이번 학년': {'year': current_year, 'semester': current_semester},
+        '올해': {'year': current_year},
+        '금년': {'year': current_year},
+        '최근': {'year_from': current_year - 1},  # 최근 1년
+    }
+
+    for keyword, time_filter in temporal_keywords.items():
+        if keyword in query:
+            logger.info(f"⏰ 시간 표현 감지: '{keyword}' → {time_filter}")
+            return time_filter
+
+    return None
+
 
 def best_docs(user_question):
       # 사용자 질문
@@ -636,6 +682,9 @@ def best_docs(user_question):
 
       remove_noticement = ['제일','가장','공고', '공지사항','필독','첨부파일','수업','컴학','상위','관련']
 
+      # ✅ 시간 표현 감지 및 필터 생성
+      temporal_filter = parse_temporal_intent(user_question)
+
       # BM25 검색 (리팩토링됨 - BM25Retriever 사용)
       bm_title_time = time.time()
       Bm25_best_docs, adjusted_similarities = storage.bm25_retriever.search(
@@ -655,6 +704,57 @@ def best_docs(user_question):
       )
       pinecone_time = time.time() - dense_time
       print(f"파인콘에서 top k 뽑는데 걸리는 시간 {pinecone_time}")
+
+      # ✅ 시간 필터 적용 (검색 결과를 날짜 기준으로 필터링)
+      if temporal_filter:
+          from datetime import datetime
+
+          def matches_temporal_filter(doc_date_str, time_filter):
+              """날짜 문자열이 시간 필터 조건을 만족하는지 확인"""
+              try:
+                  # ISO 포맷 파싱: "2024-09-19T10:57:00+09:00"
+                  doc_date = datetime.fromisoformat(doc_date_str.replace('+09:00', ''))
+                  doc_year = doc_date.year
+                  doc_month = doc_date.month
+
+                  # 학기 계산
+                  if 3 <= doc_month <= 8:
+                      doc_semester = 1
+                  else:
+                      doc_semester = 2
+                      if doc_month <= 2:
+                          doc_year -= 1
+
+                  # 필터 조건 체크
+                  if 'year' in time_filter and doc_year != time_filter['year']:
+                      return False
+                  if 'semester' in time_filter and doc_semester != time_filter['semester']:
+                      return False
+                  if 'year_from' in time_filter and doc_year < time_filter['year_from']:
+                      return False
+
+                  return True
+              except Exception as e:
+                  logger.debug(f"날짜 파싱 실패: {doc_date_str} - {e}")
+                  return True  # 파싱 실패 시 포함 (안전장치)
+
+          # BM25 결과 필터링
+          original_bm25_count = len(Bm25_best_docs)
+          Bm25_best_docs = [
+              (score, title, date, text, url)
+              for score, title, date, text, url in Bm25_best_docs
+              if matches_temporal_filter(date, temporal_filter)
+          ]
+
+          # Dense 결과 필터링
+          original_dense_count = len(combine_dense_docs)
+          combine_dense_docs = [
+              (score, doc)
+              for score, doc in combine_dense_docs
+              if matches_temporal_filter(doc[1], temporal_filter)  # doc[1] = date
+          ]
+
+          logger.info(f"📅 날짜 필터링 완료: BM25 {original_bm25_count}→{len(Bm25_best_docs)}개, Dense {original_dense_count}→{len(combine_dense_docs)}개")
 
       # ## 결과 출력
       # print("\n통합된 파인콘문서 유사도:")
