@@ -612,8 +612,8 @@ def parse_temporal_intent(query, current_date=None):
         if current_month <= 2:
             current_year -= 1  # 1-2월은 전년도 2학기
 
-    # 시간 표현 감지
-    temporal_keywords = {
+    # 1단계: 간단한 시간 표현은 규칙으로 처리 (빠르고 비용 0)
+    simple_temporal_keywords = {
         '이번학기': {'year': current_year, 'semester': current_semester},
         '이번 학기': {'year': current_year, 'semester': current_semester},
         '이번학년': {'year': current_year, 'semester': current_semester},
@@ -623,12 +623,107 @@ def parse_temporal_intent(query, current_date=None):
         '최근': {'year_from': current_year - 1},  # 최근 1년
     }
 
-    for keyword, time_filter in temporal_keywords.items():
+    for keyword, time_filter in simple_temporal_keywords.items():
         if keyword in query:
-            logger.info(f"⏰ 시간 표현 감지: '{keyword}' → {time_filter}")
+            logger.info(f"⏰ 시간 표현 감지 (규칙): '{keyword}' → {time_filter}")
             return time_filter
 
+    # 2단계: 복잡한 시간 표현은 LLM으로 해석 (유연하고 정확)
+    # "저번학기", "작년 2학기", "다음 학기", "지난달" 등
+    complex_temporal_keywords = ['학기', '학년', '년도', '작년', '올해', '내년', '지난', '다음', '전', '후']
+
+    if any(keyword in query for keyword in complex_temporal_keywords):
+        logger.info(f"🤔 복잡한 시간 표현 감지 → LLM 리라이팅 시작...")
+        llm_filter = rewrite_query_with_llm(query, current_date)
+        if llm_filter:
+            logger.info(f"✨ LLM 리라이팅 결과: {llm_filter}")
+            return llm_filter
+
     return None
+
+
+def rewrite_query_with_llm(query, current_date):
+    """
+    LLM을 사용해 복잡한 시간 표현을 해석하고 필터 조건을 생성합니다.
+
+    Args:
+        query: 사용자 질문
+        current_date: 현재 날짜
+
+    Returns:
+        dict: {"year": int, "semester": int} 또는 None
+    """
+    from datetime import datetime
+    import json
+
+    current_year = current_date.year
+    current_month = current_date.month
+
+    # 현재 학기 계산
+    if 3 <= current_month <= 8:
+        current_semester = 1
+    else:
+        current_semester = 2
+        if current_month <= 2:
+            current_year -= 1
+
+    prompt = f"""당신은 대학 학사 일정 시간 표현 전문가입니다.
+
+현재 날짜: {current_date.strftime('%Y년 %m월 %d일')}
+현재 학기: {current_year}학년도 {current_semester}학기
+
+한국 대학 학기 기준:
+- 1학기: 3월~8월
+- 2학기: 9월~2월 (다음해 2월까지)
+- 여름학기: 6월~8월
+- 겨울학기: 12월~2월
+
+사용자 질문: "{query}"
+
+위 질문에서 시간 표현을 추출하고, 정확한 학년도와 학기를 JSON 형식으로 반환하세요.
+
+출력 형식 (JSON만):
+{{
+  "year": 2025,
+  "semester": 1,
+  "reasoning": "현재 2025년 2학기이므로, 저번학기는 2025년 1학기입니다"
+}}
+
+시간 표현이 없으면:
+{{
+  "year": null,
+  "semester": null,
+  "reasoning": "시간 표현 없음"
+}}
+
+예시:
+- "저번학기" → {{"year": {current_year if current_semester == 2 else current_year - 1}, "semester": {2 if current_semester == 1 else 1}, "reasoning": "..."}}
+- "작년 2학기" → {{"year": {current_year - 1}, "semester": 2, "reasoning": "..."}}
+- "다음 학기" → {{"year": {current_year + 1 if current_semester == 2 else current_year}, "semester": {1 if current_semester == 2 else 2}, "reasoning": "..."}}
+
+**중요**: JSON만 출력하고, 다른 텍스트는 포함하지 마세요.
+"""
+
+    try:
+        llm = ChatUpstage(api_key=storage.upstage_api_key, model="solar-pro")
+        response = llm.invoke(prompt)
+
+        # JSON 파싱
+        result = json.loads(response.content.strip())
+
+        if result.get('year') is None or result.get('semester') is None:
+            return None
+
+        logger.info(f"   💬 LLM 추론: {result.get('reasoning', '')}")
+
+        return {
+            'year': result['year'],
+            'semester': result['semester']
+        }
+
+    except Exception as e:
+        logger.warning(f"⚠️  LLM 리라이팅 실패 (규칙 기반으로 폴백): {e}")
+        return None
 
 
 def best_docs(user_question):
