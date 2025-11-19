@@ -465,11 +465,12 @@ class MultimodalProcessor:
                     text_length = len(ocr_result.get("text", ""))
 
                     if text_length > 0:
-                        # 성공: 텍스트 추출 완료 (HTML 구조도 함께 저장)
+                        # 성공: 텍스트 추출 완료 (HTML, Markdown 구조 함께 저장)
                         content = {
                             "url": img_url,
                             "ocr_text": ocr_result.get("text", ""),
                             "ocr_html": ocr_result.get("html", ""),  # HTML 구조 보존 (표, 레이아웃 등)
+                            "ocr_markdown": ocr_result.get("markdown", ""),  # Markdown (Upstage API 제공, 고품질!)
                             "ocr_elements": ocr_result.get("elements", []),  # 요소 정보
                             "description": ""
                         }
@@ -767,6 +768,7 @@ class MultimodalProcessor:
                     if ocr_result and ocr_result.get("text"):
                         text = ocr_result.get("text", "")
                         html = ocr_result.get("html", "")
+                        markdown = ocr_result.get("markdown", "")
                         elements = ocr_result.get("elements", [])
 
                         content = {
@@ -774,12 +776,14 @@ class MultimodalProcessor:
                             "type": "image",
                             "text": text,
                             "html": html,  # HTML 구조 보존 (표, 레이아웃 등)
+                            "markdown": markdown,  # Markdown (Upstage API 제공, 고품질!)
                             "elements": elements  # 요소 정보
                         }
                         successful.append(content)
                         self._save_to_cache(att_url, {
                             "ocr_text": text,
                             "ocr_html": html,
+                            "ocr_markdown": markdown,
                             "ocr_elements": elements,
                             "type": "image"
                         }, file_hash=file_hash)
@@ -870,6 +874,7 @@ class MultimodalProcessor:
                             "type": file_type,
                             "text": parse_result.get("text", ""),
                             "html": parse_result.get("html", ""),  # HTML 구조 보존 (표, 레이아웃 등)
+                            "markdown": parse_result.get("markdown", ""),  # Markdown (Upstage API 제공, 고품질!)
                             "elements": parse_result.get("elements", [])  # 요소 정보
                         }
                         successful.append(content)

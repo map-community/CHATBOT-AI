@@ -217,8 +217,13 @@ def fetch_titles_from_pinecone():
                                             logger.info(f"✅ MongoDB에서 발견: {lookup_url[:80]}...")
                                             logger.info(f"   필드: {list(cached.keys())}")
 
-                                        # 이미지 OCR인 경우 ocr_html, 문서인 경우 html
-                                        html_content = cached.get("ocr_html") or cached.get("html", "")
+                                        # Markdown 우선 (Upstage API 제공, 고품질 표 구조)
+                                        # 이미지: ocr_markdown, 문서: markdown
+                                        markdown_content = cached.get("ocr_markdown") or cached.get("markdown", "")
+
+                                        # Markdown이 없으면 HTML 사용 (fallback)
+                                        html_content = markdown_content or cached.get("ocr_html") or cached.get("html", "")
+
                                         if html_content:
                                             html = html_content
                                             html_extracted_count += 1
@@ -805,41 +810,47 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
             source = "original_post"
             attachment_type = ""
 
-        # HTML이 있으면 Markdown으로 변환하여 사용, 없으면 text를 사용
+        # HTML/Markdown 우선 사용 (표 구조 보존), 없으면 text 사용
         if html:
-            # HTML을 구조화된 텍스트로 변환 (표 구조 보존)
-            try:
-                soup = BeautifulSoup(html, 'html.parser')
+            # Markdown 형식 감지 (Upstage API 제공, 고품질 표 구조)
+            # 이미 Markdown이면 그대로 사용 (토큰 효율적, LLM 최적화)
+            if '|' in html and ('---' in html or '\n' in html):
+                # Markdown 표 형식
+                page_content = html
+            else:
+                # HTML → Markdown 변환 (fallback)
+                try:
+                    soup = BeautifulSoup(html, 'html.parser')
 
-                # 테이블이 있으면 Markdown 표로 변환
-                markdown_content = ""
-                for table in soup.find_all('table'):
-                    markdown_content += "\n\n**[표 데이터]**\n"
-                    rows = table.find_all('tr')
-                    for row_idx, row in enumerate(rows):
-                        cells = row.find_all(['th', 'td'])
-                        row_text = " | ".join([cell.get_text(strip=True) for cell in cells])
-                        markdown_content += f"| {row_text} |\n"
-                        # 헤더 행 다음에 구분선 추가
-                        if row_idx == 0:
-                            markdown_content += "| " + " | ".join(["---"] * len(cells)) + " |\n"
-                    markdown_content += "\n"
+                    # 테이블이 있으면 Markdown 표로 변환
+                    markdown_content = ""
+                    for table in soup.find_all('table'):
+                        markdown_content += "\n\n**[표 데이터]**\n"
+                        rows = table.find_all('tr')
+                        for row_idx, row in enumerate(rows):
+                            cells = row.find_all(['th', 'td'])
+                            row_text = " | ".join([cell.get_text(strip=True) for cell in cells])
+                            markdown_content += f"| {row_text} |\n"
+                            # 헤더 행 다음에 구분선 추가
+                            if row_idx == 0:
+                                markdown_content += "| " + " | ".join(["---"] * len(cells)) + " |\n"
+                        markdown_content += "\n"
 
-                # 테이블 외 텍스트 추출
-                for table in soup.find_all('table'):
-                    table.decompose()  # 테이블 제거 (중복 방지)
+                    # 테이블 외 텍스트 추출
+                    for table in soup.find_all('table'):
+                        table.decompose()  # 테이블 제거 (중복 방지)
 
-                plain_text_from_html = soup.get_text(separator='\n', strip=True)
+                    plain_text_from_html = soup.get_text(separator='\n', strip=True)
 
-                # 최종 page_content: Markdown 표 + 평문
-                page_content = (markdown_content + "\n" + plain_text_from_html).strip()
+                    # 최종 page_content: Markdown 표 + 평문
+                    page_content = (markdown_content + "\n" + plain_text_from_html).strip()
 
-                # 내용이 없으면 원본 text 사용
-                if not page_content:
+                    # 내용이 없으면 원본 text 사용
+                    if not page_content:
+                        page_content = text
+                except Exception as e:
+                    logger.debug(f"HTML 변환 실패, 원본 텍스트 사용: {e}")
                     page_content = text
-            except Exception as e:
-                logger.debug(f"HTML 변환 실패, 원본 텍스트 사용: {e}")
-                page_content = text
         else:
             page_content = text
 

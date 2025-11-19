@@ -15,23 +15,36 @@ import time
 logger = logging.getLogger(__name__)
 
 
-def _parse_html_to_text(html: str) -> str:
+def _parse_html_to_text(html_or_markdown: str) -> str:
     """
-    HTML을 텍스트로 변환 (병렬 처리용 top-level 함수)
+    HTML 또는 Markdown을 텍스트로 변환 (병렬 처리용 top-level 함수)
 
     Args:
-        html: HTML 문자열
+        html_or_markdown: HTML 또는 Markdown 문자열
 
     Returns:
         파싱된 텍스트
+
+    Note:
+        - Markdown (Upstage API 제공): 표 구조 보존, 그대로 반환
+        - HTML (fallback): BeautifulSoup으로 파싱
     """
-    if not html:
+    if not html_or_markdown:
         return ""
+
+    # Markdown 형식 감지 (표 형식: '|' 구분자)
+    # Markdown이면 그대로 반환 (이미 LLM이 이해하기 좋은 형태)
+    if '|' in html_or_markdown and ('---' in html_or_markdown or '\n' in html_or_markdown):
+        # Markdown 표 형식으로 보임
+        return html_or_markdown
+
+    # HTML이면 파싱
     try:
-        soup = BeautifulSoup(html, 'html.parser')
+        soup = BeautifulSoup(html_or_markdown, 'html.parser')
         return soup.get_text(separator=' ', strip=True)
     except Exception:
-        return ""
+        # 파싱 실패 시 원본 반환
+        return html_or_markdown
 
 
 class BM25Retriever:
