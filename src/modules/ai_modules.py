@@ -217,8 +217,13 @@ def fetch_titles_from_pinecone():
                                             logger.info(f"✅ MongoDB에서 발견: {lookup_url[:80]}...")
                                             logger.info(f"   필드: {list(cached.keys())}")
 
-                                        # 이미지 OCR인 경우 ocr_html, 문서인 경우 html
-                                        html_content = cached.get("ocr_html") or cached.get("html", "")
+                                        # Markdown 우선 (Upstage API 제공, 고품질 표 구조)
+                                        # 이미지: ocr_markdown, 문서: markdown
+                                        markdown_content = cached.get("ocr_markdown") or cached.get("markdown", "")
+
+                                        # Markdown이 없으면 HTML 사용 (fallback)
+                                        html_content = markdown_content or cached.get("ocr_html") or cached.get("html", "")
+
                                         if html_content:
                                             html = html_content
                                             html_extracted_count += 1
@@ -356,7 +361,7 @@ def _initialize_retrievers():
         DocumentClusterer
     )
 
-    # BM25Retriever 초기화 (HTML 데이터 포함)
+    # BM25Retriever 초기화 (HTML 데이터 포함, Redis 캐싱)
     bm25_retriever = BM25Retriever(
         titles=storage.cached_titles,
         texts=storage.cached_texts,
@@ -366,7 +371,8 @@ def _initialize_retrievers():
         similarity_adjuster=adjust_similarity_scores,
         htmls=storage.cached_htmls,  # HTML 구조화 데이터 추가
         k1=1.5,
-        b=0.75
+        b=0.75,
+        redis_client=storage.redis_client  # Redis 캐싱 활성화
     )
     storage.set_bm25_retriever(bm25_retriever)
 
@@ -634,7 +640,7 @@ def best_docs(user_question):
       bm_title_time = time.time()
       Bm25_best_docs, adjusted_similarities = storage.bm25_retriever.search(
           query_nouns=query_noun,
-          top_k=25,
+          top_k=50,  # ✨ 25→50 증가: URL 중복 제거 위한 후보군 확대
           normalize_factor=24.0
       )
       bm_title_f_time = time.time() - bm_title_time
@@ -645,7 +651,7 @@ def best_docs(user_question):
       combine_dense_docs = storage.dense_retriever.search(
           user_question=user_question,
           query_nouns=query_noun,
-          top_k=30
+          top_k=50  # ✨ 30→50 증가: URL 중복 제거 위한 후보군 확대
       )
       pinecone_time = time.time() - dense_time
       print(f"파인콘에서 top k 뽑는데 걸리는 시간 {pinecone_time}")
@@ -670,10 +676,60 @@ def best_docs(user_question):
           titles_from_pinecone=titles_from_pinecone,
           query_nouns=query_noun,
           user_question=user_question,
-          top_k=20
+          top_k=30  # ✨ 20→30 증가: URL 중복 제거 전 후보군 확대
       )
       combine_f_time = time.time() - combine_time
       print(f"Bm25랑 pinecone 결합 시간: {combine_f_time}")
+
+      # ✨ 텍스트 유사도 기반 중복 제거 (Phase 1 개선 - 수정)
+      # 문제: URL 기준 제한은 같은 게시글의 다른 첨부파일까지 차단함
+      # 해결: 텍스트가 정말 비슷한 청크만 제거 (90% 이상 유사 시)
+      dedup_time = time.time()
+
+      import hashlib
+      from difflib import SequenceMatcher
+
+      seen_text_hashes = set()
+      deduplicated_docs = []
+      duplicate_count = 0
+      original_count = len(final_best_docs)
+
+      for score, title, date, text, url in final_best_docs:
+          # 1. 완전 중복 체크 (텍스트 해시 - 빠름)
+          normalized_text = ''.join(text.split())  # 공백/줄바꿈 제거
+          text_hash = hashlib.md5(normalized_text.encode()).hexdigest()
+
+          if text_hash in seen_text_hashes:
+              duplicate_count += 1
+              logger.debug(f"⏭️  완전 중복 청크 제거: {title[:30]}... (해시: {text_hash[:8]})")
+              continue
+
+          # 2. 유사 중복 체크 (90% 이상 같으면 중복으로 판단)
+          is_similar_duplicate = False
+          for selected_doc in deduplicated_docs:
+              selected_text = selected_doc[3]
+
+              # 유사도 계산 (0.0~1.0)
+              similarity = SequenceMatcher(None, text, selected_text).ratio()
+
+              if similarity > 0.9:
+                  is_similar_duplicate = True
+                  duplicate_count += 1
+                  logger.debug(f"⏭️  유사 중복 청크 제거 ({similarity:.2%} 유사): {title[:30]}...")
+                  break
+
+          # 3. 중복이 아니면 선택
+          if not is_similar_duplicate:
+              seen_text_hashes.add(text_hash)
+              deduplicated_docs.append((score, title, date, text, url))
+
+      # 4. 점수순 재정렬 후 Top 20
+      deduplicated_docs.sort(key=lambda x: x[0], reverse=True)
+      final_best_docs = deduplicated_docs[:20]
+
+      dedup_f_time = time.time() - dedup_time
+      print(f"중복 제거 시간: {dedup_f_time:.4f}초 (원본: {original_count}개 → 중복 {duplicate_count}개 제거 → 최종: {len(final_best_docs)}개)")
+
       # 문서 클러스터링 및 최적 클러스터 선택 (리팩토링됨 - DocumentClusterer 사용)
       cluster_time = time.time()
       final_cluster, count = storage.document_clusterer.cluster_and_select(
@@ -804,41 +860,47 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
             source = "original_post"
             attachment_type = ""
 
-        # HTML이 있으면 Markdown으로 변환하여 사용, 없으면 text를 사용
+        # HTML/Markdown 우선 사용 (표 구조 보존), 없으면 text 사용
         if html:
-            # HTML을 구조화된 텍스트로 변환 (표 구조 보존)
-            try:
-                soup = BeautifulSoup(html, 'html.parser')
+            # Markdown 형식 감지 (Upstage API 제공, 고품질 표 구조)
+            # 이미 Markdown이면 그대로 사용 (토큰 효율적, LLM 최적화)
+            if '|' in html and ('---' in html or '\n' in html):
+                # Markdown 표 형식
+                page_content = html
+            else:
+                # HTML → Markdown 변환 (fallback)
+                try:
+                    soup = BeautifulSoup(html, 'html.parser')
 
-                # 테이블이 있으면 Markdown 표로 변환
-                markdown_content = ""
-                for table in soup.find_all('table'):
-                    markdown_content += "\n\n**[표 데이터]**\n"
-                    rows = table.find_all('tr')
-                    for row_idx, row in enumerate(rows):
-                        cells = row.find_all(['th', 'td'])
-                        row_text = " | ".join([cell.get_text(strip=True) for cell in cells])
-                        markdown_content += f"| {row_text} |\n"
-                        # 헤더 행 다음에 구분선 추가
-                        if row_idx == 0:
-                            markdown_content += "| " + " | ".join(["---"] * len(cells)) + " |\n"
-                    markdown_content += "\n"
+                    # 테이블이 있으면 Markdown 표로 변환
+                    markdown_content = ""
+                    for table in soup.find_all('table'):
+                        markdown_content += "\n\n**[표 데이터]**\n"
+                        rows = table.find_all('tr')
+                        for row_idx, row in enumerate(rows):
+                            cells = row.find_all(['th', 'td'])
+                            row_text = " | ".join([cell.get_text(strip=True) for cell in cells])
+                            markdown_content += f"| {row_text} |\n"
+                            # 헤더 행 다음에 구분선 추가
+                            if row_idx == 0:
+                                markdown_content += "| " + " | ".join(["---"] * len(cells)) + " |\n"
+                        markdown_content += "\n"
 
-                # 테이블 외 텍스트 추출
-                for table in soup.find_all('table'):
-                    table.decompose()  # 테이블 제거 (중복 방지)
+                    # 테이블 외 텍스트 추출
+                    for table in soup.find_all('table'):
+                        table.decompose()  # 테이블 제거 (중복 방지)
 
-                plain_text_from_html = soup.get_text(separator='\n', strip=True)
+                    plain_text_from_html = soup.get_text(separator='\n', strip=True)
 
-                # 최종 page_content: Markdown 표 + 평문
-                page_content = (markdown_content + "\n" + plain_text_from_html).strip()
+                    # 최종 page_content: Markdown 표 + 평문
+                    page_content = (markdown_content + "\n" + plain_text_from_html).strip()
 
-                # 내용이 없으면 원본 text 사용
-                if not page_content:
+                    # 내용이 없으면 원본 text 사용
+                    if not page_content:
+                        page_content = text
+                except Exception as e:
+                    logger.debug(f"HTML 변환 실패, 원본 텍스트 사용: {e}")
                     page_content = text
-            except Exception as e:
-                logger.debug(f"HTML 변환 실패, 원본 텍스트 사용: {e}")
-                page_content = text
         else:
             page_content = text
 
@@ -973,6 +1035,10 @@ def get_ai_message(question):
     best_f_time=time.time()-best_time
     print(f"best_docs 뽑는 시간:{best_f_time}")
 
+    # 검색된 문서 정보 로깅
+    logger.info(f"📝 사용자 질문: {question}")
+    logger.info(f"🔍 추출된 키워드: {query_noun}")
+
     # query_noun이 없거나 top_doc이 비어있는 경우 처리
     if not query_noun or not top_doc or len(top_doc) == 0:
         notice_url = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_1"
@@ -1010,17 +1076,48 @@ def get_ai_message(question):
       print(f"get_ai_message 총 돌아가는 시간 : {f_time}")
       return data
     top_docs = [list(doc) for doc in top_doc]
+
+    # 상위 검색 결과 로깅 (Top 5) - URL 중복 제거 효과 확인용
+    logger.info(f"🔝 검색 결과 Top {min(5, len(top_docs))}:")
+    seen_urls = set()
+    unique_url_count = 0
+    for i, doc in enumerate(top_docs[:5]):
+        score, title, date, text, url = doc[:5]
+
+        # URL 중복 체크
+        if url not in seen_urls:
+            seen_urls.add(url)
+            unique_url_count += 1
+            url_marker = "🆕"  # 새로운 URL
+        else:
+            url_marker = "🔁"  # 중복 URL (같은 문서의 다른 청크)
+
+        logger.info(f"   {i+1}. [{score:.4f}] {url_marker} {title} ({date})")
+        logger.info(f"      URL: {url}")
+
+    logger.info(f"   💡 다양성: Top 5 중 {unique_url_count}개 서로 다른 문서")
+
     valid_time=time.time()
     if False == (question_valid(question, top_docs[0][1], query_noun)):
         for i in range(len(top_docs)):
             top_docs[i][0] -= 2
-    
+
     final_score = top_docs[0][0]
     final_title = top_docs[0][1]
     final_date = top_docs[0][2]
     final_text = top_docs[0][3]
     final_url = top_docs[0][4]
     final_image = []
+
+    # 최종 선택된 문서 정보 로깅
+    logger.info(f"📄 최종 선택 문서:")
+    logger.info(f"   제목: {final_title}")
+    logger.info(f"   날짜: {final_date}")
+    logger.info(f"   유사도: {final_score:.4f}")
+    logger.info(f"   URL: {final_url}")
+    logger.info(f"   본문 길이: {len(final_text)}자")
+    if len(final_text) > 0:
+        logger.info(f"   본문 미리보기: {final_text[:100]}...")
 
     # MongoDB 연결 확인 후 이미지 URL 조회
     if storage.mongo_collection is not None:
@@ -1030,8 +1127,23 @@ def get_ai_message(question):
               final_image.extend(record["image_url"])
             else :
               final_image.append(record["image_url"])
+            logger.info(f"   이미지: {len(final_image)}개")
+
+            # HTML 구조 정보 로깅
+            if record.get("html"):
+                html_length = len(record["html"])
+                logger.info(f"   HTML 구조: ✅ 있음 ({html_length}자)")
+            else:
+                logger.info(f"   HTML 구조: ❌ 없음")
+
+            # 콘텐츠 타입 로깅
+            content_type = record.get("content_type", "unknown")
+            source = record.get("source", "unknown")
+            logger.info(f"   콘텐츠 타입: {content_type}")
+            logger.info(f"   소스: {source}")
         else :
             print("일치하는 문서 존재 X")
+            logger.warning(f"⚠️  MongoDB에서 문서를 찾을 수 없습니다: {final_title}")
             final_score = 0
             final_title = "No content"
             final_date = "No content"
@@ -1140,6 +1252,12 @@ def get_ai_message(question):
         answer_result = qa_chain.invoke(question)
         answer_f_time=time.time()-answer_time
         print(f"답변 생성하는 시간: {answer_f_time}")
+
+        logger.info(f"💬 LLM 답변 생성 완료:")
+        logger.info(f"   답변 길이: {len(answer_result)}자")
+        logger.info(f"   답변 미리보기: {answer_result[:150]}...")
+        logger.info(f"   사용된 참고문서 수: {len(relevant_docs)}")
+
         doc_references = "\n".join([
             f"\n참고 문서 URL: {doc.metadata['url']}"
             for doc in relevant_docs[:1] if doc.metadata.get('url') != 'No URL'
@@ -1153,5 +1271,6 @@ def get_ai_message(question):
             "images": final_image
         }
         f_time=time.time()-s_time
+        logger.info(f"✅ 총 처리 시간: {f_time:.2f}초")
         print(f"get_ai_message 총 돌아가는 시간 : {f_time}")
         return data

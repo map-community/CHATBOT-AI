@@ -9,8 +9,42 @@ from rank_bm25 import BM25Okapi
 from typing import List, Tuple
 import logging
 from bs4 import BeautifulSoup
+from multiprocessing import Pool, cpu_count
+import time
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_html_to_text(html_or_markdown: str) -> str:
+    """
+    HTML 또는 Markdown을 텍스트로 변환 (병렬 처리용 top-level 함수)
+
+    Args:
+        html_or_markdown: HTML 또는 Markdown 문자열
+
+    Returns:
+        파싱된 텍스트
+
+    Note:
+        - Markdown (Upstage API 제공): 표 구조 보존, 그대로 반환
+        - HTML (fallback): BeautifulSoup으로 파싱
+    """
+    if not html_or_markdown:
+        return ""
+
+    # Markdown 형식 감지 (표 형식: '|' 구분자)
+    # Markdown이면 그대로 반환 (이미 LLM이 이해하기 좋은 형태)
+    if '|' in html_or_markdown and ('---' in html_or_markdown or '\n' in html_or_markdown):
+        # Markdown 표 형식으로 보임
+        return html_or_markdown
+
+    # HTML이면 파싱
+    try:
+        soup = BeautifulSoup(html_or_markdown, 'html.parser')
+        return soup.get_text(separator=' ', strip=True)
+    except Exception:
+        # 파싱 실패 시 원본 반환
+        return html_or_markdown
 
 
 class BM25Retriever:
@@ -61,12 +95,13 @@ class BM25Retriever:
         self.k1 = k1
         self.b = b
         self.redis_client = redis_client
-        
-        # 캐시 키 설정
-        self.cache_key = "bm25_tokenized_documents"
+
+        # 캐시 키 설정 (v2: HTML 파싱 결과 포함)
+        self.cache_key = "bm25_cache_v2"
 
         # BM25 인덱스 생성 (제목 + 본문 + HTML 텍스트 결합하여 검색)
         self.tokenized_documents = []
+        html_texts = []  # 파싱된 HTML 텍스트
         loaded_from_cache = False
 
         # 1. Redis 캐시 확인
@@ -74,42 +109,73 @@ class BM25Retriever:
             try:
                 cached_data = self.redis_client.get(self.cache_key)
                 if cached_data:
-                    cached_tokens = pickle.loads(cached_data)
-                    # 문서 개수가 일치하는지 확인 (간단한 유효성 검사)
-                    if len(cached_tokens) == len(titles):
-                        self.tokenized_documents = cached_tokens
+                    cache_obj = pickle.loads(cached_data)
+                    # v2 캐시 구조: {"tokenized_documents": [...], "html_texts": [...], "doc_count": N}
+                    if isinstance(cache_obj, dict) and cache_obj.get("doc_count") == len(titles):
+                        self.tokenized_documents = cache_obj["tokenized_documents"]
+                        html_texts = cache_obj.get("html_texts", [])
                         loaded_from_cache = True
-                        logger.info(f"🚀 Redis에서 BM25 토큰 로드 완료! ({len(self.tokenized_documents)}개)")
+                        logger.info(f"🚀 Redis에서 BM25 캐시 로드 완료! ({len(self.tokenized_documents)}개 문서)")
                     else:
-                        logger.warning(f"⚠️  BM25 캐시 개수 불일치 (캐시: {len(cached_tokens)}, 현재: {len(titles)}). 다시 생성합니다.")
+                        logger.warning(f"⚠️  BM25 캐시 버전 또는 개수 불일치. 다시 생성합니다.")
             except Exception as e:
-                logger.warning(f"⚠️  Redis에서 BM25 토큰 로드 실패: {e}")
+                logger.warning(f"⚠️  Redis에서 BM25 캐시 로드 실패: {e}")
 
         # 2. 캐시가 없으면 새로 생성
         if not loaded_from_cache:
+            start_time = time.time()
             logger.info("🔄 BM25 인덱스 생성 중 (제목+본문+HTML 검색)...")
+
+            # 2-1. HTML 파싱 (병렬 처리)
+            html_count = sum(1 for h in self.htmls if h) if self.htmls else 0
+            if html_count > 0:
+                logger.info(f"   📄 HTML 파싱 시작 ({html_count}개, 병렬 처리: {cpu_count()}코어)...")
+                parse_start = time.time()
+
+                # 병렬 처리로 HTML 파싱
+                with Pool(processes=cpu_count()) as pool:
+                    html_texts = pool.map(_parse_html_to_text, self.htmls)
+
+                parse_time = time.time() - parse_start
+                logger.info(f"   ✅ HTML 파싱 완료 ({parse_time:.2f}초)")
+            else:
+                # HTML이 없으면 빈 문자열 리스트
+                html_texts = [""] * len(titles)
+
+            # 2-2. 토큰화 (제목 + 본문 + HTML 텍스트)
+            logger.info(f"   🔤 토큰화 시작 ({len(titles)}개 문서)...")
+            tokenize_start = time.time()
+
             for i, (title, text) in enumerate(zip(titles, texts)):
-                # HTML에서 텍스트 추출
-                html_text = ""
-                if self.htmls and i < len(self.htmls) and self.htmls[i]:
-                    try:
-                        soup = BeautifulSoup(self.htmls[i], 'html.parser')
-                        html_text = soup.get_text(separator=' ', strip=True)
-                    except:
-                        html_text = ""
+                # HTML 텍스트는 이미 파싱됨
+                html_text = html_texts[i] if i < len(html_texts) else ""
 
                 # 제목 + 본문 + HTML 텍스트 결합
                 combined = f"{title} {text} {html_text}".strip()
                 self.tokenized_documents.append(query_transformer(combined))
-            
-            # 3. Redis에 저장
+
+            tokenize_time = time.time() - tokenize_start
+            logger.info(f"   ✅ 토큰화 완료 ({tokenize_time:.2f}초)")
+
+            # 3. Redis에 저장 (v2 구조)
             if self.redis_client:
                 try:
+                    cache_obj = {
+                        "tokenized_documents": self.tokenized_documents,
+                        "html_texts": html_texts,
+                        "doc_count": len(titles)
+                    }
                     # 24시간 유효
-                    self.redis_client.setex(self.cache_key, 86400, pickle.dumps(self.tokenized_documents))
-                    logger.info(f"💾 Redis에 BM25 토큰 저장 완료 ({len(self.tokenized_documents)}개)")
+                    self.redis_client.setex(self.cache_key, 86400, pickle.dumps(cache_obj))
+
+                    # 캐시 크기 확인
+                    cache_size = len(pickle.dumps(cache_obj)) / (1024 * 1024)  # MB
+                    logger.info(f"💾 Redis에 BM25 캐시 저장 완료 ({len(self.tokenized_documents)}개, {cache_size:.2f}MB)")
                 except Exception as e:
-                    logger.warning(f"⚠️  Redis에 BM25 토큰 저장 실패: {e}")
+                    logger.warning(f"⚠️  Redis에 BM25 캐시 저장 실패: {e}")
+
+            total_time = time.time() - start_time
+            logger.info(f"   ⏱️  총 소요 시간: {total_time:.2f}초")
 
         self.bm25_index = BM25Okapi(self.tokenized_documents, k1=k1, b=b)
         html_count = sum(1 for h in self.htmls if h) if self.htmls else 0
@@ -189,6 +255,7 @@ class BM25Retriever:
             dates: 새로운 문서 날짜 리스트
             htmls: HTML 구조화 데이터 리스트 (선택)
         """
+        start_time = time.time()
         logger.info("🔄 BM25 인덱스 업데이트 중...")
 
         self.titles = titles
@@ -197,31 +264,54 @@ class BM25Retriever:
         self.dates = dates
         self.htmls = htmls if htmls else []
 
-        # 제목 + 본문 + HTML 텍스트 결합하여 인덱스 생성
+        # HTML 파싱 (병렬 처리)
+        html_count = sum(1 for h in self.htmls if h) if self.htmls else 0
+        html_texts = []
+
+        if html_count > 0:
+            logger.info(f"   📄 HTML 파싱 시작 ({html_count}개, 병렬 처리: {cpu_count()}코어)...")
+            parse_start = time.time()
+
+            # 병렬 처리로 HTML 파싱
+            with Pool(processes=cpu_count()) as pool:
+                html_texts = pool.map(_parse_html_to_text, self.htmls)
+
+            parse_time = time.time() - parse_start
+            logger.info(f"   ✅ HTML 파싱 완료 ({parse_time:.2f}초)")
+        else:
+            html_texts = [""] * len(titles)
+
+        # 토큰화 (제목 + 본문 + HTML 텍스트)
+        logger.info(f"   🔤 토큰화 시작 ({len(titles)}개 문서)...")
+        tokenize_start = time.time()
+
         self.tokenized_documents = []
         for i, (title, text) in enumerate(zip(titles, texts)):
-            # HTML에서 텍스트 추출
-            html_text = ""
-            if self.htmls and i < len(self.htmls) and self.htmls[i]:
-                try:
-                    soup = BeautifulSoup(self.htmls[i], 'html.parser')
-                    html_text = soup.get_text(separator=' ', strip=True)
-                except:
-                    html_text = ""
-
-            # 제목 + 본문 + HTML 텍스트 결합
+            html_text = html_texts[i] if i < len(html_texts) else ""
             combined = f"{title} {text} {html_text}".strip()
             self.tokenized_documents.append(self.query_transformer(combined))
 
-        # Redis 캐시 업데이트
+        tokenize_time = time.time() - tokenize_start
+        logger.info(f"   ✅ 토큰화 완료 ({tokenize_time:.2f}초)")
+
+        # Redis 캐시 업데이트 (v2 구조)
         if self.redis_client:
             try:
+                cache_obj = {
+                    "tokenized_documents": self.tokenized_documents,
+                    "html_texts": html_texts,
+                    "doc_count": len(titles)
+                }
                 # 24시간 유효
-                self.redis_client.setex(self.cache_key, 86400, pickle.dumps(self.tokenized_documents))
-                logger.info(f"💾 Redis BM25 토큰 캐시 업데이트 완료 ({len(self.tokenized_documents)}개)")
+                self.redis_client.setex(self.cache_key, 86400, pickle.dumps(cache_obj))
+
+                cache_size = len(pickle.dumps(cache_obj)) / (1024 * 1024)  # MB
+                logger.info(f"💾 Redis BM25 캐시 업데이트 완료 ({len(self.tokenized_documents)}개, {cache_size:.2f}MB)")
             except Exception as e:
-                logger.warning(f"⚠️  Redis BM25 토큰 캐시 업데이트 실패: {e}")
+                logger.warning(f"⚠️  Redis BM25 캐시 업데이트 실패: {e}")
 
         self.bm25_index = BM25Okapi(self.tokenized_documents, k1=self.k1, b=self.b)
         html_count = sum(1 for h in self.htmls if h) if self.htmls else 0
-        logger.info(f"✅ BM25 인덱스 업데이트 완료 ({len(titles)}개 문서, HTML 구조: {html_count}개)")
+
+        total_time = time.time() - start_time
+        logger.info(f"✅ BM25 인덱스 업데이트 완료 ({len(titles)}개 문서, HTML 구조: {html_count}개, {total_time:.2f}초)")
