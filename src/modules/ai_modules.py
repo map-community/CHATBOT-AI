@@ -640,7 +640,7 @@ def best_docs(user_question):
       bm_title_time = time.time()
       Bm25_best_docs, adjusted_similarities = storage.bm25_retriever.search(
           query_nouns=query_noun,
-          top_k=25,
+          top_k=50,  # ✨ 25→50 증가: URL 중복 제거 위한 후보군 확대
           normalize_factor=24.0
       )
       bm_title_f_time = time.time() - bm_title_time
@@ -651,7 +651,7 @@ def best_docs(user_question):
       combine_dense_docs = storage.dense_retriever.search(
           user_question=user_question,
           query_nouns=query_noun,
-          top_k=30
+          top_k=50  # ✨ 30→50 증가: URL 중복 제거 위한 후보군 확대
       )
       pinecone_time = time.time() - dense_time
       print(f"파인콘에서 top k 뽑는데 걸리는 시간 {pinecone_time}")
@@ -676,10 +676,53 @@ def best_docs(user_question):
           titles_from_pinecone=titles_from_pinecone,
           query_nouns=query_noun,
           user_question=user_question,
-          top_k=20
+          top_k=30  # ✨ 20→30 증가: URL 중복 제거 전 후보군 확대
       )
       combine_f_time = time.time() - combine_time
       print(f"Bm25랑 pinecone 결합 시간: {combine_f_time}")
+
+      # ✨ URL 기준 중복 제거 및 다양성 확보 (Phase 1 개선)
+      dedup_time = time.time()
+      url_chunks = {}
+
+      # 1. URL별로 청크 그룹화
+      for score, title, date, text, url in final_best_docs:
+          if url not in url_chunks:
+              url_chunks[url] = []
+          url_chunks[url].append((score, title, date, text, url))
+
+      # 2. 각 URL에서 최대 2개 청크만 선택 (다양성 확보)
+      diverse_docs = []
+      for url, chunks in url_chunks.items():
+          # 점수순 정렬 (높은 점수 우선)
+          chunks.sort(key=lambda x: x[0], reverse=True)
+
+          if len(chunks) == 1:
+              # 청크가 1개뿐이면 그대로 선택
+              diverse_docs.append(chunks[0])
+          else:
+              # 1등은 무조건 선택
+              diverse_docs.append(chunks[0])
+
+              # 2등 선택 시 텍스트 다양성 체크
+              first_text_set = set(chunks[0][3])  # 1등 청크의 문자 집합
+
+              for chunk in chunks[1:]:
+                  chunk_text_set = set(chunk[3])
+                  # 두 청크 간 차이나는 문자가 100개 이상이면 다른 내용으로 판단
+                  unique_chars = len(chunk_text_set - first_text_set)
+
+                  if unique_chars > 100:
+                      diverse_docs.append(chunk)
+                      break  # 2개째 선택하면 중단
+
+      # 3. 점수순 재정렬 후 Top 20
+      diverse_docs.sort(key=lambda x: x[0], reverse=True)
+      final_best_docs = diverse_docs[:20]
+
+      dedup_f_time = time.time() - dedup_time
+      print(f"URL 중복 제거 시간: {dedup_f_time:.4f}초 (원본: {len(url_chunks)}개 URL, {sum(len(c) for c in url_chunks.values())}개 청크 → 최종: {len(final_best_docs)}개)")
+
       # 문서 클러스터링 및 최적 클러스터 선택 (리팩토링됨 - DocumentClusterer 사용)
       cluster_time = time.time()
       final_cluster, count = storage.document_clusterer.cluster_and_select(
@@ -1027,12 +1070,25 @@ def get_ai_message(question):
       return data
     top_docs = [list(doc) for doc in top_doc]
 
-    # 상위 검색 결과 로깅 (Top 5)
+    # 상위 검색 결과 로깅 (Top 5) - URL 중복 제거 효과 확인용
     logger.info(f"🔝 검색 결과 Top {min(5, len(top_docs))}:")
+    seen_urls = set()
+    unique_url_count = 0
     for i, doc in enumerate(top_docs[:5]):
         score, title, date, text, url = doc[:5]
-        logger.info(f"   {i+1}. [{score:.4f}] {title} ({date})")
+
+        # URL 중복 체크
+        if url not in seen_urls:
+            seen_urls.add(url)
+            unique_url_count += 1
+            url_marker = "🆕"  # 새로운 URL
+        else:
+            url_marker = "🔁"  # 중복 URL (같은 문서의 다른 청크)
+
+        logger.info(f"   {i+1}. [{score:.4f}] {url_marker} {title} ({date})")
         logger.info(f"      URL: {url}")
+
+    logger.info(f"   💡 다양성: Top 5 중 {unique_url_count}개 서로 다른 문서")
 
     valid_time=time.time()
     if False == (question_valid(question, top_docs[0][1], query_noun)):
