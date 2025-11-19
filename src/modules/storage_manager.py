@@ -78,10 +78,10 @@ class StorageManager:
         self._dense_retriever = None
         self._document_combiner = None
         self._document_clusterer = None
+        self._keyword_filter = None
 
         # Preprocessing 인스턴스 (즉시 초기화 - DB 연결 불필요)
         self._query_transformer = None
-        self._keyword_filter = None
         self._initialize_preprocessing_modules()
 
         self._initialized = True
@@ -90,16 +90,13 @@ class StorageManager:
     def _initialize_preprocessing_modules(self):
         """전처리 모듈 초기화 (DB 연결 불필요)"""
         try:
-            from modules.preprocessing import QueryTransformer, KeywordFilter
-
-            self._query_transformer = QueryTransformer(use_mecab=True)
-            logger.info("✅ QueryTransformer 초기화 완료")
-
-            self._keyword_filter = KeywordFilter()
-            logger.info("✅ KeywordFilter 초기화 완료")
+            # 순환 참조 방지를 위해 함수 내부에서 임포트
+            from modules.utils import transformed_query
+            # KeywordFilter는 retrieval 모듈에 있으므로 여기서 임포트하지 않거나,
+            # 필요하다면 여기서 임포트. 하지만 보통 Retriever 초기화 시점에 같이 초기화함.
+            pass
         except Exception as e:
             logger.error(f"❌ 전처리 모듈 초기화 실패: {e}", exc_info=True)
-            # 실패해도 None으로 유지하여 나중에 재시도 가능하도록
 
     @property
     def pinecone_api_key(self) -> str:
@@ -266,7 +263,7 @@ class StorageManager:
 
     @property
     def keyword_filter(self):
-        """KeywordFilter 인스턴스 (StorageManager 초기화 시 자동 생성)"""
+        """KeywordFilter 인스턴스"""
         if self._keyword_filter is None:
             logger.warning("⚠️  KeywordFilter가 초기화되지 않았습니다. 재초기화를 시도합니다...")
             # 재초기화 시도
@@ -282,9 +279,9 @@ class StorageManager:
         return self._keyword_filter
 
     def set_keyword_filter(self, filter_instance):
-        """KeywordFilter 인스턴스 재설정 (일반적으로 불필요)"""
+        """KeywordFilter 인스턴스 설정"""
         self._keyword_filter = filter_instance
-        logger.info("✅ KeywordFilter 인스턴스 재설정 완료")
+        logger.info("✅ KeywordFilter 인스턴스 설정 완료")
 
     def close_all_connections(self):
         """모든 연결 종료"""
