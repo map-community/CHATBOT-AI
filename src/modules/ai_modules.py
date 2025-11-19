@@ -1185,6 +1185,51 @@ def get_ai_message(question):
 
     # 이미지 + LLM 답변이 있는 경우.
     else:
+        # ✅ 핵심 개선: 같은 URL의 모든 청크(본문 + 첨부파일 + 이미지)를 LLM에 전달!
+        # 문제: 클러스터링 결과는 본문 청크만 포함 (첨부파일 누락)
+        # 해결: 같은 게시글의 모든 청크를 명시적으로 가져옴
+        enrich_time = time.time()
+
+        # Top 문서의 URL 추출 (게시글 URL)
+        top_url = top_docs[0][4] if top_docs else None
+
+        if top_url:
+            # URL에서 쿼리 파라미터 제거 (wr_id 기준으로 매칭)
+            # 예: https://...?bo_table=sub5_1&wr_id=28658 → wr_id=28658
+            base_url = top_url.split('&wr_id=')[0] + '&wr_id=' if '&wr_id=' in top_url else top_url
+            wr_id = top_url.split('&wr_id=')[-1] if '&wr_id=' in top_url else None
+
+            # 같은 게시글의 모든 청크 찾기 (본문 + 첨부파일 + 이미지 OCR)
+            enriched_docs = []
+            seen_texts = set()  # 중복 텍스트 제거용
+
+            for i, url in enumerate(storage.cached_urls):
+                # 같은 게시글인지 확인 (wr_id 기준)
+                if wr_id and f'&wr_id={wr_id}' in url:
+                    text = storage.cached_texts[i]
+                    text_key = ''.join(text.split())  # 공백 제거 후 비교
+
+                    # 중복 텍스트 제거
+                    if text_key and text_key not in seen_texts:
+                        seen_texts.add(text_key)
+                        enriched_docs.append((
+                            top_docs[0][0],  # 점수는 top 문서와 동일
+                            storage.cached_titles[i],
+                            storage.cached_dates[i],
+                            text,
+                            url
+                        ))
+
+            # 청크를 찾았으면 top_docs를 교체 (본문 + 첨부파일 + 이미지)
+            if enriched_docs:
+                logger.info(f"🔧 같은 게시글의 모든 청크 수집: {len(top_docs)}개 → {len(enriched_docs)}개")
+                logger.info(f"   📦 본문 청크: {sum(1 for d in enriched_docs if '#' not in d[4])}개")
+                logger.info(f"   📎 첨부파일/이미지 청크: {sum(1 for d in enriched_docs if '#' in d[4])}개")
+                top_docs = enriched_docs
+
+        enrich_f_time = time.time() - enrich_time
+        print(f"청크 수집 시간: {enrich_f_time}")
+
         chain_time=time.time()
         qa_chain, relevant_docs = get_answer_from_chain(top_docs, question,query_noun)
         chain_f_time=time.time()-chain_time
