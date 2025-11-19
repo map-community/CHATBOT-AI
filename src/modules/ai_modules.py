@@ -973,6 +973,10 @@ def get_ai_message(question):
     best_f_time=time.time()-best_time
     print(f"best_docs 뽑는 시간:{best_f_time}")
 
+    # 검색된 문서 정보 로깅
+    logger.info(f"📝 사용자 질문: {question}")
+    logger.info(f"🔍 추출된 키워드: {query_noun}")
+
     # query_noun이 없거나 top_doc이 비어있는 경우 처리
     if not query_noun or not top_doc or len(top_doc) == 0:
         notice_url = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_1"
@@ -1010,17 +1014,35 @@ def get_ai_message(question):
       print(f"get_ai_message 총 돌아가는 시간 : {f_time}")
       return data
     top_docs = [list(doc) for doc in top_doc]
+
+    # 상위 검색 결과 로깅 (Top 5)
+    logger.info(f"🔝 검색 결과 Top {min(5, len(top_docs))}:")
+    for i, doc in enumerate(top_docs[:5]):
+        score, title, date, text, url = doc[:5]
+        logger.info(f"   {i+1}. [{score:.4f}] {title} ({date})")
+        logger.info(f"      URL: {url}")
+
     valid_time=time.time()
     if False == (question_valid(question, top_docs[0][1], query_noun)):
         for i in range(len(top_docs)):
             top_docs[i][0] -= 2
-    
+
     final_score = top_docs[0][0]
     final_title = top_docs[0][1]
     final_date = top_docs[0][2]
     final_text = top_docs[0][3]
     final_url = top_docs[0][4]
     final_image = []
+
+    # 최종 선택된 문서 정보 로깅
+    logger.info(f"📄 최종 선택 문서:")
+    logger.info(f"   제목: {final_title}")
+    logger.info(f"   날짜: {final_date}")
+    logger.info(f"   유사도: {final_score:.4f}")
+    logger.info(f"   URL: {final_url}")
+    logger.info(f"   본문 길이: {len(final_text)}자")
+    if len(final_text) > 0:
+        logger.info(f"   본문 미리보기: {final_text[:100]}...")
 
     # MongoDB 연결 확인 후 이미지 URL 조회
     if storage.mongo_collection is not None:
@@ -1030,8 +1052,23 @@ def get_ai_message(question):
               final_image.extend(record["image_url"])
             else :
               final_image.append(record["image_url"])
+            logger.info(f"   이미지: {len(final_image)}개")
+
+            # HTML 구조 정보 로깅
+            if record.get("html"):
+                html_length = len(record["html"])
+                logger.info(f"   HTML 구조: ✅ 있음 ({html_length}자)")
+            else:
+                logger.info(f"   HTML 구조: ❌ 없음")
+
+            # 콘텐츠 타입 로깅
+            content_type = record.get("content_type", "unknown")
+            source = record.get("source", "unknown")
+            logger.info(f"   콘텐츠 타입: {content_type}")
+            logger.info(f"   소스: {source}")
         else :
             print("일치하는 문서 존재 X")
+            logger.warning(f"⚠️  MongoDB에서 문서를 찾을 수 없습니다: {final_title}")
             final_score = 0
             final_title = "No content"
             final_date = "No content"
@@ -1140,6 +1177,12 @@ def get_ai_message(question):
         answer_result = qa_chain.invoke(question)
         answer_f_time=time.time()-answer_time
         print(f"답변 생성하는 시간: {answer_f_time}")
+
+        logger.info(f"💬 LLM 답변 생성 완료:")
+        logger.info(f"   답변 길이: {len(answer_result)}자")
+        logger.info(f"   답변 미리보기: {answer_result[:150]}...")
+        logger.info(f"   사용된 참고문서 수: {len(relevant_docs)}")
+
         doc_references = "\n".join([
             f"\n참고 문서 URL: {doc.metadata['url']}"
             for doc in relevant_docs[:1] if doc.metadata.get('url') != 'No URL'
@@ -1153,5 +1196,6 @@ def get_ai_message(question):
             "images": final_image
         }
         f_time=time.time()-s_time
+        logger.info(f"✅ 총 처리 시간: {f_time:.2f}초")
         print(f"get_ai_message 총 돌아가는 시간 : {f_time}")
         return data
