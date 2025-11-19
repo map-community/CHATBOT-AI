@@ -4,6 +4,7 @@ BM25 알고리즘을 사용한 문서 검색 클래스
 """
 
 import numpy as np
+import pickle
 from rank_bm25 import BM25Okapi
 from typing import List, Tuple
 import logging
@@ -33,7 +34,8 @@ class BM25Retriever:
                  similarity_adjuster,
                  htmls: List[str] = None,
                  k1: float = 1.5,
-                 b: float = 0.75):
+                 b: float = 0.75,
+                 redis_client = None):
         """
         BM25Retriever 초기화
 
@@ -47,6 +49,7 @@ class BM25Retriever:
             htmls: HTML 구조화 데이터 리스트 (선택, 표 검색 개선용)
             k1: BM25 k1 파라미터 (기본값: 1.5)
             b: BM25 b 파라미터 (기본값: 0.75)
+            redis_client: Redis 클라이언트 (선택, 캐싱용)
         """
         self.titles = titles
         self.texts = texts
@@ -57,23 +60,56 @@ class BM25Retriever:
         self.similarity_adjuster = similarity_adjuster
         self.k1 = k1
         self.b = b
+        self.redis_client = redis_client
+        
+        # 캐시 키 설정
+        self.cache_key = "bm25_tokenized_documents"
 
         # BM25 인덱스 생성 (제목 + 본문 + HTML 텍스트 결합하여 검색)
-        logger.info("🔄 BM25 인덱스 생성 중 (제목+본문+HTML 검색)...")
         self.tokenized_documents = []
-        for i, (title, text) in enumerate(zip(titles, texts)):
-            # HTML에서 텍스트 추출
-            html_text = ""
-            if self.htmls and i < len(self.htmls) and self.htmls[i]:
-                try:
-                    soup = BeautifulSoup(self.htmls[i], 'html.parser')
-                    html_text = soup.get_text(separator=' ', strip=True)
-                except:
-                    html_text = ""
+        loaded_from_cache = False
 
-            # 제목 + 본문 + HTML 텍스트 결합
-            combined = f"{title} {text} {html_text}".strip()
-            self.tokenized_documents.append(query_transformer(combined))
+        # 1. Redis 캐시 확인
+        if self.redis_client:
+            try:
+                cached_data = self.redis_client.get(self.cache_key)
+                if cached_data:
+                    cached_tokens = pickle.loads(cached_data)
+                    # 문서 개수가 일치하는지 확인 (간단한 유효성 검사)
+                    if len(cached_tokens) == len(titles):
+                        self.tokenized_documents = cached_tokens
+                        loaded_from_cache = True
+                        logger.info(f"🚀 Redis에서 BM25 토큰 로드 완료! ({len(self.tokenized_documents)}개)")
+                    else:
+                        logger.warning(f"⚠️  BM25 캐시 개수 불일치 (캐시: {len(cached_tokens)}, 현재: {len(titles)}). 다시 생성합니다.")
+            except Exception as e:
+                logger.warning(f"⚠️  Redis에서 BM25 토큰 로드 실패: {e}")
+
+        # 2. 캐시가 없으면 새로 생성
+        if not loaded_from_cache:
+            logger.info("🔄 BM25 인덱스 생성 중 (제목+본문+HTML 검색)...")
+            for i, (title, text) in enumerate(zip(titles, texts)):
+                # HTML에서 텍스트 추출
+                html_text = ""
+                if self.htmls and i < len(self.htmls) and self.htmls[i]:
+                    try:
+                        soup = BeautifulSoup(self.htmls[i], 'html.parser')
+                        html_text = soup.get_text(separator=' ', strip=True)
+                    except:
+                        html_text = ""
+
+                # 제목 + 본문 + HTML 텍스트 결합
+                combined = f"{title} {text} {html_text}".strip()
+                self.tokenized_documents.append(query_transformer(combined))
+            
+            # 3. Redis에 저장
+            if self.redis_client:
+                try:
+                    # 24시간 유효
+                    self.redis_client.setex(self.cache_key, 86400, pickle.dumps(self.tokenized_documents))
+                    logger.info(f"💾 Redis에 BM25 토큰 저장 완료 ({len(self.tokenized_documents)}개)")
+                except Exception as e:
+                    logger.warning(f"⚠️  Redis에 BM25 토큰 저장 실패: {e}")
 
         self.bm25_index = BM25Okapi(self.tokenized_documents, k1=k1, b=b)
         html_count = sum(1 for h in self.htmls if h) if self.htmls else 0
@@ -176,6 +212,15 @@ class BM25Retriever:
             # 제목 + 본문 + HTML 텍스트 결합
             combined = f"{title} {text} {html_text}".strip()
             self.tokenized_documents.append(self.query_transformer(combined))
+
+        # Redis 캐시 업데이트
+        if self.redis_client:
+            try:
+                # 24시간 유효
+                self.redis_client.setex(self.cache_key, 86400, pickle.dumps(self.tokenized_documents))
+                logger.info(f"💾 Redis BM25 토큰 캐시 업데이트 완료 ({len(self.tokenized_documents)}개)")
+            except Exception as e:
+                logger.warning(f"⚠️  Redis BM25 토큰 캐시 업데이트 실패: {e}")
 
         self.bm25_index = BM25Okapi(self.tokenized_documents, k1=self.k1, b=self.b)
         html_count = sum(1 for h in self.htmls if h) if self.htmls else 0
