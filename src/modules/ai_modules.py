@@ -356,7 +356,7 @@ def _initialize_retrievers():
         DocumentClusterer
     )
 
-    # BM25Retriever 초기화 (HTML 데이터 포함)
+    # BM25Retriever 초기화 (HTML 데이터 포함, Redis 캐싱)
     bm25_retriever = BM25Retriever(
         titles=storage.cached_titles,
         texts=storage.cached_texts,
@@ -366,7 +366,8 @@ def _initialize_retrievers():
         similarity_adjuster=adjust_similarity_scores,
         htmls=storage.cached_htmls,  # HTML 구조화 데이터 추가
         k1=1.5,
-        b=0.75
+        b=0.75,
+        redis_client=storage.redis_client  # Redis 캐싱 활성화
     )
     storage.set_bm25_retriever(bm25_retriever)
 
