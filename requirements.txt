@@ -13,6 +13,7 @@ numpy==1.26.2
 sentence-transformers==2.2.2
 rank-bm25==0.2.2
 python-Levenshtein==0.23.0
+FlagEmbedding==1.2.10  # BGE-Reranker for document reranking
 
 # LangChain & AI
 langchain==0.3.15

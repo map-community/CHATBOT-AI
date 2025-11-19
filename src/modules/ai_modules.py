@@ -1292,6 +1292,30 @@ def get_ai_message(question):
       return data
     top_docs = [list(doc) for doc in top_doc]
 
+    # ✅ BGE-Reranker로 문서 재순위화 (관련성 기준)
+    if storage.reranker and len(top_docs) > 1:
+        rerank_time = time.time()
+        logger.info(f"🔄 Reranking 시작: {len(top_docs)}개 문서")
+
+        # Reranker는 tuple 리스트를 기대하므로 변환
+        top_docs_tuples = [tuple(doc) for doc in top_docs]
+
+        # Reranking (Top 20 → Top 10으로 압축, 더 관련성 높은 문서만)
+        reranked_docs_tuples = storage.reranker.rerank(
+            query=question,
+            documents=top_docs_tuples,
+            top_k=min(20, len(top_docs))  # 최대 20개까지만
+        )
+
+        # 다시 리스트로 변환
+        top_docs = [list(doc) for doc in reranked_docs_tuples]
+
+        rerank_f_time = time.time() - rerank_time
+        print(f"Reranking 시간: {rerank_f_time:.2f}초")
+    else:
+        if not storage.reranker:
+            logger.debug("⏭️  Reranker 비활성화 - 원본 순서 유지")
+
     # 상위 검색 결과 로깅 (Top 5) - URL 중복 제거 효과 확인용
     logger.info(f"🔝 검색 결과 Top {min(5, len(top_docs))}:")
     seen_urls = set()
