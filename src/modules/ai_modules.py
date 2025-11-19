@@ -200,14 +200,31 @@ def fetch_titles_from_pinecone():
                         html_available_count += 1
                         if mongo_collection is not None:
                             try:
+                                # 디버깅: URL 로깅 (처음 3개만)
+                                if html_available_count <= 3:
+                                    logger.info(f"🔍 조회 시도 URL: {url}")
+
                                 cached = mongo_collection.find_one({"url": url})
                                 if cached:
                                     mongo_found_count += 1
+                                    # 디버깅: 찾은 경우 로깅
+                                    if mongo_found_count <= 3:
+                                        logger.info(f"✅ MongoDB에서 발견: {url}")
+                                        logger.info(f"   필드: {list(cached.keys())}")
+
                                     # 이미지 OCR인 경우 ocr_html, 문서인 경우 html
                                     html_content = cached.get("ocr_html") or cached.get("html", "")
                                     if html_content:
                                         html = html_content
                                         html_extracted_count += 1
+                                else:
+                                    # 디버깅: 못 찾은 경우 로깅 (처음 3개만)
+                                    if html_available_count <= 3:
+                                        logger.warning(f"❌ MongoDB에서 못 찾음: {url}")
+                                        # MongoDB에 실제로 있는 URL 샘플 확인
+                                        sample = mongo_collection.find_one()
+                                        if sample:
+                                            logger.info(f"   MongoDB URL 샘플: {sample.get('url', 'URL 필드 없음')}")
                             except Exception as e:
                                 logger.warning(f"MongoDB HTML 조회 실패 ({url[:50] if url else 'no-url'}...): {e}")
 
