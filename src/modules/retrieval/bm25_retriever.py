@@ -168,25 +168,29 @@ class BM25Retriever:
                 html_texts = [""] * len(titles)
 
             # 2-2. 토큰화 (제목 + 본문 + HTML 텍스트)
-            logger.info(f"   🔤 토큰화 시작 ({len(titles)}개 문서, 병렬 처리: {cpu_count()}코어)...")
+            logger.info(f"   🔤 토큰화 준비 중 ({len(titles)}개 문서)...")
             tokenize_start = time.time()
 
-            # ✅ 병렬 토큰화 (30분 → 1-2분 단축!)
+            # ✅ 1단계: 텍스트 결합
+            logger.info(f"      [1/2] 텍스트 결합 중...")
             combined_texts = []
             for i, (title, text) in enumerate(zip(titles, texts)):
                 html_text = html_texts[i] if i < len(html_texts) else ""
                 combined = f"{title} {text} {html_text}".strip()
                 combined_texts.append(combined)
 
-                # 진행 상황 로그 (1000개마다)
-                if (i + 1) % 1000 == 0:
-                    elapsed = time.time() - tokenize_start
-                    progress = (i + 1) / len(titles) * 100
-                    logger.info(f"      진행: {i+1}/{len(titles)} ({progress:.1f}%) - {elapsed:.1f}초 경과")
+            logger.info(f"      [1/2] 텍스트 결합 완료 ({len(combined_texts)}개)")
 
-            # 병렬 처리로 토큰화
+            # ✅ 2단계: 병렬 토큰화 (실제 형태소 분석 - 시간 소요!)
+            logger.info(f"      [2/2] 병렬 토큰화 진행 중 ({cpu_count()}코어, Mecab 형태소 분석)...")
+            logger.info(f"      ⏳ 예상 소요 시간: 1-2분 (13000개 기준)")
+
+            parallel_start = time.time()
             with Pool(processes=cpu_count(), initializer=_set_global_query_transformer, initargs=(query_transformer,)) as pool:
                 self.tokenized_documents = pool.map(_tokenize_combined_text, combined_texts)
+
+            parallel_time = time.time() - parallel_start
+            logger.info(f"      [2/2] 병렬 토큰화 완료! ({parallel_time:.2f}초)")
 
             tokenize_time = time.time() - tokenize_start
             logger.info(f"   ✅ 토큰화 완료 ({tokenize_time:.2f}초, 속도: {len(titles)/tokenize_time:.0f}문서/초)")
@@ -316,25 +320,29 @@ class BM25Retriever:
             html_texts = [""] * len(titles)
 
         # 토큰화 (제목 + 본문 + HTML 텍스트)
-        logger.info(f"   🔤 토큰화 시작 ({len(titles)}개 문서, 병렬 처리: {cpu_count()}코어)...")
+        logger.info(f"   🔤 토큰화 준비 중 ({len(titles)}개 문서)...")
         tokenize_start = time.time()
 
-        # ✅ 병렬 토큰화 (30분 → 1-2분 단축!)
+        # ✅ 1단계: 텍스트 결합
+        logger.info(f"      [1/2] 텍스트 결합 중...")
         combined_texts = []
         for i, (title, text) in enumerate(zip(titles, texts)):
             html_text = html_texts[i] if i < len(html_texts) else ""
             combined = f"{title} {text} {html_text}".strip()
             combined_texts.append(combined)
 
-            # 진행 상황 로그 (1000개마다)
-            if (i + 1) % 1000 == 0:
-                elapsed = time.time() - tokenize_start
-                progress = (i + 1) / len(titles) * 100
-                logger.info(f"      진행: {i+1}/{len(titles)} ({progress:.1f}%) - {elapsed:.1f}초 경과")
+        logger.info(f"      [1/2] 텍스트 결합 완료 ({len(combined_texts)}개)")
 
-        # 병렬 처리로 토큰화
+        # ✅ 2단계: 병렬 토큰화 (실제 형태소 분석 - 시간 소요!)
+        logger.info(f"      [2/2] 병렬 토큰화 진행 중 ({cpu_count()}코어, Mecab 형태소 분석)...")
+        logger.info(f"      ⏳ 예상 소요 시간: 1-2분 (13000개 기준)")
+
+        parallel_start = time.time()
         with Pool(processes=cpu_count(), initializer=_set_global_query_transformer, initargs=(self.query_transformer,)) as pool:
             self.tokenized_documents = pool.map(_tokenize_combined_text, combined_texts)
+
+        parallel_time = time.time() - parallel_start
+        logger.info(f"      [2/2] 병렬 토큰화 완료! ({parallel_time:.2f}초)")
 
         tokenize_time = time.time() - tokenize_start
         logger.info(f"   ✅ 토큰화 완료 ({tokenize_time:.2f}초, 속도: {len(titles)/tokenize_time:.0f}문서/초)")
