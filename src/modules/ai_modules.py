@@ -1199,18 +1199,37 @@ def get_ai_message(question):
             base_url = top_url.split('&wr_id=')[0] + '&wr_id=' if '&wr_id=' in top_url else top_url
             wr_id = top_url.split('&wr_id=')[-1] if '&wr_id=' in top_url else None
 
+            logger.info(f"🔍 같은 게시글 청크 검색: wr_id={wr_id}")
+
             # 같은 게시글의 모든 청크 찾기 (본문 + 첨부파일 + 이미지 OCR)
             enriched_docs = []
             seen_texts = set()  # 중복 텍스트 제거용
 
+            # 디버깅: 매칭 상황 추적
+            total_checked = 0
+            matched_count = 0
+            duplicate_count = 0
+
             for i, url in enumerate(storage.cached_urls):
                 # 같은 게시글인지 확인 (wr_id 기준)
-                if wr_id and f'&wr_id={wr_id}' in url:
+                if wr_id and f'wr_id={wr_id}' in url:  # ✅ '&wr_id='가 아니라 'wr_id='로 변경 (더 유연)
+                    total_checked += 1
+                    matched_count += 1
+
                     text = storage.cached_texts[i]
+                    content_type = storage.cached_content_types[i] if i < len(storage.cached_content_types) else "unknown"
+                    source = storage.cached_sources[i] if i < len(storage.cached_sources) else "unknown"
+
+                    # 디버깅 로그 (처음 5개만)
+                    if matched_count <= 5:
+                        logger.info(f"   [{matched_count}] URL: {url[:80]}...")
+                        logger.info(f"       타입: {content_type}, 소스: {source}, 텍스트: {len(text)}자")
+
+                    # 빈 텍스트는 건너뛰지 않음! (중요: "No content"도 포함)
                     text_key = ''.join(text.split())  # 공백 제거 후 비교
 
-                    # 중복 텍스트 제거
-                    if text_key and text_key not in seen_texts:
+                    # 중복 텍스트 제거 (빈 문자열은 제외하지 않음!)
+                    if text_key not in seen_texts:  # ✅ 'text_key and' 제거 (빈 텍스트도 포함)
                         seen_texts.add(text_key)
                         enriched_docs.append((
                             top_docs[0][0],  # 점수는 top 문서와 동일
@@ -1219,13 +1238,40 @@ def get_ai_message(question):
                             text,
                             url
                         ))
+                    else:
+                        duplicate_count += 1
+
+            logger.info(f"   📊 매칭 통계: 전체 {len(storage.cached_urls)}개 중 {matched_count}개 매칭, {duplicate_count}개 중복 제거")
 
             # 청크를 찾았으면 top_docs를 교체 (본문 + 첨부파일 + 이미지)
             if enriched_docs:
                 logger.info(f"🔧 같은 게시글의 모든 청크 수집: {len(top_docs)}개 → {len(enriched_docs)}개")
-                logger.info(f"   📦 본문 청크: {sum(1 for d in enriched_docs if '#' not in d[4])}개")
-                logger.info(f"   📎 첨부파일/이미지 청크: {sum(1 for d in enriched_docs if '#' in d[4])}개")
+
+                # 타입별 카운트 (content_type 기준)
+                本문_count = 0
+                image_count = 0
+                attachment_count = 0
+
+                for i, (score, title, date, text, url) in enumerate(enriched_docs):
+                    try:
+                        idx = storage.cached_urls.index(url)
+                        ct = storage.cached_content_types[idx] if idx < len(storage.cached_content_types) else "unknown"
+                        if ct == "text":
+                            本문_count += 1
+                        elif ct == "image":
+                            image_count += 1
+                        elif ct == "attachment":
+                            attachment_count += 1
+                    except:
+                        pass
+
+                logger.info(f"   📦 본문 청크: {本문_count}개")
+                logger.info(f"   🖼️  이미지 OCR 청크: {image_count}개")
+                logger.info(f"   📎 첨부파일 청크: {attachment_count}개")
                 top_docs = enriched_docs
+            else:
+                logger.warning(f"⚠️  같은 게시글 청크를 찾지 못했습니다! wr_id={wr_id}")
+                logger.warning(f"   Top URL: {top_url}")
 
         enrich_f_time = time.time() - enrich_time
         print(f"청크 수집 시간: {enrich_f_time}")
