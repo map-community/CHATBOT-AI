@@ -142,7 +142,12 @@ def fetch_titles_from_pinecone():
 
     # 한 번에 가져올 배치 크기
     batch_size = 1000
-    
+
+    # 디버깅 카운터 추가
+    html_available_count = 0
+    mongo_found_count = 0
+    html_extracted_count = 0
+
     # 1,000개씩 끊어서 요청
     for i in range(0, len(all_ids), batch_size):
         logger.info(f"⏳ 데이터 가져오는 중... ({i} / {len(all_ids)})")
@@ -191,14 +196,20 @@ def fetch_titles_from_pinecone():
 
                     # 멀티모달 메타데이터: html_available이면 MongoDB에서 HTML 조회
                     html = ""
-                    if metadata.get("html_available") and mongo_collection is not None:
-                        try:
-                            cached = mongo_collection.find_one({"url": url})
-                            if cached:
-                                # 이미지 OCR인 경우 ocr_html, 문서인 경우 html
-                                html = cached.get("ocr_html") or cached.get("html", "")
-                        except Exception as e:
-                            logger.debug(f"MongoDB HTML 조회 실패 ({url[:50] if url else 'no-url'}...): {e}")
+                    if metadata.get("html_available"):
+                        html_available_count += 1
+                        if mongo_collection is not None:
+                            try:
+                                cached = mongo_collection.find_one({"url": url})
+                                if cached:
+                                    mongo_found_count += 1
+                                    # 이미지 OCR인 경우 ocr_html, 문서인 경우 html
+                                    html_content = cached.get("ocr_html") or cached.get("html", "")
+                                    if html_content:
+                                        html = html_content
+                                        html_extracted_count += 1
+                            except Exception as e:
+                                logger.warning(f"MongoDB HTML 조회 실패 ({url[:50] if url else 'no-url'}...): {e}")
 
                     htmls.append(html)
                     content_types.append(metadata.get("content_type", "text"))
@@ -212,6 +223,10 @@ def fetch_titles_from_pinecone():
             continue
 
     logger.info(f"✅ 전체 데이터 로드 완료: {len(titles)}개 문서")
+    logger.info(f"📊 HTML 조회 통계:")
+    logger.info(f"   - html_available=true 문서: {html_available_count}개")
+    logger.info(f"   - MongoDB에서 찾은 문서: {mongo_found_count}개")
+    logger.info(f"   - 실제 HTML 추출 성공: {html_extracted_count}개")
 
     return titles, texts, urls, dates, htmls, content_types, sources, image_urls, attachment_urls, attachment_types
 
