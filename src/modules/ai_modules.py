@@ -200,33 +200,38 @@ def fetch_titles_from_pinecone():
                         html_available_count += 1
                         if mongo_collection is not None:
                             try:
-                                # 디버깅: URL 로깅 (처음 3개만)
-                                if html_available_count <= 3:
-                                    logger.info(f"🔍 조회 시도 URL: {url}")
+                                # html_available=true인 chunk는 이미지/첨부파일에서 추출된 것
+                                # MongoDB cache는 image_url 또는 attachment_url을 key로 사용
+                                lookup_url = metadata.get("image_url") or metadata.get("attachment_url")
 
-                                cached = mongo_collection.find_one({"url": url})
-                                if cached:
-                                    mongo_found_count += 1
-                                    # 디버깅: 찾은 경우 로깅
-                                    if mongo_found_count <= 3:
-                                        logger.info(f"✅ MongoDB에서 발견: {url}")
-                                        logger.info(f"   필드: {list(cached.keys())}")
-
-                                    # 이미지 OCR인 경우 ocr_html, 문서인 경우 html
-                                    html_content = cached.get("ocr_html") or cached.get("html", "")
-                                    if html_content:
-                                        html = html_content
-                                        html_extracted_count += 1
-                                else:
-                                    # 디버깅: 못 찾은 경우 로깅 (처음 3개만)
+                                if lookup_url:
+                                    # 디버깅: URL 로깅 (처음 3개만)
                                     if html_available_count <= 3:
-                                        logger.warning(f"❌ MongoDB에서 못 찾음: {url}")
-                                        # MongoDB에 실제로 있는 URL 샘플 확인
-                                        sample = mongo_collection.find_one()
-                                        if sample:
-                                            logger.info(f"   MongoDB URL 샘플: {sample.get('url', 'URL 필드 없음')}")
+                                        logger.info(f"🔍 조회 시도 URL: {lookup_url[:80]}...")
+
+                                    cached = mongo_collection.find_one({"url": lookup_url})
+                                    if cached:
+                                        mongo_found_count += 1
+                                        # 디버깅: 찾은 경우 로깅
+                                        if mongo_found_count <= 3:
+                                            logger.info(f"✅ MongoDB에서 발견: {lookup_url[:80]}...")
+                                            logger.info(f"   필드: {list(cached.keys())}")
+
+                                        # 이미지 OCR인 경우 ocr_html, 문서인 경우 html
+                                        html_content = cached.get("ocr_html") or cached.get("html", "")
+                                        if html_content:
+                                            html = html_content
+                                            html_extracted_count += 1
+                                    else:
+                                        # 디버깅: 못 찾은 경우 로깅 (처음 3개만)
+                                        if html_available_count <= 3:
+                                            logger.warning(f"❌ MongoDB에서 못 찾음: {lookup_url[:80]}...")
+                                else:
+                                    # image_url과 attachment_url이 둘 다 없는 경우
+                                    if html_available_count <= 3:
+                                        logger.warning(f"⚠️  html_available=true인데 image_url/attachment_url 없음 (board URL: {url[:80]}...)")
                             except Exception as e:
-                                logger.warning(f"MongoDB HTML 조회 실패 ({url[:50] if url else 'no-url'}...): {e}")
+                                logger.warning(f"MongoDB HTML 조회 실패: {e}")
 
                     htmls.append(html)
                     content_types.append(metadata.get("content_type", "text"))
