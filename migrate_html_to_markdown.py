@@ -57,6 +57,9 @@ def migrate_html_to_markdown():
     """
     MongoDB의 HTML 필드를 Markdown으로 변환하여 저장
     """
+    import time
+    start_time = time.time()
+
     # .env 파일 로드
     load_dotenv()
 
@@ -121,6 +124,7 @@ def migrate_html_to_markdown():
     # 확인 메시지
     logger.info(f"\n{'='*60}")
     logger.info(f"🚀 HTML → Markdown 변환을 시작합니다...")
+    logger.info(f"   시작 시간: {time.strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info(f"{'='*60}\n")
 
     # 배치 처리 (1000개씩)
@@ -129,6 +133,8 @@ def migrate_html_to_markdown():
     converted = 0
     skipped = 0
     errors = 0
+    sample_shown = False  # 샘플 변환 결과 표시 플래그
+    batch_start_time = time.time()
 
     cursor = collection.find(query).batch_size(batch_size)
 
@@ -147,6 +153,16 @@ def migrate_html_to_markdown():
                 if markdown:
                     update_fields['markdown'] = markdown
                     converted += 1
+
+                    # 첫 변환 결과 샘플 표시
+                    if not sample_shown:
+                        sample_shown = True
+                        logger.info(f"\n📝 샘플 변환 결과 (처음 1개):")
+                        logger.info(f"   URL: {url[:70]}...")
+                        logger.info(f"   HTML 길이: {len(doc['html'])} 문자")
+                        logger.info(f"   Markdown 길이: {len(markdown)} 문자")
+                        logger.info(f"   Markdown 미리보기: {markdown[:150].replace(chr(10), ' ')}...")
+                        logger.info("")
 
             # ocr_html → ocr_markdown
             if 'ocr_html' in doc and doc['ocr_html'] and 'ocr_markdown' not in doc:
@@ -176,7 +192,17 @@ def migrate_html_to_markdown():
         if len(bulk_operations) >= batch_size:
             try:
                 result = collection.bulk_write(bulk_operations, ordered=False)
+
+                # 예상 소요 시간 계산
+                elapsed = time.time() - batch_start_time
+                rate = processed / elapsed  # 문서/초
+                remaining = target_docs_count - processed
+                eta_seconds = remaining / rate if rate > 0 else 0
+                eta_minutes = int(eta_seconds / 60)
+                eta_seconds_remainder = int(eta_seconds % 60)
+
                 logger.info(f"📝 진행: {processed:,}/{target_docs_count:,} ({processed/target_docs_count*100:.1f}%) | 변환: {converted:,} | 건너뜀: {skipped:,} | 오류: {errors:,}")
+                logger.info(f"   ⏱️  속도: {rate:.1f}개/초 | 예상 남은 시간: {eta_minutes}분 {eta_seconds_remainder}초")
                 bulk_operations = []
             except Exception as e:
                 logger.error(f"❌ Bulk write 실패: {e}")
@@ -193,13 +219,21 @@ def migrate_html_to_markdown():
             errors += len(bulk_operations)
 
     # 최종 통계
+    total_elapsed = time.time() - start_time
+    minutes = int(total_elapsed / 60)
+    seconds = int(total_elapsed % 60)
+
     logger.info(f"\n{'='*60}")
     logger.info(f"✅ Migration 완료!")
+    logger.info(f"   종료 시간: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"   총 소요 시간: {minutes}분 {seconds}초")
     logger.info(f"{'='*60}")
     logger.info(f"📊 처리된 문서 수: {processed:,}개")
     logger.info(f"✅ 변환 성공: {converted:,}개 필드")
     logger.info(f"⏭️  건너뜀: {skipped:,}개")
     logger.info(f"❌ 오류: {errors:,}개")
+    if processed > 0:
+        logger.info(f"⚡ 평균 속도: {processed/total_elapsed:.1f}개/초")
 
     # 검증: 변환 후 markdown 필드 수 확인
     final_markdown_count = collection.count_documents({
