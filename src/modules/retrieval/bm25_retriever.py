@@ -186,11 +186,16 @@ class BM25Retriever:
             logger.info(f"      ⏳ 예상 소요 시간: 1-2분 (13000개 기준)")
 
             parallel_start = time.time()
+            # 🚀 최적화 1: chunksize 추가 (프로세스 생성 오버헤드 최소화)
+            # 13073개 / 16코어 = 817개/코어 → chunksize=100 (8번 통신)
+            chunksize = max(1, len(combined_texts) // (cpu_count() * 10))
+            logger.info(f"      📦 Batch 크기: {chunksize} (프로세스 통신 최소화)")
+
             with Pool(processes=cpu_count(), initializer=_set_global_query_transformer, initargs=(query_transformer,)) as pool:
-                self.tokenized_documents = pool.map(_tokenize_combined_text, combined_texts)
+                self.tokenized_documents = pool.map(_tokenize_combined_text, combined_texts, chunksize=chunksize)
 
             parallel_time = time.time() - parallel_start
-            logger.info(f"      [2/2] 병렬 토큰화 완료! ({parallel_time:.2f}초)")
+            logger.info(f"      [2/2] 병렬 토큰화 완료! ({parallel_time:.2f}초, {len(combined_texts)/parallel_time:.0f}문서/초)")
 
             tokenize_time = time.time() - tokenize_start
             logger.info(f"   ✅ 토큰화 완료 ({tokenize_time:.2f}초, 속도: {len(titles)/tokenize_time:.0f}문서/초)")
@@ -338,11 +343,15 @@ class BM25Retriever:
         logger.info(f"      ⏳ 예상 소요 시간: 1-2분 (13000개 기준)")
 
         parallel_start = time.time()
+        # 🚀 최적화 1: chunksize 추가 (프로세스 생성 오버헤드 최소화)
+        chunksize = max(1, len(combined_texts) // (cpu_count() * 10))
+        logger.info(f"      📦 Batch 크기: {chunksize} (프로세스 통신 최소화)")
+
         with Pool(processes=cpu_count(), initializer=_set_global_query_transformer, initargs=(self.query_transformer,)) as pool:
-            self.tokenized_documents = pool.map(_tokenize_combined_text, combined_texts)
+            self.tokenized_documents = pool.map(_tokenize_combined_text, combined_texts, chunksize=chunksize)
 
         parallel_time = time.time() - parallel_start
-        logger.info(f"      [2/2] 병렬 토큰화 완료! ({parallel_time:.2f}초)")
+        logger.info(f"      [2/2] 병렬 토큰화 완료! ({parallel_time:.2f}초, {len(combined_texts)/parallel_time:.0f}문서/초)")
 
         tokenize_time = time.time() - tokenize_start
         logger.info(f"   ✅ 토큰화 완료 ({tokenize_time:.2f}초, 속도: {len(titles)/tokenize_time:.0f}문서/초)")
