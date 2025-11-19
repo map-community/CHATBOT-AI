@@ -941,7 +941,14 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
         )
         documents.append(doc)
 
-    relevant_docs = [doc for doc in documents if any(keyword in doc.page_content for keyword in query_noun)]
+    # ✅ 개선된 필터링: 키워드 매칭 + 멀티모달 컨텐츠는 항상 포함
+    # 이유: image_ocr, document_parse는 핵심 정보를 담고 있으나 키워드가 없을 수 있음
+    relevant_docs = [
+        doc for doc in documents if
+        any(keyword in doc.page_content for keyword in query_noun) or  # 키워드 매칭
+        doc.metadata.get('source') in ['image_ocr', 'document_parse']  # 멀티모달 항상 포함
+    ]
+
     if not relevant_docs:
       return None, None
 
@@ -1194,12 +1201,13 @@ def get_ai_message(question):
         top_url = top_docs[0][4] if top_docs else None
 
         if top_url:
-            # URL에서 쿼리 파라미터 제거 (wr_id 기준으로 매칭)
-            # 예: https://...?bo_table=sub5_1&wr_id=28658 → wr_id=28658
-            base_url = top_url.split('&wr_id=')[0] + '&wr_id=' if '&wr_id=' in top_url else top_url
-            wr_id = top_url.split('&wr_id=')[-1] if '&wr_id=' in top_url else None
+            # ✅ 변경: URL 기반 매칭 대신 제목 기반 매칭 사용!
+            # 이유: 이미지 URL(/data/editor/...)은 wr_id를 포함하지 않음
+            # 해결: 같은 게시글의 모든 청크는 같은 제목을 공유하므로 제목으로 매칭
+            top_title = top_docs[0][1]  # 첫 번째 문서의 제목
+            wr_id = top_url.split('&wr_id=')[-1] if '&wr_id=' in top_url else top_url.split('wr_id=')[-1] if 'wr_id=' in top_url else None
 
-            logger.info(f"🔍 같은 게시글 청크 검색: wr_id={wr_id}")
+            logger.info(f"🔍 같은 게시글 청크 검색: 제목='{top_title}' (wr_id={wr_id})")
 
             # 같은 게시글의 모든 청크 찾기 (본문 + 첨부파일 + 이미지 OCR)
             enriched_docs = []
@@ -1211,8 +1219,8 @@ def get_ai_message(question):
             duplicate_count = 0
 
             for i, url in enumerate(storage.cached_urls):
-                # 같은 게시글인지 확인 (wr_id 기준)
-                if wr_id and f'wr_id={wr_id}' in url:  # ✅ '&wr_id='가 아니라 'wr_id='로 변경 (더 유연)
+                # ✅ 같은 게시글인지 확인 (제목 기준 - 이미지/첨부파일 포함!)
+                if storage.cached_titles[i] == top_title:
                     total_checked += 1
                     matched_count += 1
 
