@@ -1293,12 +1293,17 @@ def get_ai_message(question):
     top_docs = [list(doc) for doc in top_doc]
 
     # ✅ BGE-Reranker로 문서 재순위화 (관련성 기준)
+    logger.info("=" * 60)
     if storage.reranker and len(top_docs) > 1:
+        logger.info("🎯 BGE-Reranker 활성화!")
         rerank_time = time.time()
-        logger.info(f"🔄 Reranking 시작: {len(top_docs)}개 문서")
+        logger.info(f"   입력: {len(top_docs)}개 문서 → Reranking 시작...")
 
         # Reranker는 tuple 리스트를 기대하므로 변환
         top_docs_tuples = [tuple(doc) for doc in top_docs]
+
+        # 순위 변화 추적 (Before)
+        before_top3 = [(doc[1][:40], doc[0]) for doc in top_docs[:3]]
 
         # Reranking (Top 20 → Top 10으로 압축, 더 관련성 높은 문서만)
         reranked_docs_tuples = storage.reranker.rerank(
@@ -1310,11 +1315,22 @@ def get_ai_message(question):
         # 다시 리스트로 변환
         top_docs = [list(doc) for doc in reranked_docs_tuples]
 
+        # 순위 변화 추적 (After)
+        after_top3 = [(doc[1][:40], doc[0]) for doc in top_docs[:3]]
+
         rerank_f_time = time.time() - rerank_time
-        print(f"Reranking 시간: {rerank_f_time:.2f}초")
-    else:
-        if not storage.reranker:
-            logger.debug("⏭️  Reranker 비활성화 - 원본 순서 유지")
+        logger.info(f"   출력: {len(top_docs)}개 문서 (처리 시간: {rerank_f_time:.2f}초)")
+        logger.info(f"   📈 순위 변화:")
+        for i, (before, after) in enumerate(zip(before_top3, after_top3)):
+            logger.info(f"      {i+1}위: [{after[1]:.4f}] {after[0]}...")
+        print(f"✅ Reranking 완료: {rerank_f_time:.2f}초")
+    elif not storage.reranker:
+        logger.info("⏭️  BGE-Reranker 비활성화 (미설치 또는 로딩 실패)")
+        logger.info("   → 원본 검색 순서 유지")
+    elif len(top_docs) <= 1:
+        logger.info("⏭️  BGE-Reranker 스킵 (문서 1개 이하)")
+        logger.info("   → Reranking 불필요")
+    logger.info("=" * 60)
 
     # 상위 검색 결과 로깅 (Top 5) - URL 중복 제거 효과 확인용
     logger.info(f"🔝 검색 결과 Top {min(5, len(top_docs))}:")
