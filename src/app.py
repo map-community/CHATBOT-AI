@@ -2,9 +2,11 @@ from flask import Flask, request, jsonify
 from modules.ai_modules import get_ai_message, initialize_cache
 from flask_cors import CORS
 import logging
+import os
 
-# 로깅 설정
-logging.basicConfig(level=logging.INFO)
+# 로깅 설정 (중복 방지)
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Flask 앱 생성 함수
@@ -49,11 +51,14 @@ def create_app():
 
     return app
 
-# 캐시 초기화
+# 캐시 초기화 및 앱 실행
 if __name__ == "__main__":
+    # 캐시 초기화 (reloader=False이므로 한 번만 실행됨)
     initialize_cache()
     app = create_app()
-    app.run(host="0.0.0.0", port=5000)
+    # Docker 환경에서는 use_reloader=False 권장 (중복 로그 방지)
+    app.run(host="0.0.0.0", port=5000, use_reloader=False)
 else:
+    # Gunicorn 등 프로덕션 서버에서 import될 때
     initialize_cache()
     app = create_app()
