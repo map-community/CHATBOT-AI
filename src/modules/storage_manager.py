@@ -79,6 +79,7 @@ class StorageManager:
         self._document_combiner = None
         self._document_clusterer = None
         self._keyword_filter = None
+        self._reranker = None  # Document Reranker
 
         # Preprocessing 인스턴스 (즉시 초기화 - DB 연결 불필요)
         self._query_transformer = None
@@ -296,6 +297,29 @@ class StorageManager:
         """KeywordFilter 인스턴스 설정"""
         self._keyword_filter = filter_instance
         logger.info("✅ KeywordFilter 인스턴스 설정 완료")
+
+    @property
+    def reranker(self):
+        """DocumentReranker 인스턴스 (즉시 초기화 가능)"""
+        if self._reranker is None:
+            logger.info("🔄 DocumentReranker 초기화 중...")
+            try:
+                from modules.retrieval.reranker import DocumentReranker
+                self._reranker = DocumentReranker(
+                    model_name="BAAI/bge-reranker-v2-m3",
+                    use_fp16=True
+                )
+                logger.info("✅ DocumentReranker 초기화 완료")
+            except Exception as e:
+                logger.warning(f"⚠️  DocumentReranker 초기화 실패: {e}")
+                logger.warning("   Reranking이 비활성화됩니다 (원본 순서 유지)")
+                # 실패 시 None 유지 (ai_modules에서 None 체크 필요)
+        return self._reranker
+
+    def set_reranker(self, reranker):
+        """DocumentReranker 인스턴스 설정"""
+        self._reranker = reranker
+        logger.info("✅ DocumentReranker 인스턴스 설정 완료")
 
     def close_all_connections(self):
         """모든 연결 종료"""

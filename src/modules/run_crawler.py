@@ -177,18 +177,34 @@ def main():
         combined_professor_data = professor_data + guest_professor_data + staff_data
 
         # 교수/직원 정보는 텍스트만 처리 (이미지 OCR, 첨부파일 파싱 제외)
+        # 단, MongoDB 중복 체크 + 내용 변경 감지 수행
         # 교수 크롤러 형식: (title, text_content, image_list, attachment_list, date, url)
+        new_count = 0
+        professor_items = []
         for title, text_content, image_list, attachment_list, date, url in combined_professor_data:
+            # 중복 체크 (이미지 + 내용 해시로 체크, 내용 바뀌면 재처리)
+            first_image = image_list[0] if image_list else None
+            if document_processor.is_duplicate(title, first_image, text_content):
+                logger.log_post_skipped("professor", title, reason="중복")
+                continue
+
+            new_count += 1
+
             metadata = {
                 "title": title,
                 "url": url,
                 "date": date,
                 "content_type": "text",
-                "source": "professor_info"
+                "source": "professor_info",
+                "category": "professor"
             }
-            all_embedding_items.append((text_content, metadata))
+            professor_items.append((text_content, metadata))
 
-        logger.info(f"✅ 교수/직원 정보 처리 완료: {len(combined_professor_data)}개 문서")
+            # MongoDB에 처리 완료 표시 (content 해시 저장)
+            document_processor.mark_as_processed(title, first_image, text_content)
+
+        all_embedding_items.extend(professor_items)
+        logger.info(f"✅ 교수/직원 정보 처리 완료: {new_count}개 새 문서, {len(professor_items)}개 임베딩 아이템")
 
         # ========== 5. 임베딩 생성 및 업로드 (멀티모달) ==========
         logger.section_start("🔄 5. 멀티모달 임베딩 생성 및 Pinecone 업로드")
@@ -204,7 +220,109 @@ def main():
         else:
             logger.info("ℹ️  새로 처리할 문서가 없습니다.")
 
-        # ========== 6. 최종 상태 출력 ==========
+        # ========== 6. Redis 캐시 증분 업데이트 ==========
+        if all_embedding_items:
+            logger.section_start("🔄 6. Redis 캐시 증분 업데이트")
+
+            try:
+                import redis
+                import pickle
+                import os
+
+                redis_client = redis.Redis(
+                    host=os.getenv('REDIS_HOST', 'redis'),
+                    port=int(os.getenv('REDIS_PORT', 6379)),
+                    decode_responses=False  # pickle 사용 시 필요
+                )
+
+                # 기존 Redis 캐시 로드
+                cached_data = redis_client.get('pinecone_metadata')
+
+                if cached_data:
+                    logger.info("📦 기존 Redis 캐시 발견 - 증분 업데이트 시작")
+
+                    # 기존 데이터 로드
+                    (cached_titles, cached_texts, cached_urls, cached_dates,
+                     cached_htmls, cached_content_types, cached_sources,
+                     cached_image_urls, cached_attachment_urls, cached_attachment_types) = pickle.loads(cached_data)
+
+                    original_count = len(cached_titles)
+                    logger.info(f"   기존 문서: {original_count}개")
+
+                    # 새 데이터 추가 (all_embedding_items를 메타데이터로 변환)
+                    updated_count = 0
+                    added_count = 0
+
+                    for text, metadata in all_embedding_items:
+                        title = metadata.get('title', '')
+                        source = metadata.get('source', 'original_post')
+
+                        # 교수/직원 정보: 중복 체크 후 업데이트 또는 추가
+                        if source == 'professor_info':
+                            # title과 source로 기존 항목 찾기
+                            found_idx = -1
+                            for idx in range(len(cached_titles)):
+                                if cached_titles[idx] == title and cached_sources[idx] == source:
+                                    found_idx = idx
+                                    break
+
+                            if found_idx >= 0:
+                                # 기존 항목 업데이트 (내용 변경 반영)
+                                cached_texts[found_idx] = text
+                                cached_urls[found_idx] = metadata.get('url', '')
+                                cached_dates[found_idx] = metadata.get('date', '')
+                                cached_content_types[found_idx] = metadata.get('content_type', 'text')
+                                cached_image_urls[found_idx] = metadata.get('image_url', '')
+                                cached_attachment_urls[found_idx] = metadata.get('attachment_url', '')
+                                cached_attachment_types[found_idx] = metadata.get('attachment_type', '')
+                                updated_count += 1
+                            else:
+                                # 새 교수 추가
+                                cached_titles.append(title)
+                                cached_texts.append(text)
+                                cached_urls.append(metadata.get('url', ''))
+                                cached_dates.append(metadata.get('date', ''))
+                                cached_htmls.append('')  # HTML은 MongoDB에서 조회
+                                cached_content_types.append(metadata.get('content_type', 'text'))
+                                cached_sources.append(source)
+                                cached_image_urls.append(metadata.get('image_url', ''))
+                                cached_attachment_urls.append(metadata.get('attachment_url', ''))
+                                cached_attachment_types.append(metadata.get('attachment_type', ''))
+                                added_count += 1
+                        else:
+                            # 공지사항/세미나/채용정보: 무조건 추가 (청크 중복 없음)
+                            cached_titles.append(title)
+                            cached_texts.append(text)
+                            cached_urls.append(metadata.get('url', ''))
+                            cached_dates.append(metadata.get('date', ''))
+                            cached_htmls.append('')  # HTML은 MongoDB에서 조회
+                            cached_content_types.append(metadata.get('content_type', 'text'))
+                            cached_sources.append(source)
+                            cached_image_urls.append(metadata.get('image_url', ''))
+                            cached_attachment_urls.append(metadata.get('attachment_url', ''))
+                            cached_attachment_types.append(metadata.get('attachment_type', ''))
+                            added_count += 1
+
+                    new_count = len(cached_titles) - original_count
+                    logger.info(f"   추가: {added_count}개, 업데이트: {updated_count}개")
+                    logger.info(f"   총 문서: {len(cached_titles)}개 ({new_count:+d})")
+
+                    # Redis에 업데이트된 데이터 저장
+                    updated_cache = (
+                        cached_titles, cached_texts, cached_urls, cached_dates,
+                        cached_htmls, cached_content_types, cached_sources,
+                        cached_image_urls, cached_attachment_urls, cached_attachment_types
+                    )
+                    redis_client.set('pinecone_metadata', pickle.dumps(updated_cache))
+
+                    logger.info("✅ Redis 캐시 증분 업데이트 완료!")
+                else:
+                    logger.info("ℹ️  기존 Redis 캐시 없음 - 다음 앱 재시작 시 Pinecone에서 로드됩니다")
+
+            except Exception as e:
+                logger.warning(f"⚠️  Redis 캐시 업데이트 실패 (앱 재시작 시 Pinecone에서 로드됩니다): {e}")
+
+        # ========== 7. 최종 상태 출력 ==========
         logger.section_start("🎉 크롤링 완료")
 
         state_manager.print_status()

@@ -584,6 +584,147 @@ def find_url(url, title, doc_date, text, doc_url, number):
 
 ########################################################################################  best_docs 시작 ##########################################################################################
 
+def parse_temporal_intent(query, current_date=None):
+    """
+    질문에서 시간 표현을 감지하고 필터 조건을 반환합니다.
+
+    Args:
+        query: 사용자 질문
+        current_date: 현재 날짜 (기본값: 현재 시각)
+
+    Returns:
+        dict: {"year": int, "semester": int, "date_from": datetime} 또는 None
+    """
+    from datetime import datetime
+
+    if current_date is None:
+        current_date = datetime.now()
+
+    current_year = current_date.year
+    current_month = current_date.month
+
+    # 한국 학기 계산: 1학기(3-8월), 2학기(9-2월)
+    # 단, 1-2월은 전년도 2학기로 간주
+    if 3 <= current_month <= 8:
+        current_semester = 1
+    else:  # 9-12월 또는 1-2월
+        current_semester = 2
+        if current_month <= 2:
+            current_year -= 1  # 1-2월은 전년도 2학기
+
+    # 1단계: 간단한 시간 표현은 규칙으로 처리 (빠르고 비용 0)
+    simple_temporal_keywords = {
+        '이번학기': {'year': current_year, 'semester': current_semester},
+        '이번 학기': {'year': current_year, 'semester': current_semester},
+        '이번학년': {'year': current_year, 'semester': current_semester},
+        '이번 학년': {'year': current_year, 'semester': current_semester},
+        '올해': {'year': current_year},
+        '금년': {'year': current_year},
+        '최근': {'year_from': current_year - 1},  # 최근 1년
+    }
+
+    for keyword, time_filter in simple_temporal_keywords.items():
+        if keyword in query:
+            logger.info(f"⏰ 시간 표현 감지 (규칙): '{keyword}' → {time_filter}")
+            return time_filter
+
+    # 2단계: 복잡한 시간 표현은 LLM으로 해석 (유연하고 정확)
+    # "저번학기", "작년 2학기", "다음 학기", "지난달" 등
+    complex_temporal_keywords = ['학기', '학년', '년도', '작년', '올해', '내년', '지난', '다음', '전', '후']
+
+    if any(keyword in query for keyword in complex_temporal_keywords):
+        logger.info(f"🤔 복잡한 시간 표현 감지 → LLM 리라이팅 시작...")
+        llm_filter = rewrite_query_with_llm(query, current_date)
+        if llm_filter:
+            logger.info(f"✨ LLM 리라이팅 결과: {llm_filter}")
+            return llm_filter
+
+    return None
+
+
+def rewrite_query_with_llm(query, current_date):
+    """
+    LLM을 사용해 복잡한 시간 표현을 해석하고 필터 조건을 생성합니다.
+
+    Args:
+        query: 사용자 질문
+        current_date: 현재 날짜
+
+    Returns:
+        dict: {"year": int, "semester": int} 또는 None
+    """
+    from datetime import datetime
+    import json
+
+    current_year = current_date.year
+    current_month = current_date.month
+
+    # 현재 학기 계산
+    if 3 <= current_month <= 8:
+        current_semester = 1
+    else:
+        current_semester = 2
+        if current_month <= 2:
+            current_year -= 1
+
+    prompt = f"""당신은 대학 학사 일정 시간 표현 전문가입니다.
+
+현재 날짜: {current_date.strftime('%Y년 %m월 %d일')}
+현재 학기: {current_year}학년도 {current_semester}학기
+
+한국 대학 학기 기준:
+- 1학기: 3월~8월
+- 2학기: 9월~2월 (다음해 2월까지)
+- 여름학기: 6월~8월
+- 겨울학기: 12월~2월
+
+사용자 질문: "{query}"
+
+위 질문에서 시간 표현을 추출하고, 정확한 학년도와 학기를 JSON 형식으로 반환하세요.
+
+출력 형식 (JSON만):
+{{
+  "year": 2025,
+  "semester": 1,
+  "reasoning": "현재 2025년 2학기이므로, 저번학기는 2025년 1학기입니다"
+}}
+
+시간 표현이 없으면:
+{{
+  "year": null,
+  "semester": null,
+  "reasoning": "시간 표현 없음"
+}}
+
+예시:
+- "저번학기" → {{"year": {current_year if current_semester == 2 else current_year - 1}, "semester": {2 if current_semester == 1 else 1}, "reasoning": "..."}}
+- "작년 2학기" → {{"year": {current_year - 1}, "semester": 2, "reasoning": "..."}}
+- "다음 학기" → {{"year": {current_year + 1 if current_semester == 2 else current_year}, "semester": {1 if current_semester == 2 else 2}, "reasoning": "..."}}
+
+**중요**: JSON만 출력하고, 다른 텍스트는 포함하지 마세요.
+"""
+
+    try:
+        llm = ChatUpstage(api_key=storage.upstage_api_key, model="solar-pro")
+        response = llm.invoke(prompt)
+
+        # JSON 파싱
+        result = json.loads(response.content.strip())
+
+        if result.get('year') is None or result.get('semester') is None:
+            return None
+
+        logger.info(f"   💬 LLM 추론: {result.get('reasoning', '')}")
+
+        return {
+            'year': result['year'],
+            'semester': result['semester']
+        }
+
+    except Exception as e:
+        logger.warning(f"⚠️  LLM 리라이팅 실패 (규칙 기반으로 폴백): {e}")
+        return None
+
 
 def best_docs(user_question):
       # 사용자 질문
@@ -636,6 +777,9 @@ def best_docs(user_question):
 
       remove_noticement = ['제일','가장','공고', '공지사항','필독','첨부파일','수업','컴학','상위','관련']
 
+      # ✅ 시간 표현 감지 및 필터 생성
+      temporal_filter = parse_temporal_intent(user_question)
+
       # BM25 검색 (리팩토링됨 - BM25Retriever 사용)
       bm_title_time = time.time()
       Bm25_best_docs, adjusted_similarities = storage.bm25_retriever.search(
@@ -655,6 +799,57 @@ def best_docs(user_question):
       )
       pinecone_time = time.time() - dense_time
       print(f"파인콘에서 top k 뽑는데 걸리는 시간 {pinecone_time}")
+
+      # ✅ 시간 필터 적용 (검색 결과를 날짜 기준으로 필터링)
+      if temporal_filter:
+          from datetime import datetime
+
+          def matches_temporal_filter(doc_date_str, time_filter):
+              """날짜 문자열이 시간 필터 조건을 만족하는지 확인"""
+              try:
+                  # ISO 포맷 파싱: "2024-09-19T10:57:00+09:00"
+                  doc_date = datetime.fromisoformat(doc_date_str.replace('+09:00', ''))
+                  doc_year = doc_date.year
+                  doc_month = doc_date.month
+
+                  # 학기 계산
+                  if 3 <= doc_month <= 8:
+                      doc_semester = 1
+                  else:
+                      doc_semester = 2
+                      if doc_month <= 2:
+                          doc_year -= 1
+
+                  # 필터 조건 체크
+                  if 'year' in time_filter and doc_year != time_filter['year']:
+                      return False
+                  if 'semester' in time_filter and doc_semester != time_filter['semester']:
+                      return False
+                  if 'year_from' in time_filter and doc_year < time_filter['year_from']:
+                      return False
+
+                  return True
+              except Exception as e:
+                  logger.debug(f"날짜 파싱 실패: {doc_date_str} - {e}")
+                  return True  # 파싱 실패 시 포함 (안전장치)
+
+          # BM25 결과 필터링
+          original_bm25_count = len(Bm25_best_docs)
+          Bm25_best_docs = [
+              (score, title, date, text, url)
+              for score, title, date, text, url in Bm25_best_docs
+              if matches_temporal_filter(date, temporal_filter)
+          ]
+
+          # Dense 결과 필터링
+          original_dense_count = len(combine_dense_docs)
+          combine_dense_docs = [
+              (score, doc)
+              for score, doc in combine_dense_docs
+              if matches_temporal_filter(doc[1], temporal_filter)  # doc[1] = date
+          ]
+
+          logger.info(f"📅 날짜 필터링 완료: BM25 {original_bm25_count}→{len(Bm25_best_docs)}개, Dense {original_dense_count}→{len(combine_dense_docs)}개")
 
       # ## 결과 출력
       # print("\n통합된 파인콘문서 유사도:")
@@ -680,6 +875,48 @@ def best_docs(user_question):
       )
       combine_f_time = time.time() - combine_time
       print(f"Bm25랑 pinecone 결합 시간: {combine_f_time}")
+
+      # ✅ 날짜 부스팅 (Recency Boost) - 시간 표현 없어도 최신 문서 우선!
+      # 사용자 지적: "시간 맥락 없으면 당연히 최신순으로"
+      from datetime import datetime
+
+      def calculate_recency_boost(doc_date_str):
+          """문서 날짜에 따른 가중치 계산 (최신 문서 우선)"""
+          try:
+              current_date = datetime.now()
+              doc_date = datetime.fromisoformat(doc_date_str.replace('+09:00', ''))
+
+              # 날짜 차이 계산 (일 단위)
+              days_old = (current_date - doc_date).days
+
+              # 가중치 계산
+              if days_old < 0:  # 미래 날짜 (오류)
+                  return 1.0
+              elif days_old <= 180:  # 6개월 이내 (이번학기/저번학기)
+                  return 1.5  # 50% 부스팅
+              elif days_old <= 365:  # 1년 이내 (작년)
+                  return 1.3  # 30% 부스팅
+              elif days_old <= 730:  # 2년 이내
+                  return 1.1  # 10% 부스팅
+              else:  # 2년 이상
+                  return 0.9  # 10% 패널티
+
+          except Exception as e:
+              logger.debug(f"날짜 부스팅 계산 실패: {doc_date_str} - {e}")
+              return 1.0  # 실패 시 중립
+
+      # 결합된 결과에 날짜 부스팅 적용
+      boosted_docs = []
+      for score, title, date, text, url in final_best_docs:
+          boost = calculate_recency_boost(date)
+          boosted_score = score * boost
+          boosted_docs.append((boosted_score, title, date, text, url))
+
+      # 부스팅된 점수로 재정렬
+      boosted_docs.sort(key=lambda x: x[0], reverse=True)
+      final_best_docs = boosted_docs
+
+      logger.info(f"🚀 날짜 부스팅 완료 (최신 문서 우선: 6개월 이내 +50%, 1년 이내 +30%)")
 
       # ✨ 텍스트 유사도 기반 중복 제거 (Phase 1 개선 - 수정)
       # 문제: URL 기준 제한은 같은 게시글의 다른 첨부파일까지 차단함
@@ -756,29 +993,53 @@ prompt_template = """당신은 경북대학교 컴퓨터학부 공지사항을 �
 
 답변 시 다음 사항을 고려해주세요:
 
-1. 질문의 내용이 이벤트의 기간에 대한 것일 경우, 문서에 주어진 기한과 현재 한국 시간을 비교하여 해당 이벤트가 예정된 것인지, 진행 중인지, 또는 이미 종료되었는지에 대한 정보를 알려주세요.
-  예를 들어, "2학기 수강신청 일정은 언제야?"라는 질문을 받았을 경우, 현재 시간은 11월이라고 가정하면 수강신청은 기간은 8월이었으므로 이미 종료된 이벤트입니다.
-  따라서, "2학기 수강신청은 이미 종료되었습니다."와 같은 문구를 추가로 사용자에게 제공해주고, 2학기 수강신청 일정에 대한 정보를 사용자에게 제공해주어야 합니다.
-  또 다른 예시로 현재 시간이 11월 12일이라고 가정하였을 때, "겨울 계절 신청기간은 언제야?"라는 질문을 받았고, 겨울 계절 신청기간이 11월 13일이라면 아직 시작되지 않은 이벤트입니다.
-  따라서, "겨울 계절 신청은 아직 시작 전입니다."와 같은 문구를 추가로 사용자에게 제공해주고, 겨울 계절 신청 일정에 대한 정보를 사용자에게 제공해주어야 합니다.
-  또 다른 예시로 현재 시간이 11월 13일이라고 가정하였을 때, "겨울 계절 신청기간은 언제야?"라는 질문을 받았고, 겨울 계절 신청기간이 11월 13일이라면 현재 진행 중인 이벤트입니다.
-  따라서, "현재 겨울 계절 신청기간입니다."와 같은 문구를 추가로 사용자에게 제공해주고, 겨울 계절 신청 일정에 대한 정보를 사용자에게 제공해주어야 합니다.
+1. **시간 비교 및 명시 (매우 중요!):**
+  - 질문에 시간 표현(이번학기, 올해 등)이 없더라도, 반드시 문서의 날짜와 현재 시간을 비교하세요.
+  - 문서가 올해가 아니라면 **반드시 명시**하세요. 예: "⚠️ 주의: 이 정보는 2024년 자료입니다."
+  - 이벤트 기간 비교:
+    * "2학기 수강신청 일정은 언제야?" (현재 11월) → "2학기 수강신청은 이미 종료되었습니다 (8월). 일정은 다음과 같았습니다: ..."
+    * "겨울 계절 신청기간은 언제야?" (현재 11월 12일, 신청 11월 13일) → "겨울 계절 신청은 내일(11월 13일)부터 시작됩니다."
+    * "겨울 계절 신청기간은 언제야?" (현재 11월 13일, 신청 11월 13일) → "현재 겨울 계절 신청기간입니다 (11월 13일부터)."
+
+  - **과거 데이터 사용 시 경고:**
+    * 문서가 작년(2024년) 것이면: "⚠️ 주의: 2025년 자료가 없어 2024년 정보를 제공합니다. 최신 정보는 공지사항을 확인하세요."
+    * 문서가 2년 이상 오래됐으면: "⚠️ 주의: 이 정보는 20XX년 자료로 오래되었습니다. 최신 정보는 공지사항을 반드시 확인하세요."
 2. 질문에서 핵심적인 키워드들을 골라 키워드들과 관련된 문서를 찾아서 해당 문서를 읽고 정확한 내용을 답변해주세요.
-3. 문서의 내용을 그대로 길게 전달하기보다는 질문에서 요구하는 내용에 해당하는 답변만을 제공함으로써 최대한 답변을 간결하고 일관된 방식으로 제공하세요.
+3. **답변 완전성 vs 간결성 (매우 중요!):**
+   - **⚠️ 완전성 요구 키워드**: 질문에 "전부", "모든", "모두", "빠짐없이", "전체", "다", "명단", "목록", "리스트", "누구" 등이 포함되면, 문서의 **모든 항목을 절대 생략하지 말고 전부 나열**하세요.
+     * 예: "면접 대상자 **전부** 알려줘" → 문서에 있는 **모든** 대상자를 1명도 빠짐없이 나열 (요약 금지!)
+     * 예: "장학금 수혜자 **누구**니?" → **모든** 수혜자 이름과 학번을 전부 제공 (일부만 제공 금지!)
+     * 예: "**모든** 튜터 알려줘" → 문서의 **모든** 튜터를 빠짐없이 나열
+     * **절대 규칙**: 완전성 키워드가 있으면 "...등", "일부", "주요" 같은 요약 표현 사용 금지. 문서의 마지막 항목까지 전부 나열할 것!
+   - **일반 질문**: 완전성 키워드가 없는 일반 질문은 간결하게 답변하세요.
+     * 예: "수강신청 방법은?" → 핵심 절차만 간결하게 설명
 4. 에이빅과 관련된 질문이 들어오면 임의로 판단해서 네 아니오 하지 말고 문서에 있는 내용을 그대로 알려주세요.
 5. 답변은 친절하게 존댓말로 제공하세요.
 6. 질문이 공지사항의 내용과 전혀 관련이 없다고 판단하면 응답하지 말아주세요. 예를 들면 "너는 무엇을 알까", "점심메뉴 추천"과 같이 일반 상식을 요구하는 질문은 거절해주세요.
 7. 에이빅 인정 관련 질문이 들어오면 계절학기인지 그냥 학기를 묻는것인지 질문을 체크해야합니다. 계절학기가 아닌 경우에 심컴,글솝,인컴 개설이 아니면 에이빅 인정이 안됩니다.
 
 **멀티모달 컨텍스트 활용 가이드:**
-8. 컨텍스트에 HTML 표(<table>, <tr>, <td> 등)가 포함되어 있으면, 표 구조를 정확히 파싱하여 정보를 추출하세요.
+8. 컨텍스트에 HTML 표(<table>, <tr>, <td> 등) 또는 Markdown 표가 포함되어 있으면, 표 구조를 정확히 파싱하여 정보를 추출하세요.
   - 예시: <tr><td>성적우수장학금</td><td>300만원</td></tr>는 "성적우수장학금: 300만원"을 의미합니다.
+  - Markdown 표 예시: "| 과목 | 튜터 | 강의실 |\n| 알고리즘2 | 최기영 | IT5-224 |"는 "알고리즘2의 튜터는 최기영, 강의실은 IT5-224"를 의미합니다.
   - 표의 행(row)과 열(column) 관계를 정확히 파악하여 답변하세요.
 9. 컨텍스트 출처 라벨([본문], [이미지 OCR 텍스트], [첨부파일: PDF])을 참고하여 정보의 신뢰도를 고려하세요.
   - [본문]: 원본 게시글 텍스트 (가장 신뢰도 높음)
   - [이미지 OCR 텍스트]: 이미지에서 추출한 텍스트 (OCR 오류 가능성 고려)
   - [첨부파일: PDF/HWP/DOCX]: 첨부파일에서 추출한 텍스트 및 구조 (공식 문서로 신뢰도 높음)
 10. HTML 리스트(<ul>, <ol>, <li>)나 중첩 구조가 있으면, 계층 구조를 유지하여 답변하세요.
+
+**깨진 데이터 처리 가이드 (관대하게 해석):**
+11. HTML/Markdown 표가 일부 손상되었거나 불완전한 경우:
+  - 표 구조를 최대한 유추하여 정보를 추출하세요.
+  - 예시: "| 과목 | 튜터 | 강의실\n알고리즘2 최기영 IT5-224" → 구분자가 일부 누락되어도 문맥상 "알고리즘2의 튜터는 최기영, 강의실은 IT5-224"로 해석
+12. OCR 텍스트의 오타나 누락이 있을 경우:
+  - 문맥을 고려하여 올바른 정보를 유추하세요.
+  - 예시: "최7ㅣ영" → "최기영", "IT5二224" → "IT5-224", "T0T0R" → "TUTOR"
+  - 비슷한 형태의 문자가 잘못 인식된 경우 (숫자/한글/영문 혼동) 올바르게 해석하세요.
+13. 표의 헤더와 데이터가 섞여있거나 줄바꿈이 누락된 경우:
+  - 패턴을 파악하여 정보를 재구성하세요.
+  - 불확실한 경우 "문서가 일부 손상되어 정확한 정보를 확인하기 어렵습니다. 참고 URL을 확인하세요."라고 명시하세요.
 답변:"""
 
 # PromptTemplate 객체 생성
@@ -928,12 +1189,82 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
         )
         documents.append(doc)
 
-    relevant_docs = [doc for doc in documents if any(keyword in doc.page_content for keyword in query_noun)]
+    # ✅ 개선된 필터링: 같은 게시글의 모든 청크 vs 키워드 필터링
+    # 핵심 개선: 같은 게시글에서 수집된 청크들은 이미 BM25 + Dense + Reranker로 검증됨
+    # → 키워드 필터링으로 중요 정보(이름, 학번 등)를 담은 청크가 제거되는 문제 해결
+
+    # 모든 문서가 같은 게시글인지 확인 (제목 기준)
+    unique_titles = set(doc.metadata.get('title', '') for doc in documents)
+
+    if len(unique_titles) == 1:
+        # ✅ 같은 게시글의 청크들 → 모두 포함 (키워드 필터링 스킵)
+        # 이유: 이미 멀티스테이지 검색(BM25 + Dense + Reranker)으로 최적 게시글 선정 완료
+        # 해당 게시글의 모든 정보(본문, 이미지 OCR, 첨부파일)를 LLM에 전달해야 완전한 답변 가능
+        logger.info(f"   ✅ 같은 게시글 청크 감지 → 키워드 필터링 스킵 ({len(documents)}개 모두 포함)")
+        relevant_docs = documents
+    else:
+        # ❌ 여러 게시글 혼재 → 키워드 필터링 적용
+        logger.info(f"   🔍 여러 게시글 혼재 ({len(unique_titles)}개) → 키워드 필터링 적용")
+        relevant_docs = [
+            doc for doc in documents if
+            any(keyword in doc.page_content for keyword in query_noun) or  # 키워드 매칭
+            doc.metadata.get('source') in ['image_ocr', 'document_parse']  # 멀티모달 항상 포함
+        ]
+
     if not relevant_docs:
       return None, None
 
-    llm = ChatUpstage(api_key=storage.upstage_api_key)
+    # 🔍 디버깅: 각 청크의 내용 길이 확인 (데이터 누락 검증)
+    logger.info(f"   📋 LLM에 전달될 청크 상세:")
+    for i, doc in enumerate(relevant_docs):
+        source = doc.metadata.get('source', 'unknown')
+        content_len = len(doc.page_content)
+        # 이름 개수 추정 (학번 패턴 "202XXXXXXX" 개수)
+        import re
+        name_count = len(re.findall(r'\b20\d{8}\b', doc.page_content))
+        logger.info(f"      청크{i+1}: [{source}] {content_len}자, 학번 패턴: {name_count}개")
+        if name_count > 0:
+            # 학번이 있는 청크는 미리보기 출력
+            logger.info(f"         미리보기: {doc.page_content[:200]}...")
+
+    # LLM 초기화 (명단 질문을 위한 충분한 max_tokens 설정)
+    llm = ChatUpstage(
+        api_key=storage.upstage_api_key,
+        max_tokens=4096  # 긴 명단도 완전히 나열할 수 있도록 충분한 토큰 확보
+    )
     relevant_docs_content=format_docs(relevant_docs)
+
+    # 🔍 디버깅: 전체 context 크기 및 내용 확인
+    logger.info(f"   📊 전체 Context 크기: {len(relevant_docs_content)}자")
+
+    # 🔍 디버깅: 실제 LLM에 전달되는 context 요약 출력 (각 청크당 앞뒤 5줄)
+    import re
+    total_student_ids = len(re.findall(r'\b20\d{8}\b', relevant_docs_content))
+    logger.info(f"   📋 Context 내 총 학번 개수: {total_student_ids}개")
+    logger.info(f"   📄 실제 전달되는 Context 요약 (각 청크당 앞 5줄 + 뒤 5줄):")
+    logger.info(f"{'='*80}")
+
+    # 각 청크를 "\n\n문서 제목:"으로 분리
+    chunks = relevant_docs_content.split('\n\n문서 제목:')
+    for i, chunk in enumerate(chunks):
+        if i > 0:  # 첫 번째는 빈 문자열이므로 스킵
+            chunk = '문서 제목:' + chunk  # 분리 시 제거된 부분 복원
+
+        lines = chunk.split('\n')
+        total_lines = len(lines)
+
+        if total_lines <= 10:
+            # 10줄 이하면 전체 출력
+            logger.info(chunk)
+        else:
+            # 앞 5줄 + ... + 뒤 5줄
+            preview = '\n'.join(lines[:5]) + f'\n... ({total_lines - 10}줄 생략) ...\n' + '\n'.join(lines[-5:])
+            logger.info(preview)
+
+        if i < len(chunks) - 1:
+            logger.info('')  # 청크 구분용 빈 줄
+
+    logger.info(f"{'='*80}")
 
     qa_chain = (
         {
@@ -946,7 +1277,7 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
         | StrOutputParser()
     )
 
-    return qa_chain,relevant_docs
+    return qa_chain, relevant_docs, relevant_docs_content
 
 
 
@@ -1077,6 +1408,46 @@ def get_ai_message(question):
       return data
     top_docs = [list(doc) for doc in top_doc]
 
+    # ✅ BGE-Reranker로 문서 재순위화 (관련성 기준)
+    logger.info("=" * 60)
+    if storage.reranker and len(top_docs) > 1:
+        logger.info("🎯 BGE-Reranker 활성화!")
+        rerank_time = time.time()
+        logger.info(f"   입력: {len(top_docs)}개 문서 → Reranking 시작...")
+
+        # Reranker는 tuple 리스트를 기대하므로 변환
+        top_docs_tuples = [tuple(doc) for doc in top_docs]
+
+        # 순위 변화 추적 (Before)
+        before_top3 = [(doc[1][:40], doc[0]) for doc in top_docs[:3]]
+
+        # Reranking (Top 20 → Top 10으로 압축, 더 관련성 높은 문서만)
+        reranked_docs_tuples = storage.reranker.rerank(
+            query=question,
+            documents=top_docs_tuples,
+            top_k=min(20, len(top_docs))  # 최대 20개까지만
+        )
+
+        # 다시 리스트로 변환
+        top_docs = [list(doc) for doc in reranked_docs_tuples]
+
+        # 순위 변화 추적 (After)
+        after_top3 = [(doc[1][:40], doc[0]) for doc in top_docs[:3]]
+
+        rerank_f_time = time.time() - rerank_time
+        logger.info(f"   출력: {len(top_docs)}개 문서 (처리 시간: {rerank_f_time:.2f}초)")
+        logger.info(f"   📈 순위 변화:")
+        for i, (before, after) in enumerate(zip(before_top3, after_top3)):
+            logger.info(f"      {i+1}위: [{after[1]:.4f}] {after[0]}...")
+        print(f"✅ Reranking 완료: {rerank_f_time:.2f}초")
+    elif not storage.reranker:
+        logger.info("⏭️  BGE-Reranker 비활성화 (미설치 또는 로딩 실패)")
+        logger.info("   → 원본 검색 순서 유지")
+    elif len(top_docs) <= 1:
+        logger.info("⏭️  BGE-Reranker 스킵 (문서 1개 이하)")
+        logger.info("   → Reranking 불필요")
+    logger.info("=" * 60)
+
     # 상위 검색 결과 로깅 (Top 5) - URL 중복 제거 효과 확인용
     logger.info(f"🔝 검색 결과 Top {min(5, len(top_docs))}:")
     seen_urls = set()
@@ -1172,8 +1543,100 @@ def get_ai_message(question):
 
     # 이미지 + LLM 답변이 있는 경우.
     else:
+        # ✅ 핵심 개선: 같은 URL의 모든 청크(본문 + 첨부파일 + 이미지)를 LLM에 전달!
+        # 문제: 클러스터링 결과는 본문 청크만 포함 (첨부파일 누락)
+        # 해결: 같은 게시글의 모든 청크를 명시적으로 가져옴
+        enrich_time = time.time()
+
+        # Top 문서의 URL 추출 (게시글 URL)
+        top_url = top_docs[0][4] if top_docs else None
+
+        if top_url:
+            # ✅ 변경: URL 기반 매칭 대신 제목 기반 매칭 사용!
+            # 이유: 이미지 URL(/data/editor/...)은 wr_id를 포함하지 않음
+            # 해결: 같은 게시글의 모든 청크는 같은 제목을 공유하므로 제목으로 매칭
+            top_title = top_docs[0][1]  # 첫 번째 문서의 제목
+            wr_id = top_url.split('&wr_id=')[-1] if '&wr_id=' in top_url else top_url.split('wr_id=')[-1] if 'wr_id=' in top_url else None
+
+            logger.info(f"🔍 같은 게시글 청크 검색: 제목='{top_title}' (wr_id={wr_id})")
+
+            # 같은 게시글의 모든 청크 찾기 (본문 + 첨부파일 + 이미지 OCR)
+            enriched_docs = []
+            seen_texts = set()  # 중복 텍스트 제거용
+
+            # 디버깅: 매칭 상황 추적
+            total_checked = 0
+            matched_count = 0
+            duplicate_count = 0
+
+            for i, url in enumerate(storage.cached_urls):
+                # ✅ 같은 게시글인지 확인 (제목 기준 - 이미지/첨부파일 포함!)
+                if storage.cached_titles[i] == top_title:
+                    total_checked += 1
+                    matched_count += 1
+
+                    text = storage.cached_texts[i]
+                    content_type = storage.cached_content_types[i] if i < len(storage.cached_content_types) else "unknown"
+                    source = storage.cached_sources[i] if i < len(storage.cached_sources) else "unknown"
+
+                    # 디버깅 로그 (처음 5개만)
+                    if matched_count <= 5:
+                        logger.info(f"   [{matched_count}] URL: {url[:80]}...")
+                        logger.info(f"       타입: {content_type}, 소스: {source}, 텍스트: {len(text)}자")
+
+                    # 빈 텍스트는 건너뛰지 않음! (중요: "No content"도 포함)
+                    text_key = ''.join(text.split())  # 공백 제거 후 비교
+
+                    # 중복 텍스트 제거 (빈 문자열은 제외하지 않음!)
+                    if text_key not in seen_texts:  # ✅ 'text_key and' 제거 (빈 텍스트도 포함)
+                        seen_texts.add(text_key)
+                        enriched_docs.append((
+                            top_docs[0][0],  # 점수는 top 문서와 동일
+                            storage.cached_titles[i],
+                            storage.cached_dates[i],
+                            text,
+                            url
+                        ))
+                    else:
+                        duplicate_count += 1
+
+            logger.info(f"   📊 매칭 통계: 전체 {len(storage.cached_urls)}개 중 {matched_count}개 매칭, {duplicate_count}개 중복 제거")
+
+            # 청크를 찾았으면 top_docs를 교체 (본문 + 첨부파일 + 이미지)
+            if enriched_docs:
+                logger.info(f"🔧 같은 게시글의 모든 청크 수집: {len(top_docs)}개 → {len(enriched_docs)}개")
+
+                # 타입별 카운트 (source 기준으로 정확히 카운트)
+                本문_count = 0
+                image_count = 0
+                attachment_count = 0
+
+                for i, (score, title, date, text, url) in enumerate(enriched_docs):
+                    try:
+                        idx = storage.cached_urls.index(url)
+                        source = storage.cached_sources[idx] if idx < len(storage.cached_sources) else "unknown"
+                        if source == "original_post":
+                            本문_count += 1
+                        elif source == "image_ocr":
+                            image_count += 1
+                        elif source == "document_parse":
+                            attachment_count += 1
+                    except:
+                        pass
+
+                logger.info(f"   📦 본문 청크: {本문_count}개")
+                logger.info(f"   🖼️  이미지 OCR 청크: {image_count}개")
+                logger.info(f"   📎 첨부파일 청크: {attachment_count}개")
+                top_docs = enriched_docs
+            else:
+                logger.warning(f"⚠️  같은 게시글 청크를 찾지 못했습니다! wr_id={wr_id}")
+                logger.warning(f"   Top URL: {top_url}")
+
+        enrich_f_time = time.time() - enrich_time
+        print(f"청크 수집 시간: {enrich_f_time}")
+
         chain_time=time.time()
-        qa_chain, relevant_docs = get_answer_from_chain(top_docs, question,query_noun)
+        qa_chain, relevant_docs, relevant_docs_content = get_answer_from_chain(top_docs, question,query_noun)
         chain_f_time=time.time()-chain_time
         print(f"chain 생성하는 시간: {chain_f_time}")
         if final_url == PROFESSOR_BASE_URL + "&lang=kor" and any(keyword in query_noun for keyword in ['연락처', '전화', '번호', '전화번호']):
@@ -1249,7 +1712,10 @@ def get_ai_message(question):
 
         # LLM에서 답변을 생성하는 경우
         answer_time=time.time()
+
+        # qa_chain.invoke() 사용 (기존 방식 유지)
         answer_result = qa_chain.invoke(question)
+
         answer_f_time=time.time()-answer_time
         print(f"답변 생성하는 시간: {answer_f_time}")
 
@@ -1257,6 +1723,24 @@ def get_ai_message(question):
         logger.info(f"   답변 길이: {len(answer_result)}자")
         logger.info(f"   답변 미리보기: {answer_result[:150]}...")
         logger.info(f"   사용된 참고문서 수: {len(relevant_docs)}")
+
+        # 답변 검증 및 경고 추가 (범용)
+        completeness_keywords = ['전부', '모든', '모두', '빠짐없이', '전체', '다', '명단', '목록', '리스트', '누구']
+        has_completeness_request = any(keyword in question for keyword in completeness_keywords)
+
+        # 완전성 요구 + Context와 답변 차이가 크면 경고
+        if has_completeness_request:
+            # Context에 있는 숫자 패턴 (학번, 날짜 등)
+            import re
+            context_numbers = len(re.findall(r'\b20\d{6,8}\b', relevant_docs_content))
+            answer_numbers = len(re.findall(r'\b20\d{6,8}\b', answer_result))
+
+            logger.info(f"   📊 완전성 검증: Context {context_numbers}건 / 답변 {answer_numbers}건")
+
+            # Context의 50% 미만만 답변에 포함되면 경고
+            if context_numbers >= 10 and answer_numbers < context_numbers * 0.5:
+                logger.warning(f"   ⚠️ 완전성 요구했으나 답변 불완전! LLM이 임의로 요약한 것으로 판단")
+                answer_result += f"\n\n⚠️ 일부 내용이 생략되었을 수 있습니다 (문서: 약 {context_numbers}건 / 답변: {answer_numbers}건). 전체 내용은 참고 URL을 확인하세요."
 
         doc_references = "\n".join([
             f"\n참고 문서 URL: {doc.metadata['url']}"
