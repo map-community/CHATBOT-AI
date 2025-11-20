@@ -1225,7 +1225,11 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
             # 학번이 있는 청크는 미리보기 출력
             logger.info(f"         미리보기: {doc.page_content[:200]}...")
 
-    llm = ChatUpstage(api_key=storage.upstage_api_key)
+    # LLM 초기화 (명단 질문을 위한 충분한 max_tokens 설정)
+    llm = ChatUpstage(
+        api_key=storage.upstage_api_key,
+        max_tokens=4096  # 긴 명단도 완전히 나열할 수 있도록 충분한 토큰 확보
+    )
     relevant_docs_content=format_docs(relevant_docs)
 
     # 🔍 디버깅: 전체 context 크기 및 내용 확인
