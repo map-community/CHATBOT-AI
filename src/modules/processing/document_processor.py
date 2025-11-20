@@ -99,31 +99,50 @@ class DocumentProcessor:
         else:
             self.multimodal_processor = None
 
-    def is_duplicate(self, title: str, image_url: Optional[str] = None) -> bool:
+    def is_duplicate(self, title: str, image_url: Optional[str] = None, content: Optional[str] = None) -> bool:
         """
-        중복 문서 체크
+        중복 문서 체크 (content가 제공되면 내용 변경 감지)
 
         Args:
             title: 문서 제목
             image_url: 이미지 URL
+            content: 문서 내용 (교수 정보 등 내용 변경 감지용, optional)
 
         Returns:
             중복이면 True, 아니면 False
+            content가 제공되고 내용이 바뀌면 기존 문서 삭제 후 False 반환
         """
         query = {"title": title}
 
         if image_url and image_url != EMPTY_CONTENT:
             query["image_url"] = image_url
 
-        return self.collection.find_one(query) is not None
+        existing = self.collection.find_one(query)
 
-    def mark_as_processed(self, title: str, image_url: Optional[str] = None) -> bool:
+        if not existing:
+            return False
+
+        # content 비교 (교수 정보 등 내용 변경 감지)
+        if content is not None:
+            import hashlib
+            new_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
+            old_hash = existing.get("content_hash")
+
+            if old_hash and new_hash != old_hash:
+                # 내용이 바뀜 -> 기존 문서 삭제 -> 재처리
+                self.collection.delete_one({"_id": existing["_id"]})
+                return False
+
+        return True
+
+    def mark_as_processed(self, title: str, image_url: Optional[str] = None, content: Optional[str] = None) -> bool:
         """
         문서를 처리 완료로 표시 (MongoDB에 저장)
 
         Args:
             title: 문서 제목
             image_url: 이미지 URL
+            content: 문서 내용 (교수 정보 등 내용 변경 감지용, optional)
 
         Returns:
             새로 삽입되면 True, 중복이면 False
@@ -133,7 +152,12 @@ class DocumentProcessor:
             "image_url": image_url if image_url else EMPTY_CONTENT
         }
 
-        if not self.is_duplicate(title, image_url):
+        # content 해시 저장 (교수 정보 등 내용 변경 감지용)
+        if content is not None:
+            import hashlib
+            temp_data["content_hash"] = hashlib.md5(content.encode('utf-8')).hexdigest()
+
+        if not self.is_duplicate(title, image_url, content):
             self.collection.insert_one(temp_data)
             return True
         else:

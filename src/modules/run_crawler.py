@@ -177,14 +177,14 @@ def main():
         combined_professor_data = professor_data + guest_professor_data + staff_data
 
         # 교수/직원 정보는 텍스트만 처리 (이미지 OCR, 첨부파일 파싱 제외)
-        # 단, MongoDB 중복 체크는 수행
+        # 단, MongoDB 중복 체크 + 내용 변경 감지 수행
         # 교수 크롤러 형식: (title, text_content, image_list, attachment_list, date, url)
         new_count = 0
         professor_items = []
         for title, text_content, image_list, attachment_list, date, url in combined_professor_data:
-            # 중복 체크 (이미지 리스트의 첫 번째 이미지로 체크)
+            # 중복 체크 (이미지 + 내용 해시로 체크, 내용 바뀌면 재처리)
             first_image = image_list[0] if image_list else None
-            if document_processor.is_duplicate(title, first_image):
+            if document_processor.is_duplicate(title, first_image, text_content):
                 logger.log_post_skipped("professor", title, reason="중복")
                 continue
 
@@ -200,8 +200,8 @@ def main():
             }
             professor_items.append((text_content, metadata))
 
-            # MongoDB에 처리 완료 표시
-            document_processor.mark_as_processed(title, first_image)
+            # MongoDB에 처리 완료 표시 (content 해시 저장)
+            document_processor.mark_as_processed(title, first_image, text_content)
 
         all_embedding_items.extend(professor_items)
         logger.info(f"✅ 교수/직원 정보 처리 완료: {new_count}개 새 문서, {len(professor_items)}개 임베딩 아이템")
