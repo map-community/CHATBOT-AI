@@ -250,21 +250,62 @@ def main():
                     logger.info(f"   기존 문서: {original_count}개")
 
                     # 새 데이터 추가 (all_embedding_items를 메타데이터로 변환)
+                    updated_count = 0
+                    added_count = 0
+
                     for text, metadata in all_embedding_items:
-                        cached_titles.append(metadata.get('title', ''))
-                        cached_texts.append(text)
-                        cached_urls.append(metadata.get('url', ''))
-                        cached_dates.append(metadata.get('date', ''))
-                        cached_htmls.append('')  # HTML은 MongoDB에서 조회
-                        cached_content_types.append(metadata.get('content_type', 'text'))
-                        cached_sources.append(metadata.get('source', 'original_post'))
-                        cached_image_urls.append(metadata.get('image_url', ''))
-                        cached_attachment_urls.append(metadata.get('attachment_url', ''))
-                        cached_attachment_types.append(metadata.get('attachment_type', ''))
+                        title = metadata.get('title', '')
+                        source = metadata.get('source', 'original_post')
+
+                        # 교수/직원 정보: 중복 체크 후 업데이트 또는 추가
+                        if source == 'professor_info':
+                            # title과 source로 기존 항목 찾기
+                            found_idx = -1
+                            for idx in range(len(cached_titles)):
+                                if cached_titles[idx] == title and cached_sources[idx] == source:
+                                    found_idx = idx
+                                    break
+
+                            if found_idx >= 0:
+                                # 기존 항목 업데이트 (내용 변경 반영)
+                                cached_texts[found_idx] = text
+                                cached_urls[found_idx] = metadata.get('url', '')
+                                cached_dates[found_idx] = metadata.get('date', '')
+                                cached_content_types[found_idx] = metadata.get('content_type', 'text')
+                                cached_image_urls[found_idx] = metadata.get('image_url', '')
+                                cached_attachment_urls[found_idx] = metadata.get('attachment_url', '')
+                                cached_attachment_types[found_idx] = metadata.get('attachment_type', '')
+                                updated_count += 1
+                            else:
+                                # 새 교수 추가
+                                cached_titles.append(title)
+                                cached_texts.append(text)
+                                cached_urls.append(metadata.get('url', ''))
+                                cached_dates.append(metadata.get('date', ''))
+                                cached_htmls.append('')  # HTML은 MongoDB에서 조회
+                                cached_content_types.append(metadata.get('content_type', 'text'))
+                                cached_sources.append(source)
+                                cached_image_urls.append(metadata.get('image_url', ''))
+                                cached_attachment_urls.append(metadata.get('attachment_url', ''))
+                                cached_attachment_types.append(metadata.get('attachment_type', ''))
+                                added_count += 1
+                        else:
+                            # 공지사항/세미나/채용정보: 무조건 추가 (청크 중복 없음)
+                            cached_titles.append(title)
+                            cached_texts.append(text)
+                            cached_urls.append(metadata.get('url', ''))
+                            cached_dates.append(metadata.get('date', ''))
+                            cached_htmls.append('')  # HTML은 MongoDB에서 조회
+                            cached_content_types.append(metadata.get('content_type', 'text'))
+                            cached_sources.append(source)
+                            cached_image_urls.append(metadata.get('image_url', ''))
+                            cached_attachment_urls.append(metadata.get('attachment_url', ''))
+                            cached_attachment_types.append(metadata.get('attachment_type', ''))
+                            added_count += 1
 
                     new_count = len(cached_titles) - original_count
-                    logger.info(f"   새 문서: {new_count}개 추가")
-                    logger.info(f"   총 문서: {len(cached_titles)}개")
+                    logger.info(f"   추가: {added_count}개, 업데이트: {updated_count}개")
+                    logger.info(f"   총 문서: {len(cached_titles)}개 ({new_count:+d})")
 
                     # Redis에 업데이트된 데이터 저장
                     updated_cache = (

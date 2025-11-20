@@ -71,6 +71,22 @@ class EmbeddingManager:
 
         return dense_vectors
 
+    def generate_vector_id(self, title: str) -> str:
+        """
+        제목 기반 고유 벡터 ID 생성 (deterministic hash)
+
+        Args:
+            title: 문서 제목
+
+        Returns:
+            16자 해시 ID (같은 제목 = 같은 ID, 덮어쓰기 가능)
+        """
+        import hashlib
+        # MD5 해시 생성 (빠르고 충돌 확률 낮음)
+        hash_obj = hashlib.md5(title.encode('utf-8'))
+        # 앞 16자만 사용 (ID로 충분, 가독성 향상)
+        return hash_obj.hexdigest()[:16]
+
     def get_next_vector_id(self) -> int:
         """
         Pinecone에서 다음 사용할 벡터 ID 조회
@@ -232,10 +248,19 @@ class EmbeddingManager:
         sample_logged = False  # 샘플 로그 출력 플래그
 
         for i, embedding in enumerate(embeddings):
-            vector_id = start_id + i
+            # 벡터 ID 생성
+            # - 교수/직원 정보: title 기반 hash ID (내용 변경 시 덮어쓰기)
+            # - 공지사항 등: auto-increment ID (청크 중복 방지)
+            metadata = metadatas[i].copy()
+
+            if metadata.get('source') == 'professor_info':
+                # 교수 정보: title hash ID (같은 교수 = 같은 ID = 덮어쓰기)
+                vector_id = self.generate_vector_id(metadata.get('title', ''))
+            else:
+                # 공지사항/세미나/채용정보: auto-increment (청크별 고유 ID)
+                vector_id = str(start_id + i)
 
             # 메타데이터 준비 (텍스트는 임베딩 벡터에 이미 포함되므로 preview만 저장)
-            metadata = metadatas[i].copy()
 
             # 🚨 Pinecone 40KB 제한을 위한 강제 정리 (거대 필드만 제거)
             # Data URI는 이미 multimodal_processor.py에서 제거됨
