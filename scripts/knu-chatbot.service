@@ -1,0 +1,40 @@
+[Unit]
+Description=KNU Chatbot Application
+Documentation=https://github.com/map-community/CHATBOT-AI
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/knu-chatbot
+User=ubuntu
+Group=docker
+
+# 시작 명령
+ExecStart=/usr/bin/docker compose -f docker-compose.prod.yml up -d
+
+# 중지 명령
+ExecStop=/usr/bin/docker compose -f docker-compose.prod.yml down
+
+# 재시작 명령
+ExecReload=/usr/bin/docker compose -f docker-compose.prod.yml restart
+
+# 재시작 정책
+Restart=on-failure
+RestartSec=10s
+
+# 환경 변수 파일 (필요시)
+# EnvironmentFile=/opt/knu-chatbot/.env
+
+# 타임아웃 설정 (Docker 이미지 빌드 시간 고려)
+TimeoutStartSec=600
+TimeoutStopSec=300
+
+# 로그 설정
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=knu-chatbot
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,147 @@
+version: '3.8'
+
+services:
+  # MongoDB 서비스
+  mongodb:
+    image: mongo:7.0
+    container_name: knu-chatbot-mongodb
+    restart: always
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_DATABASE=knu_chatbot
+      # 프로덕션에서는 인증 설정 권장
+      # - MONGO_INITDB_ROOT_USERNAME=admin
+      # - MONGO_INITDB_ROOT_PASSWORD=${MONGODB_ROOT_PASSWORD}
+    volumes:
+      # 로컬 경로에 데이터 저장 (영속성 보장)
+      - ./data/mongodb:/data/db
+      - ./data/mongodb-config:/data/configdb
+    networks:
+      - chatbot-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    # 리소스 제한
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    # 로그 설정
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Redis 서비스
+  redis:
+    image: redis:7-alpine
+    container_name: knu-chatbot-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 1gb
+      --maxmemory-policy allkeys-lru
+      # 프로덕션에서는 비밀번호 설정 권장
+      # --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - ./data/redis:/data
+    networks:
+      - chatbot-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Flask 애플리케이션
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: knu-chatbot-app:latest
+    container_name: knu-chatbot-app
+    restart: always
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    environment:
+      # 데이터베이스 연결 설정
+      - MONGODB_URI=mongodb://mongodb:27017/
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      # - REDIS_PASSWORD=${REDIS_PASSWORD}  # Redis 비밀번호 사용 시
+
+      # Flask 프로덕션 설정
+      - FLASK_ENV=production
+      - FLASK_DEBUG=False
+      - FLASK_HOST=0.0.0.0
+      - FLASK_PORT=5000
+
+      # Python 설정
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+    volumes:
+      # 로그만 마운트 (코드는 이미지에 포함)
+      - ./logs:/app/logs
+      # 프로덕션에서는 코드 볼륨 마운트 제거 (보안)
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - chatbot-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+# 네트워크 정의
+networks:
+  chatbot-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
