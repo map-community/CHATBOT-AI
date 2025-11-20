@@ -1237,13 +1237,33 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
     # 🔍 디버깅: 전체 context 크기 및 내용 확인
     logger.info(f"   📊 전체 Context 크기: {len(relevant_docs_content)}자")
 
-    # 🔍 디버깅: 실제 LLM에 전달되는 context 전체 출력 (학번 확인용)
+    # 🔍 디버깅: 실제 LLM에 전달되는 context 요약 출력 (각 청크당 앞뒤 5줄)
     import re
     total_student_ids = len(re.findall(r'\b20\d{8}\b', relevant_docs_content))
     logger.info(f"   📋 Context 내 총 학번 개수: {total_student_ids}개")
-    logger.info(f"   📄 실제 전달되는 Context 전체:")
+    logger.info(f"   📄 실제 전달되는 Context 요약 (각 청크당 앞 5줄 + 뒤 5줄):")
     logger.info(f"{'='*80}")
-    logger.info(relevant_docs_content)
+
+    # 각 청크를 "\n\n문서 제목:"으로 분리
+    chunks = relevant_docs_content.split('\n\n문서 제목:')
+    for i, chunk in enumerate(chunks):
+        if i > 0:  # 첫 번째는 빈 문자열이므로 스킵
+            chunk = '문서 제목:' + chunk  # 분리 시 제거된 부분 복원
+
+        lines = chunk.split('\n')
+        total_lines = len(lines)
+
+        if total_lines <= 10:
+            # 10줄 이하면 전체 출력
+            logger.info(chunk)
+        else:
+            # 앞 5줄 + ... + 뒤 5줄
+            preview = '\n'.join(lines[:5]) + f'\n... ({total_lines - 10}줄 생략) ...\n' + '\n'.join(lines[-5:])
+            logger.info(preview)
+
+        if i < len(chunks) - 1:
+            logger.info('')  # 청크 구분용 빈 줄
+
     logger.info(f"{'='*80}")
 
     qa_chain = (
