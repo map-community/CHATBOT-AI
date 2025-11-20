@@ -25,15 +25,15 @@ services:
       timeout: 10s
       retries: 5
       start_period: 40s
-    # 리소스 제한
+    # 리소스 제한 (t3.medium 4GB 기준)
     deploy:
       resources:
         limits:
           cpus: '1.0'
-          memory: 2G
+          memory: 1.5G
         reservations:
-          cpus: '0.5'
-          memory: 1G
+          cpus: '0.25'
+          memory: 512M
     # 로그 설정
     logging:
       driver: "json-file"
@@ -69,10 +69,10 @@ services:
       resources:
         limits:
           cpus: '0.5'
-          memory: 1G
-        reservations:
-          cpus: '0.25'
           memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
     logging:
       driver: "json-file"
       options:
@@ -127,11 +127,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2.0'
-          memory: 4G
+          cpus: '1.5'
+          memory: 2.5G
         reservations:
-          cpus: '1.0'
-          memory: 2G
+          cpus: '0.5'
+          memory: 1G
     logging:
       driver: "json-file"
       options:
