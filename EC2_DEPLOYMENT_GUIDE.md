@@ -15,22 +15,96 @@
 
 ## EC2 인스턴스 사양 권장사항
 
-### 최소 사양
-- **인스턴스 타입**: t3.medium (2 vCPU, 4GB RAM)
-- **스토리지**: 30GB gp3 EBS
-- **운영체제**: Ubuntu 22.04 LTS
+> 실제 코드 분석 기반 권장사항 (requirements.txt, reranker.py, embedding_manager.py 분석)
 
-### 권장 사양 (프로덕션)
-- **인스턴스 타입**: t3.large (2 vCPU, 8GB RAM) 또는 c5.large
+### 📊 실제 메모리 사용량 분석
+
+**ML 모델 로딩:**
+- BGE-Reranker 모델 (BAAI/bge-reranker-v2-m3): **1.2GB**
+- Sentence-Transformers: **외부 API 사용 (Upstage)** - 메모리 불필요
+- FAISS: **CPU 버전 (faiss-cpu)** - GPU 불필요
+
+**서비스별 메모리:**
+- MongoDB: 1-2GB (데이터 양에 따라)
+- Redis: 500MB-1GB
+- Flask App + ML 모델: **2-3GB**
+- 시스템: 500MB-1GB
+
+**총 예상 메모리: 4-7.5GB**
+
+### 💰 인스턴스 타입 비교
+
+| 타입 | 사양 | 월 비용* | 적합성 | 비고 |
+|------|------|---------|--------|------|
+| t3.small | 2 vCPU, 2GB RAM | $15 | ❌ | 메모리 부족 |
+| t3.medium | 2 vCPU, 4GB RAM | $30 | ⚠️ | 빡빡함, swap 필수 |
+| **t3.large** | **2 vCPU, 8GB RAM** | **$60** | **✅ 권장** | **안정적** |
+| t3.xlarge | 4 vCPU, 16GB RAM | $120 | ✅ | 여유롭지만 비쌈 |
+| g4dn.xlarge | 4 vCPU, 16GB, GPU | $378 | 🚀 | 고트래픽 전용 |
+
+*월 비용은 24/7 운영 기준 (미국 동부 리전)
+
+### 🎯 상황별 권장
+
+**1. 개발/테스트 (트래픽 적음)**
+```
+인스턴스: t3.medium (4GB)
+- Swap 2GB 설정 필수
+- 비용 절감 ($30/월)
+- Reranker 응답 시간: 0.5-2초
+```
+
+**2. 프로덕션 (권장) ⭐**
+```
+인스턴스: t3.large (8GB)
+- 메모리 여유 확보
+- 안정적 운영
+- Reranker 응답 시간: 0.5-2초
+- 비용: $60/월
+```
+
+**3. 고트래픽 (초당 수십 요청)**
+```
+인스턴스: g4dn.xlarge (16GB + GPU)
+- Reranker GPU 가속 (10배 빠름)
+- 응답 시간: 0.05-0.2초
+- 비용: $378/월 (6배 비쌈)
+- reranker.py에서 device='cuda' 변경 필요
+```
+
+### 💡 GPU 인스턴스 사용 가이드
+
+**현재 코드 상태:**
+- `faiss-cpu` 사용 (GPU 불필요)
+- Reranker CPU 모드 (`device='cpu'` 하드코딩)
+- Embedding은 외부 API (Upstage)
+
+**GPU가 유리한 경우만:**
+- 초당 50+ 요청 처리
+- Reranking 속도가 병목
+- 0.5초 → 0.05초 단축이 중요
+
+**GPU 사용 시 코드 수정 필요:**
+```python
+# src/modules/retrieval/reranker.py:55 수정
+self.reranker = FlagReranker(
+    model_name,
+    use_fp16=use_fp16,
+    device='cuda'  # ← CPU에서 GPU로 변경
+)
+```
+
+그리고 requirements.txt 수정:
+```bash
+# faiss-cpu → faiss-gpu로 변경 (선택사항)
+# pip uninstall faiss-cpu
+# pip install faiss-gpu
+```
+
+### 📝 기본 설정
 - **스토리지**: 50GB gp3 EBS
 - **운영체제**: Ubuntu 22.04 LTS
-- **추가 볼륨**: MongoDB/Redis 데이터용 별도 EBS 볼륨 (20GB+)
-
-### 서비스별 메모리 사용량 예상
-- MongoDB: 1-2GB
-- Redis: 500MB-1GB
-- Flask App (ML 모델 포함): 2-3GB
-- 시스템 오버헤드: 500MB-1GB
+- **추가 볼륨**: 선택사항
 
 ---
 
@@ -278,6 +352,27 @@ sudo cp /opt/knu-chatbot/scripts/logrotate.conf /etc/logrotate.d/knu-chatbot
 
 ### 3. 리소스 모니터링
 
+**통합 모니터링 스크립트 (권장):**
+```bash
+# 1회 실행 (현재 상태 확인)
+/opt/knu-chatbot/scripts/monitor-resources.sh
+
+# 연속 모니터링 (5초마다 업데이트)
+/opt/knu-chatbot/scripts/monitor-resources.sh watch
+
+# 10초마다 업데이트
+/opt/knu-chatbot/scripts/monitor-resources.sh watch 10
+```
+
+이 스크립트는 다음을 모니터링합니다:
+- CPU 사용률 (전체 + 코어별)
+- 메모리 사용량 (경고 임계값 포함)
+- 디스크 사용량
+- Docker 컨테이너별 리소스
+- Top 5 메모리 사용 프로세스
+- 네트워크 포트 상태
+
+**개별 명령어:**
 ```bash
 # 실시간 시스템 리소스
 htop
@@ -290,6 +385,9 @@ df -h
 
 # MongoDB 데이터 크기
 docker exec knu-chatbot-mongodb mongosh --eval "db.stats()"
+
+# 헬스 체크 스크립트 (상태 점검)
+/opt/knu-chatbot/scripts/health-check.sh
 ```
 
 ### 4. Health Check

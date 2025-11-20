@@ -136,20 +136,20 @@ jobs:
 
           # 기존 컨테이너 중지 및 삭제
           echo "🛑 Stopping existing containers..."
-          docker compose down || true
+          docker compose -f docker-compose.prod.yml down || true
 
           # Docker 이미지 빌드
           echo "🔨 Building Docker images..."
-          docker compose build --no-cache
+          docker compose -f docker-compose.prod.yml build --no-cache
 
           # 컨테이너 시작
           echo "▶️  Starting containers..."
-          docker compose up -d
+          docker compose -f docker-compose.prod.yml up -d
 
           # 컨테이너 상태 확인
           echo ""
           echo "📊 Container status:"
-          docker compose ps
+          docker compose -f docker-compose.prod.yml ps
 
           # 컨테이너 시작 대기 (초기 시작 시간)
           echo ""
@@ -204,7 +204,7 @@ jobs:
             echo "========================================="
             echo ""
             echo "📊 Container status:"
-            docker compose ps
+            docker compose -f docker-compose.prod.yml ps
             echo ""
             echo "📋 Application logs (last 100 lines):"
             docker logs knu-chatbot-app --tail 100

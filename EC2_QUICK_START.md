@@ -4,9 +4,13 @@
 
 ## 📌 사전 준비사항
 
-1. **EC2 인스턴스**: Ubuntu 22.04 LTS, t3.medium 이상
+1. **EC2 인스턴스**: Ubuntu 22.04 LTS
+   - 권장: **t3.large (8GB RAM)** - 안정적 운영
+   - 최소: t3.medium (4GB RAM) + Swap 2GB - 개발/테스트용
 2. **보안 그룹**: 22(SSH), 80(HTTP), 443(HTTPS) 포트 열기
 3. **도메인** (선택사항): HTTPS 사용 시 필요
+
+> 📊 **왜 t3.large?** 실제 코드 분석 결과 BGE-Reranker 모델(1.2GB) + MongoDB/Redis + Flask 등 총 4-7.5GB 메모리 필요. 상세한 분석은 [EC2_DEPLOYMENT_GUIDE.md](EC2_DEPLOYMENT_GUIDE.md) 참고.
 
 ---
 
