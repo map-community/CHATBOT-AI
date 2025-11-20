@@ -176,16 +176,35 @@ def main():
         # 합치기
         combined_professor_data = professor_data + guest_professor_data + staff_data
 
-        # 교수/직원 정보도 멀티모달 처리 (중복 체크 포함)
+        # 교수/직원 정보는 텍스트만 처리 (이미지 OCR, 첨부파일 파싱 제외)
+        # 단, MongoDB 중복 체크는 수행
         # 교수 크롤러 형식: (title, text_content, image_list, attachment_list, date, url)
-        embedding_items, new_count = document_processor.process_documents_multimodal(
-            combined_professor_data,
-            category="professor"
-        )
+        new_count = 0
+        professor_items = []
+        for title, text_content, image_list, attachment_list, date, url in combined_professor_data:
+            # 중복 체크 (이미지 리스트의 첫 번째 이미지로 체크)
+            first_image = image_list[0] if image_list else None
+            if document_processor.is_duplicate(title, first_image):
+                logger.log_post_skipped("professor", title, reason="중복")
+                continue
 
-        all_embedding_items.extend(embedding_items)
+            new_count += 1
 
-        logger.info(f"✅ 교수/직원 정보 처리 완료: {new_count}개 새 문서, {len(embedding_items)}개 임베딩 아이템")
+            metadata = {
+                "title": title,
+                "url": url,
+                "date": date,
+                "content_type": "text",
+                "source": "professor_info",
+                "category": "professor"
+            }
+            professor_items.append((text_content, metadata))
+
+            # MongoDB에 처리 완료 표시
+            document_processor.mark_as_processed(title, first_image)
+
+        all_embedding_items.extend(professor_items)
+        logger.info(f"✅ 교수/직원 정보 처리 완료: {new_count}개 새 문서, {len(professor_items)}개 임베딩 아이템")
 
         # ========== 5. 임베딩 생성 및 업로드 (멀티모달) ==========
         logger.section_start("🔄 5. 멀티모달 임베딩 생성 및 Pinecone 업로드")
