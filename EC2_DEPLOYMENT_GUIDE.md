@@ -34,42 +34,85 @@
 
 ### 💰 인스턴스 타입 비교
 
+#### **전체 기능 (Reranker 포함)**
+
 | 타입 | 사양 | 월 비용* | 적합성 | 비고 |
 |------|------|---------|--------|------|
-| t3.small | 2 vCPU, 2GB RAM | $15 | ❌ | 메모리 부족 |
 | t3.medium | 2 vCPU, 4GB RAM | $30 | ⚠️ | 빡빡함, swap 필수 |
 | **t3.large** | **2 vCPU, 8GB RAM** | **$60** | **✅ 권장** | **안정적** |
 | t3.xlarge | 4 vCPU, 16GB RAM | $120 | ✅ | 여유롭지만 비쌈 |
 | g4dn.xlarge | 4 vCPU, 16GB, GPU | $378 | 🚀 | 고트래픽 전용 |
 
+#### **💡 비용 절감 버전 (Reranker 제거)** ⭐
+
+| 타입 | 사양 | 월 비용* | 메모리 사용 | 권장도 |
+|------|------|---------|-------------|--------|
+| **t4g.small (ARM)** | 2 vCPU, 2GB | **$12** | 1.5-2GB | **최고 가성비** 🏆 |
+| t3.small | 2 vCPU, 2GB RAM | $15 | 1.5-2GB | 가성비 좋음 |
+| t3.medium | 2 vCPU, 4GB RAM | $30 | 여유 | 안정 선호 시 |
+
+#### **🚀 초저비용 (Spot 인스턴스)**
+
+| 타입 | 온디맨드 | Spot | 절감률 |
+|------|----------|------|--------|
+| t3.small | $15 | $3-5 | 70-80% |
+| t3.medium | $30 | $5-10 | 70-80% |
+| t3.large | $60 | $10-15 | 75-80% |
+
 *월 비용은 24/7 운영 기준 (미국 동부 리전)
+
+> 💰 **비용 절감 팁:** Reranker 제거 시 1.2GB 메모리 절약 → t3.small (2GB)로 충분!
+> 상세한 비용 절감 방법은 [COST_OPTIMIZATION.md](COST_OPTIMIZATION.md) 참고
 
 ### 🎯 상황별 권장
 
-**1. 개발/테스트 (트래픽 적음)**
+**1. 💰 초저비용 (트래픽 적음) - 추천!** ⭐
 ```
-인스턴스: t3.medium (4GB)
-- Swap 2GB 설정 필수
-- 비용 절감 ($30/월)
-- Reranker 응답 시간: 0.5-2초
+인스턴스: t4g.small (2GB, ARM) 또는 t3.small
+비용: $12-15/월
+설정: requirements-minimal.txt 사용 (Reranker 제거)
+성능: BM25 + Dense 검색으로 충분
+메모리: 1.5-2GB 사용
 ```
 
-**2. 프로덕션 (권장) ⭐**
+**적용 방법:**
+```bash
+# requirements-minimal.txt 사용
+pip install -r requirements-minimal.txt
+
+# 또는 requirements.txt에서 FlagEmbedding 주석
+# FlagEmbedding==1.2.10  ← 이 줄 주석 처리
+```
+
+---
+
+**2. 프로덕션 (Reranker 포함)**
 ```
 인스턴스: t3.large (8GB)
-- 메모리 여유 확보
-- 안정적 운영
-- Reranker 응답 시간: 0.5-2초
-- 비용: $60/월
+비용: $60/월
+설정: 전체 requirements.txt 사용
+성능: Reranker로 검색 정확도 향상
+메모리: 4-7.5GB 사용
 ```
 
-**3. 고트래픽 (초당 수십 요청)**
+---
+
+**3. 🚀 Spot 인스턴스 (최저가)**
+```
+인스턴스: t3.medium Spot (4GB)
+비용: $5-10/월 (70-80% 할인)
+주의: 중단 가능성 있음 (백업 필수)
+설정: Auto Scaling Group 권장
+```
+
+---
+
+**4. 고트래픽 (초당 50+ 요청)**
 ```
 인스턴스: g4dn.xlarge (16GB + GPU)
-- Reranker GPU 가속 (10배 빠름)
-- 응답 시간: 0.05-0.2초
-- 비용: $378/월 (6배 비쌈)
-- reranker.py에서 device='cuda' 변경 필요
+비용: $378/월
+설정: reranker.py에서 device='cuda' 변경
+성능: Reranker GPU 가속 (10배 빠름)
 ```
 
 ### 💡 GPU 인스턴스 사용 가이드
