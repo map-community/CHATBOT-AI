@@ -1228,8 +1228,17 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
     llm = ChatUpstage(api_key=storage.upstage_api_key)
     relevant_docs_content=format_docs(relevant_docs)
 
-    # 🔍 디버깅: 전체 context 크기 확인
+    # 🔍 디버깅: 전체 context 크기 및 내용 확인
     logger.info(f"   📊 전체 Context 크기: {len(relevant_docs_content)}자")
+
+    # 🔍 디버깅: 실제 LLM에 전달되는 context 전체 출력 (학번 확인용)
+    import re
+    total_student_ids = len(re.findall(r'\b20\d{8}\b', relevant_docs_content))
+    logger.info(f"   📋 Context 내 총 학번 개수: {total_student_ids}개")
+    logger.info(f"   📄 실제 전달되는 Context 전체:")
+    logger.info(f"{'='*80}")
+    logger.info(relevant_docs_content)
+    logger.info(f"{'='*80}")
 
     qa_chain = (
         {
