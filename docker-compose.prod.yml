@@ -54,8 +54,7 @@ services:
       --appendfsync everysec
       --maxmemory 1gb
       --maxmemory-policy allkeys-lru
-      # 프로덕션에서는 비밀번호 설정 권장
-      # --requirepass ${REDIS_PASSWORD}
+
     volumes:
       - ./data/redis:/data
     networks:
