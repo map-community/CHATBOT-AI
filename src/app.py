@@ -9,6 +9,16 @@ if not logging.getLogger().handlers:
     logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Werkzeug 로거의 /health 엔드포인트 로그 필터링
+class HealthCheckFilter(logging.Filter):
+    def filter(self, record):
+        # /health 요청은 로그에서 제외
+        return 'GET /health' not in record.getMessage()
+
+# Flask의 Werkzeug 로거에 필터 추가
+werkzeug_logger = logging.getLogger('werkzeug')
+werkzeug_logger.addFilter(HealthCheckFilter())
+
 # Flask 앱 생성 함수
 def create_app():
     app = Flask(__name__)
