@@ -1182,13 +1182,27 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
         )
         documents.append(doc)
 
-    # ✅ 개선된 필터링: 키워드 매칭 + 멀티모달 컨텐츠는 항상 포함
-    # 이유: image_ocr, document_parse는 핵심 정보를 담고 있으나 키워드가 없을 수 있음
-    relevant_docs = [
-        doc for doc in documents if
-        any(keyword in doc.page_content for keyword in query_noun) or  # 키워드 매칭
-        doc.metadata.get('source') in ['image_ocr', 'document_parse']  # 멀티모달 항상 포함
-    ]
+    # ✅ 개선된 필터링: 같은 게시글의 모든 청크 vs 키워드 필터링
+    # 핵심 개선: 같은 게시글에서 수집된 청크들은 이미 BM25 + Dense + Reranker로 검증됨
+    # → 키워드 필터링으로 중요 정보(이름, 학번 등)를 담은 청크가 제거되는 문제 해결
+
+    # 모든 문서가 같은 게시글인지 확인 (제목 기준)
+    unique_titles = set(doc.metadata.get('title', '') for doc in documents)
+
+    if len(unique_titles) == 1:
+        # ✅ 같은 게시글의 청크들 → 모두 포함 (키워드 필터링 스킵)
+        # 이유: 이미 멀티스테이지 검색(BM25 + Dense + Reranker)으로 최적 게시글 선정 완료
+        # 해당 게시글의 모든 정보(본문, 이미지 OCR, 첨부파일)를 LLM에 전달해야 완전한 답변 가능
+        logger.info(f"   ✅ 같은 게시글 청크 감지 → 키워드 필터링 스킵 ({len(documents)}개 모두 포함)")
+        relevant_docs = documents
+    else:
+        # ❌ 여러 게시글 혼재 → 키워드 필터링 적용
+        logger.info(f"   🔍 여러 게시글 혼재 ({len(unique_titles)}개) → 키워드 필터링 적용")
+        relevant_docs = [
+            doc for doc in documents if
+            any(keyword in doc.page_content for keyword in query_noun) or  # 키워드 매칭
+            doc.metadata.get('source') in ['image_ocr', 'document_parse']  # 멀티모달 항상 포함
+        ]
 
     if not relevant_docs:
       return None, None
@@ -1536,7 +1550,7 @@ def get_ai_message(question):
             if enriched_docs:
                 logger.info(f"🔧 같은 게시글의 모든 청크 수집: {len(top_docs)}개 → {len(enriched_docs)}개")
 
-                # 타입별 카운트 (content_type 기준)
+                # 타입별 카운트 (source 기준으로 정확히 카운트)
                 本문_count = 0
                 image_count = 0
                 attachment_count = 0
@@ -1544,12 +1558,12 @@ def get_ai_message(question):
                 for i, (score, title, date, text, url) in enumerate(enriched_docs):
                     try:
                         idx = storage.cached_urls.index(url)
-                        ct = storage.cached_content_types[idx] if idx < len(storage.cached_content_types) else "unknown"
-                        if ct == "text":
+                        source = storage.cached_sources[idx] if idx < len(storage.cached_sources) else "unknown"
+                        if source == "original_post":
                             本문_count += 1
-                        elif ct == "image":
+                        elif source == "image_ocr":
                             image_count += 1
-                        elif ct == "attachment":
+                        elif source == "document_parse":
                             attachment_count += 1
                     except:
                         pass
