@@ -204,7 +204,68 @@ def main():
         else:
             logger.info("ℹ️  새로 처리할 문서가 없습니다.")
 
-        # ========== 6. 최종 상태 출력 ==========
+        # ========== 6. Redis 캐시 증분 업데이트 ==========
+        if all_embedding_items:
+            logger.section_start("🔄 6. Redis 캐시 증분 업데이트")
+
+            try:
+                import redis
+                import pickle
+                import os
+
+                redis_client = redis.Redis(
+                    host=os.getenv('REDIS_HOST', 'redis'),
+                    port=int(os.getenv('REDIS_PORT', 6379)),
+                    decode_responses=False  # pickle 사용 시 필요
+                )
+
+                # 기존 Redis 캐시 로드
+                cached_data = redis_client.get('pinecone_metadata')
+
+                if cached_data:
+                    logger.info("📦 기존 Redis 캐시 발견 - 증분 업데이트 시작")
+
+                    # 기존 데이터 로드
+                    (cached_titles, cached_texts, cached_urls, cached_dates,
+                     cached_htmls, cached_content_types, cached_sources,
+                     cached_image_urls, cached_attachment_urls, cached_attachment_types) = pickle.loads(cached_data)
+
+                    original_count = len(cached_titles)
+                    logger.info(f"   기존 문서: {original_count}개")
+
+                    # 새 데이터 추가 (all_embedding_items를 메타데이터로 변환)
+                    for text, metadata in all_embedding_items:
+                        cached_titles.append(metadata.get('title', ''))
+                        cached_texts.append(text)
+                        cached_urls.append(metadata.get('url', ''))
+                        cached_dates.append(metadata.get('date', ''))
+                        cached_htmls.append('')  # HTML은 MongoDB에서 조회
+                        cached_content_types.append(metadata.get('content_type', 'text'))
+                        cached_sources.append(metadata.get('source', 'original_post'))
+                        cached_image_urls.append(metadata.get('image_url', ''))
+                        cached_attachment_urls.append(metadata.get('attachment_url', ''))
+                        cached_attachment_types.append(metadata.get('attachment_type', ''))
+
+                    new_count = len(cached_titles) - original_count
+                    logger.info(f"   새 문서: {new_count}개 추가")
+                    logger.info(f"   총 문서: {len(cached_titles)}개")
+
+                    # Redis에 업데이트된 데이터 저장
+                    updated_cache = (
+                        cached_titles, cached_texts, cached_urls, cached_dates,
+                        cached_htmls, cached_content_types, cached_sources,
+                        cached_image_urls, cached_attachment_urls, cached_attachment_types
+                    )
+                    redis_client.set('pinecone_metadata', pickle.dumps(updated_cache))
+
+                    logger.info("✅ Redis 캐시 증분 업데이트 완료!")
+                else:
+                    logger.info("ℹ️  기존 Redis 캐시 없음 - 다음 앱 재시작 시 Pinecone에서 로드됩니다")
+
+            except Exception as e:
+                logger.warning(f"⚠️  Redis 캐시 업데이트 실패 (앱 재시작 시 Pinecone에서 로드됩니다): {e}")
+
+        # ========== 7. 최종 상태 출력 ==========
         logger.section_start("🎉 크롤링 완료")
 
         state_manager.print_status()
