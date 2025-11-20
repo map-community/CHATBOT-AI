@@ -1207,8 +1207,24 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
     if not relevant_docs:
       return None, None
 
+    # 🔍 디버깅: 각 청크의 내용 길이 확인 (데이터 누락 검증)
+    logger.info(f"   📋 LLM에 전달될 청크 상세:")
+    for i, doc in enumerate(relevant_docs):
+        source = doc.metadata.get('source', 'unknown')
+        content_len = len(doc.page_content)
+        # 이름 개수 추정 (학번 패턴 "202XXXXXXX" 개수)
+        import re
+        name_count = len(re.findall(r'\b20\d{8}\b', doc.page_content))
+        logger.info(f"      청크{i+1}: [{source}] {content_len}자, 학번 패턴: {name_count}개")
+        if name_count > 0:
+            # 학번이 있는 청크는 미리보기 출력
+            logger.info(f"         미리보기: {doc.page_content[:200]}...")
+
     llm = ChatUpstage(api_key=storage.upstage_api_key)
     relevant_docs_content=format_docs(relevant_docs)
+
+    # 🔍 디버깅: 전체 context 크기 확인
+    logger.info(f"   📊 전체 Context 크기: {len(relevant_docs_content)}자")
 
     qa_chain = (
         {
