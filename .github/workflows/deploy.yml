@@ -101,6 +101,12 @@ jobs:
           mkdir -p ${{ env.APP_DIR }}
           cd ${{ env.APP_DIR }}
 
+          # 기존 data/ 디렉토리 백업 (DB 데이터 보존!)
+          if [ -d "CHATBOT-AI/data" ]; then
+            echo "💾 Backing up database data (MongoDB/Redis)..."
+            mv CHATBOT-AI/data data.backup.tmp
+          fi
+
           # 기존 코드 백업 (안전장치)
           if [ -d "CHATBOT-AI" ]; then
             echo "📦 Backing up existing code..."
@@ -112,6 +118,12 @@ jobs:
           git clone https://github.com/${{ github.repository }}.git
 
           cd CHATBOT-AI
+
+          # 백업한 data/ 디렉토리 복원 (DB 데이터 복원!)
+          if [ -d "../data.backup.tmp" ]; then
+            echo "♻️  Restoring database data..."
+            mv ../data.backup.tmp data
+          fi
 
           # .env 파일 생성 (GitHub Secrets에서 환경변수 가져오기)
           echo "🔧 Creating .env file..."
