@@ -54,6 +54,32 @@
 **주의사항:**
 - Docker를 먼저 중지해야 함
 - 현재 데이터는 임시 백업됨 (복원 실패 대비)
+- **중요:** MongoDB만 복원되며, Pinecone은 별도 정리 필요
+
+---
+
+### 4. `cleanup-pinecone-sync.py` & `cleanup-pinecone.sh`
+**Pinecone-MongoDB 동기화 정리**
+
+크롤링 실패 후 복원 시 Pinecone에 남아있는 벡터를 정리합니다.
+
+```bash
+# 불일치 항목만 확인 (삭제 없음)
+./scripts/cleanup-pinecone.sh --dry-run
+
+# 실제 정리 수행
+./scripts/cleanup-pinecone.sh
+```
+
+**동작 원리:**
+1. MongoDB 문서 URL 목록 가져오기
+2. Pinecone 벡터 metadata에서 URL 가져오기
+3. Pinecone에만 있고 MongoDB에 없는 벡터 삭제
+
+**언제 사용?**
+- 크롤링 실패 후 MongoDB 복원했을 때
+- "문서를 찾을 수 없습니다" 에러가 발생할 때
+- MongoDB-Pinecone 불일치가 의심될 때
 
 ---
 
@@ -63,6 +89,11 @@
 ```bash
 # 전체 과정 자동화 (권장)
 ./scripts/crawl-with-backup.sh
+
+# 실패 시 자동으로:
+#   1. MongoDB 복원 여부 선택
+#   2. Pinecone 정리 안내
+#   3. 검증 방법 안내
 ```
 
 ### 시나리오 2: 수동 백업 → 크롤링
@@ -75,6 +106,10 @@ docker exec -it knu-chatbot-app python src/modules/run_crawler.py
 
 # 3. 실패 시 복원
 ./scripts/restore-data.sh data-backup-20251121_120000
+
+# 4. Pinecone 정리 (필요시)
+./scripts/cleanup-pinecone.sh --dry-run  # 먼저 확인
+./scripts/cleanup-pinecone.sh            # 실제 정리
 ```
 
 ### 시나리오 3: 로컬 → EC2 데이터 동기화
