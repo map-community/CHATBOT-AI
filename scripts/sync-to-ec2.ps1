@@ -31,41 +31,22 @@ if (Test-Path ".\mongo-dump-temp") {
 }
 docker cp knu-chatbot-mongodb:/dump .\mongo-dump-temp
 
-# 3. scp로 EC2로 전송 (PowerShell에서는 scp 사용)
+# 3. scp로 EC2로 전송
 Write-Host "3️⃣  EC2로 전송 중..." -ForegroundColor Yellow
-Write-Host "   (Git Bash가 설치되어 있다면 rsync가 더 빠릅니다)" -ForegroundColor Gray
 
-# Git Bash 경로 찾기
-$gitBashPath = "C:\Program Files\Git\bin\bash.exe"
+# EC2에 임시 디렉토리 생성
+ssh -i $EC2Key ${EC2User}@${EC2Host} "mkdir -p /tmp/mongo-dump"
 
-if (Test-Path $gitBashPath) {
-    # Git Bash 있으면 rsync 사용 (더 빠름)
-    Write-Host "   Git Bash 발견 - rsync 사용" -ForegroundColor Green
+# scp로 전송
+scp -i $EC2Key -r .\mongo-dump-temp\* ${EC2User}@${EC2Host}:/tmp/mongo-dump/
 
-    & $gitBashPath -c @"
-        rsync -avz --progress \
-          -e 'ssh -i /c/Users/Park/knu-chatbot-key.pem' \
-          ./mongo-dump-temp/ \
-          $EC2User@${EC2Host}:/tmp/mongo-dump/
-"@
-} else {
-    # Git Bash 없으면 scp 사용
-    Write-Host "   scp 사용 (rsync보다 느릴 수 있음)" -ForegroundColor Yellow
-    scp -i $EC2Key -r .\mongo-dump-temp\* ${EC2User}@${EC2Host}:/tmp/mongo-dump/
-}
+Write-Host "   ✅ 전송 완료" -ForegroundColor Green
 
 # 4. EC2에서 복원
 Write-Host "4️⃣  EC2에서 복원 중..." -ForegroundColor Yellow
 
-$sshCommand = @"
-cd $EC2Path
-docker cp /tmp/mongo-dump knu-chatbot-mongodb:/dump
-docker exec knu-chatbot-mongodb mongorestore --db=knu_chatbot /dump/knu_chatbot --drop
-rm -rf /tmp/mongo-dump
-echo '✅ EC2 복원 완료!'
-"@
-
-ssh -i $EC2Key ${EC2User}@${EC2Host} $sshCommand
+# Windows 줄바꿈 문제를 피하기 위해 한 줄로 실행
+ssh -i $EC2Key ${EC2User}@${EC2Host} "cd $EC2Path && docker cp /tmp/mongo-dump knu-chatbot-mongodb:/dump && docker exec knu-chatbot-mongodb mongorestore --db=knu_chatbot /dump/knu_chatbot --drop && rm -rf /tmp/mongo-dump && echo '✅ EC2 복원 완료!'"
 
 # 5. 로컬 임시 파일 정리
 Write-Host "5️⃣  로컬 임시 파일 정리 중..." -ForegroundColor Yellow
@@ -77,7 +58,14 @@ Write-Host "✅ 동기화 완료!" -ForegroundColor Green
 Write-Host "=========================================" -ForegroundColor Green
 Write-Host "EC2 주소: http://$EC2Host:5000" -ForegroundColor Gray
 Write-Host ""
-Write-Host "💡 확인 방법:" -ForegroundColor Yellow
-Write-Host "   ssh -i $EC2Key ${EC2User}@${EC2Host}" -ForegroundColor Gray
-Write-Host "   docker logs -f knu-chatbot-app" -ForegroundColor Gray
+Write-Host "⚠️  중요: Flask 앱 재시작 필요!" -ForegroundColor Yellow
+Write-Host "   MongoDB 데이터가 변경되었으므로 Redis 캐시를 새로 생성해야 합니다." -ForegroundColor Gray
+Write-Host ""
+Write-Host "📋 다음 단계 (EC2에서 실행):" -ForegroundColor Yellow
+Write-Host "   1. SSH 접속: ssh -i $EC2Key ${EC2User}@${EC2Host}" -ForegroundColor Gray
+Write-Host "   2. 앱 재시작: docker restart knu-chatbot-app" -ForegroundColor Gray
+Write-Host "   3. 로그 확인: docker logs -f knu-chatbot-app" -ForegroundColor Gray
+Write-Host ""
+Write-Host "💡 또는 한 번에 실행:" -ForegroundColor Yellow
+Write-Host "   ssh -i $EC2Key ${EC2User}@${EC2Host} 'docker restart knu-chatbot-app'" -ForegroundColor Gray
 Write-Host ""
