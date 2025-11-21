@@ -836,8 +836,8 @@ def best_docs(user_question):
           # BM25 결과 필터링
           original_bm25_count = len(Bm25_best_docs)
           Bm25_best_docs = [
-              (score, title, date, text, url)
-              for score, title, date, text, url in Bm25_best_docs
+              (title, date, text, url)
+              for title, date, text, url in Bm25_best_docs
               if matches_temporal_filter(date, temporal_filter)
           ]
 
