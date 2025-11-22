@@ -631,20 +631,14 @@ def parse_temporal_intent(query, current_date=None):
             logger.info(f"⏰ 시간 표현 감지 (규칙): '{keyword}' → {time_filter}")
             return time_filter
 
-    # 2단계: 복잡한 시간 표현은 LLM으로 해석 (유연하고 정확)
-    # "저번학기", "작년 2학기", "다음 학기", "지난달" 등
-    complex_temporal_keywords = ['학기', '학년', '년도', '작년', '올해', '내년', '지난', '다음', '전', '후']
-
-    # ✅ 3단계: "진행중" 관련 키워드도 LLM으로 해석 (새로 추가!)
-    # "현재", "지금", "당장", "진행중", "모집중" 등
-    ongoing_keywords = ['현재', '지금', '당장', '요즘', '이번에', '진행중', '모집중', '접수중', '신청중']
-
-    if any(keyword in query for keyword in complex_temporal_keywords + ongoing_keywords):
-        logger.info(f"🤔 시간 표현 감지 → LLM 분석 시작...")
-        llm_filter = rewrite_query_with_llm(query, current_date)
-        if llm_filter:
-            logger.info(f"✨ LLM 분석 결과: {llm_filter}")
-            return llm_filter
+    # 2단계: 모든 질문을 LLM으로 분석 (시간 의도 파악)
+    # 키워드 체크 제거 → 모든 질문에서 시간 의도 감지
+    # 예: "인턴십 있어?" → 암묵적으로 현재 진행중인 것을 묻는 것
+    logger.info(f"🤔 LLM으로 시간 의도 분석 중...")
+    llm_filter = rewrite_query_with_llm(query, current_date)
+    if llm_filter:
+        logger.info(f"✨ LLM 분석 결과: {llm_filter}")
+        return llm_filter
 
     return None
 
@@ -735,7 +729,7 @@ def rewrite_query_with_llm(query, current_date):
 """
 
     try:
-        llm = ChatUpstage(api_key=storage.upstage_api_key, model="solar-pro")
+        llm = ChatUpstage(api_key=storage.upstage_api_key, model="solar-mini")
         response = llm.invoke(prompt)
 
         # JSON 파싱
