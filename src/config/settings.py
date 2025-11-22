@@ -78,6 +78,17 @@ BM25_K1 = 1.5
 BM25_B = 0.75
 TOP_K_DOCUMENTS = 30
 CLUSTER_SIMILARITY_THRESHOLD = 0.89
+
+# 최소 유사도 임계값 (Minimum Similarity Score Threshold)
+# - 검색된 문서와 질문의 관련성을 판단하는 기준점
+# - 점수 구성: BM25(~5점) + Dense Retrieval(~1점) + Recency Boost(최대 1.5배)
+# - 임계값 미만: "해당 질문은 공지사항에 없는 내용입니다" 응답
+# - 임계값 이상: LLM 답변 생성
+#
+# 조정 가이드:
+#   * 값이 너무 높으면 (2.5+): 정상 질문도 차단될 수 있음 (재현율↓)
+#   * 값이 너무 낮으면 (1.0-): 관련 없는 질문에도 답변 (정밀도↓)
+#   * 현재값 1.8: 실험적으로 설정된 값 (추후 A/B 테스트로 최적화 권장)
 MINIMUM_SIMILARITY_SCORE = 1.8
 
 # Text Splitting Configuration
