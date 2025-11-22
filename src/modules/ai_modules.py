@@ -857,57 +857,6 @@ def best_docs(user_question):
       pinecone_time = time.time() - dense_time
       print(f"파인콘에서 top k 뽑는데 걸리는 시간 {pinecone_time}")
 
-      # ✅ 시간 필터 적용 (검색 결과를 날짜 기준으로 필터링)
-      if temporal_filter:
-          from datetime import datetime
-
-          def matches_temporal_filter(doc_date_str, time_filter):
-              """날짜 문자열이 시간 필터 조건을 만족하는지 확인"""
-              try:
-                  # ISO 포맷 파싱: "2024-09-19T10:57:00+09:00"
-                  doc_date = datetime.fromisoformat(doc_date_str.replace('+09:00', ''))
-                  doc_year = doc_date.year
-                  doc_month = doc_date.month
-
-                  # 학기 계산
-                  if 3 <= doc_month <= 8:
-                      doc_semester = 1
-                  else:
-                      doc_semester = 2
-                      if doc_month <= 2:
-                          doc_year -= 1
-
-                  # 필터 조건 체크
-                  if 'year' in time_filter and doc_year != time_filter['year']:
-                      return False
-                  if 'semester' in time_filter and doc_semester != time_filter['semester']:
-                      return False
-                  if 'year_from' in time_filter and doc_year < time_filter['year_from']:
-                      return False
-
-                  return True
-              except Exception as e:
-                  logger.debug(f"날짜 파싱 실패: {doc_date_str} - {e}")
-                  return True  # 파싱 실패 시 포함 (안전장치)
-
-          # BM25 결과 필터링
-          original_bm25_count = len(Bm25_best_docs)
-          Bm25_best_docs = [
-              (title, date, text, url)
-              for title, date, text, url in Bm25_best_docs
-              if matches_temporal_filter(date, temporal_filter)
-          ]
-
-          # Dense 결과 필터링
-          original_dense_count = len(combine_dense_docs)
-          combine_dense_docs = [
-              (score, doc)
-              for score, doc in combine_dense_docs
-              if matches_temporal_filter(doc[1], temporal_filter)  # doc[1] = date
-          ]
-
-          logger.info(f"📅 날짜 필터링 완료: BM25 {original_bm25_count}→{len(Bm25_best_docs)}개, Dense {original_dense_count}→{len(combine_dense_docs)}개")
-
       # ## 결과 출력
       # print("\n통합된 파인콘문서 유사도:")
       # for score, doc in combine_dense_docs:
