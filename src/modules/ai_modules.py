@@ -1073,9 +1073,31 @@ def format_docs(docs):
 
 def get_answer_from_chain(best_docs, user_question,query_noun):
 
+    # ✅ HTML(Markdown) 중복 제거 - 비싼 Upstage API 결과 최대 활용!
+    # 같은 이미지의 여러 청크가 모두 같은 Markdown을 가지므로 첫 번째만 사용
+    seen_htmls = set()
+    deduplicated_docs = []
+    duplicate_html_count = 0
+
+    for doc in best_docs:
+        html = doc[5] if len(doc) > 5 else ""
+
+        # HTML이 있고 이미 본 적 있으면 스킵 (중복 Markdown 제거)
+        if html and html in seen_htmls:
+            duplicate_html_count += 1
+            continue
+
+        # 새로운 HTML이거나 HTML이 없으면 추가
+        if html:
+            seen_htmls.add(html)
+        deduplicated_docs.append(doc)
+
+    if duplicate_html_count > 0:
+        logger.info(f"   🔄 Markdown 중복 제거: {len(best_docs)}개 → {len(deduplicated_docs)}개 ({duplicate_html_count}개 중복 제거)")
+
     # ✅ best_docs에서 메타데이터 직접 추출 (URL로 다시 찾지 않음)
     documents = []
-    for doc in best_docs:
+    for doc in deduplicated_docs:
         score = doc[0]
         title = doc[1]
         date = doc[2]
