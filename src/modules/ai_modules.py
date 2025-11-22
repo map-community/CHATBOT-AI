@@ -1536,7 +1536,7 @@ def get_ai_message(question):
                 logger.info(f"🔧 같은 게시글의 모든 청크 수집: {len(top_docs)}개 → {len(enriched_docs)}개")
 
                 # 타입별 카운트 (source 기준으로 정확히 카운트)
-                本문_count = 0
+                original_post_count = 0
                 image_count = 0
                 attachment_count = 0
 
@@ -1549,7 +1549,7 @@ def get_ai_message(question):
                     elif source == "document_parse":
                         attachment_count += 1
 
-                logger.info(f"   📦 본문 청크: {本문_count}개")
+                logger.info(f"   📦 본문 청크: {original_post_count}개")
                 logger.info(f"   🖼️  이미지 OCR 청크: {image_count}개")
                 logger.info(f"   📎 첨부파일 청크: {attachment_count}개")
                 top_docs = enriched_docs
