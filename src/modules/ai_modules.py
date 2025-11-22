@@ -1215,13 +1215,7 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
     for i, doc in enumerate(relevant_docs):
         source = doc.metadata.get('source', 'unknown')
         content_len = len(doc.page_content)
-        # 이름 개수 추정 (학번 패턴 "202XXXXXXX" 개수)
-        import re
-        name_count = len(re.findall(r'\b20\d{8}\b', doc.page_content))
-        logger.info(f"      청크{i+1}: [{source}] {content_len}자, 학번 패턴: {name_count}개")
-        if name_count > 0:
-            # 학번이 있는 청크는 미리보기 출력
-            logger.info(f"         미리보기: {doc.page_content[:200]}...")
+        logger.info(f"      청크{i+1}: [{source}] {content_len}자")
 
     # LLM 초기화 (명단 질문을 위한 충분한 max_tokens 설정)
     llm = ChatUpstage(
@@ -1232,12 +1226,7 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
 
     # 🔍 디버깅: 전체 context 크기 및 내용 확인
     logger.info(f"   📊 전체 Context 크기: {len(relevant_docs_content)}자")
-
-    # 🔍 디버깅: 실제 LLM에 전달되는 context 요약 출력 (각 청크당 앞뒤 5줄)
-    import re
-    total_student_ids = len(re.findall(r'\b20\d{8}\b', relevant_docs_content))
-    logger.info(f"   📋 Context 내 총 학번 개수: {total_student_ids}개")
-    logger.info(f"   📄 실제 전달되는 Context 요약 (각 청크당 앞 5줄 + 뒤 5줄):")
+    logger.info(f"   📄 실제 전달되는 Context 요약 (각 청크당 앞 20자 + 뒤 20자):")
     logger.info(f"{'='*80}")
 
     # 각 청크를 "\n\n문서 제목:"으로 분리
@@ -1246,15 +1235,14 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
         if i > 0:  # 첫 번째는 빈 문자열이므로 스킵
             chunk = '문서 제목:' + chunk  # 분리 시 제거된 부분 복원
 
-        lines = chunk.split('\n')
-        total_lines = len(lines)
+        chunk_len = len(chunk)
 
-        if total_lines <= 10:
-            # 10줄 이하면 전체 출력
+        if chunk_len <= 40:
+            # 40자 이하면 전체 출력
             logger.info(chunk)
         else:
-            # 앞 5줄 + ... + 뒤 5줄
-            preview = '\n'.join(lines[:5]) + f'\n... ({total_lines - 10}줄 생략) ...\n' + '\n'.join(lines[-5:])
+            # 앞 20자 + ... + 뒤 20자
+            preview = chunk[:20] + f'... ({chunk_len - 40}자 생략) ...' + chunk[-20:]
             logger.info(preview)
 
         if i < len(chunks) - 1:
