@@ -963,20 +963,9 @@ def best_docs(user_question):
       unique_urls = len(seen_urls)
       print(f"URL 중복 제거: {dedup_f_time:.4f}초 (원본: {original_count}개 → 중복 {duplicate_count}개 제거 → 최종: {len(final_best_docs)}개 서로 다른 게시글, 고유 URL {unique_urls}개)")
 
-      # 문서 클러스터링 및 최적 클러스터 선택 (리팩토링됨 - DocumentClusterer 사용)
-      cluster_time = time.time()
-      final_cluster, count = storage.document_clusterer.cluster_and_select(
-          documents=final_best_docs,
-          query_nouns=query_noun,
-          all_titles=titles_from_pinecone,
-          all_dates=dates_from_pinecone,
-          all_texts=texts_from_pinecone,
-          all_urls=urls_from_pinecone
-      )
-      cluster_f_time = time.time() - cluster_time
-      print(f"cluster로 문서 추출하는 시간:{cluster_f_time}")
-
-      return final_cluster, query_noun
+      # 클러스터링 제거: URL 중복 제거만으로 충분 (각 게시글당 대표 청크 1개 선택 완료)
+      # get_ai_message()에서 최종 선택된 문서의 전체 청크를 다시 수집하므로 클러스터링 불필요
+      return final_best_docs, query_noun
 
 prompt_template = """당신은 경북대학교 컴퓨터학부 공지사항을 전달하는 직원이고, 사용자의 질문에 대해 올바른 공지사항의 내용을 참조하여 정확하게 전달해야 할 의무가 있습니다.
 현재 한국 시간: {current_time}
