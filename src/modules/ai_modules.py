@@ -635,11 +635,15 @@ def parse_temporal_intent(query, current_date=None):
     # "저번학기", "작년 2학기", "다음 학기", "지난달" 등
     complex_temporal_keywords = ['학기', '학년', '년도', '작년', '올해', '내년', '지난', '다음', '전', '후']
 
-    if any(keyword in query for keyword in complex_temporal_keywords):
-        logger.info(f"🤔 복잡한 시간 표현 감지 → LLM 리라이팅 시작...")
+    # ✅ 3단계: "진행중" 관련 키워드도 LLM으로 해석 (새로 추가!)
+    # "현재", "지금", "당장", "진행중", "모집중" 등
+    ongoing_keywords = ['현재', '지금', '당장', '요즘', '이번에', '진행중', '모집중', '접수중', '신청중']
+
+    if any(keyword in query for keyword in complex_temporal_keywords + ongoing_keywords):
+        logger.info(f"🤔 시간 표현 감지 → LLM 분석 시작...")
         llm_filter = rewrite_query_with_llm(query, current_date)
         if llm_filter:
-            logger.info(f"✨ LLM 리라이팅 결과: {llm_filter}")
+            logger.info(f"✨ LLM 분석 결과: {llm_filter}")
             return llm_filter
 
     return None
@@ -683,26 +687,49 @@ def rewrite_query_with_llm(query, current_date):
 
 사용자 질문: "{query}"
 
-위 질문에서 시간 표현을 추출하고, 정확한 학년도와 학기를 JSON 형식으로 반환하세요.
+질문을 분석하여 다음을 판단하세요:
+
+1. **특정 학기를 묻는가?** (예: "저번학기", "2학기")
+2. **현재 진행중인 것을 묻는가?**
+   - 명시적 표현: "현재", "지금", "당장", "요즘", "진행중", "모집중", "접수중", "신청중"
+   - 암묵적 표현: 시간 표현 없이 인턴십, 세미나, 채용 등을 물으면 보통 현재 진행중인 것을 의미
+   - 예: "인턴십 어디 있어?" → 현재 지원 가능한 인턴십
+   - 예: "세미나 일정" → 앞으로 열릴 세미나
+3. **예외 (시간 무관)**: 정책/규정/제도 질문은 시간과 무관
+   - 예: "졸업요건", "에이빅 인정 기준", "복수전공 자격"
+4. **명시적 과거**: "작년", "지난", "2024년도" 등
 
 출력 형식 (JSON만):
 {{
-  "year": 2025,
-  "semester": 1,
-  "reasoning": "현재 2025년 2학기이므로, 저번학기는 2025년 1학기입니다"
-}}
-
-시간 표현이 없으면:
-{{
-  "year": null,
-  "semester": null,
-  "reasoning": "시간 표현 없음"
+  "year": 2025 또는 null,
+  "semester": 1 또는 null,
+  "is_ongoing": true 또는 false,
+  "is_policy": true 또는 false,
+  "reasoning": "판단 근거"
 }}
 
 예시:
-- "저번학기" → {{"year": {current_year if current_semester == 2 else current_year - 1}, "semester": {2 if current_semester == 1 else 1}, "reasoning": "..."}}
-- "작년 2학기" → {{"year": {current_year - 1}, "semester": 2, "reasoning": "..."}}
-- "다음 학기" → {{"year": {current_year + 1 if current_semester == 2 else current_year}, "semester": {1 if current_semester == 2 else 2}, "reasoning": "..."}}
+
+- "저번학기 장학금"
+  → {{"year": {current_year if current_semester == 2 else current_year - 1}, "semester": {2 if current_semester == 1 else 1}, "is_ongoing": false, "is_policy": false, "reasoning": "저번학기를 명시적으로 요청"}}
+
+- "현재 진행중인 인턴십"
+  → {{"year": null, "semester": null, "is_ongoing": true, "is_policy": false, "reasoning": "'현재 진행중'이라는 명시적 표현"}}
+
+- "인턴십 어디 있어?"
+  → {{"year": null, "semester": null, "is_ongoing": true, "is_policy": false, "reasoning": "시간 표현 없지만 인턴십은 보통 현재 지원 가능한 것을 묻는 것"}}
+
+- "지금 신청할 수 있는 세미나"
+  → {{"year": null, "semester": null, "is_ongoing": true, "is_policy": false, "reasoning": "'지금', '신청할 수 있는'은 현재 진행중을 의미"}}
+
+- "졸업요건이 뭐야?"
+  → {{"year": null, "semester": null, "is_ongoing": false, "is_policy": true, "reasoning": "정책 질문, 시간 무관"}}
+
+- "작년 수혜자 누구야?"
+  → {{"year": {current_year - 1}, "semester": null, "is_ongoing": false, "is_policy": false, "reasoning": "'작년'이라는 명시적 과거 표현"}}
+
+- "튜터 명단"
+  → {{"year": null, "semester": null, "is_ongoing": true, "is_policy": false, "reasoning": "시간 표현 없지만 튜터는 현재 활동중인 사람을 묻는 것"}}
 
 **중요**: JSON만 출력하고, 다른 텍스트는 포함하지 마세요.
 """
@@ -714,18 +741,51 @@ def rewrite_query_with_llm(query, current_date):
         # JSON 파싱
         result = json.loads(response.content.strip())
 
-        if result.get('year') is None or result.get('semester') is None:
+        # 로그: LLM 추론 과정
+        logger.info(f"   💬 LLM 시간 분석: {result.get('reasoning', '')}")
+
+        # ✅ 새로운 필드 추출
+        is_ongoing = result.get('is_ongoing', False)
+        is_policy = result.get('is_policy', False)
+        year = result.get('year')
+        semester = result.get('semester')
+
+        # 필터 조건 생성
+        if is_ongoing:
+            # "진행중" 의도 감지
+            logger.info(f"   🎯 '진행중' 의도 감지됨 (is_ongoing=true)")
+            return {
+                'type': 'ongoing',
+                'is_ongoing': True,
+                'is_policy': is_policy
+            }
+
+        elif year is not None and semester is not None:
+            # 학기 필터 (기존 로직 유지)
+            logger.info(f"   📅 학기 필터: {year}학년도 {semester}학기")
+            return {
+                'year': year,
+                'semester': semester,
+                'is_ongoing': False,
+                'is_policy': is_policy
+            }
+
+        elif is_policy:
+            # 정책 질문 (시간 무관)
+            logger.info(f"   📜 정책 질문 감지 (시간 필터 비활성화)")
+            return {
+                'type': 'policy',
+                'is_policy': True,
+                'is_ongoing': False
+            }
+
+        else:
+            # 시간 표현 없음
+            logger.debug(f"   ℹ️  시간 표현 없음")
             return None
 
-        logger.info(f"   💬 LLM 추론: {result.get('reasoning', '')}")
-
-        return {
-            'year': result['year'],
-            'semester': result['semester']
-        }
-
     except Exception as e:
-        logger.warning(f"⚠️  LLM 리라이팅 실패 (규칙 기반으로 폴백): {e}")
+        logger.warning(f"⚠️  LLM 시간 파싱 실패 (규칙 기반으로 폴백): {e}")
         return None
 
 
