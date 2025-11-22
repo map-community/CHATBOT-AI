@@ -1083,6 +1083,27 @@ prompt_template = """당신은 경북대학교 컴퓨터학부 공지사항을 �
 13. 표의 헤더와 데이터가 섞여있거나 줄바꿈이 누락된 경우:
   - 패턴을 파악하여 정보를 재구성하세요.
   - 불확실한 경우 "문서가 일부 손상되어 정확한 정보를 확인하기 어렵습니다. 참고 URL을 확인하세요."라고 명시하세요.
+
+**출력 형식 (매우 중요!):**
+반드시 다음 JSON 형식으로만 출력하세요. 다른 텍스트는 포함하지 마세요.
+
+{{
+  "can_answer": true 또는 false,
+  "answer": "답변 내용"
+}}
+
+**can_answer 판단 기준:**
+- true: 제공된 문서에서 질문에 대한 답을 찾았음
+- false: 제공된 문서에서 질문에 대한 답을 찾지 못했음 (문서 내용과 질문이 무관)
+
+**예시:**
+
+질문: "흡연구역 어디야?" + TUTOR 근무일지 문서
+→ {{"can_answer": false, "answer": "제공된 문서에는 흡연구역에 대한 정보가 없습니다. 일반적으로 캠퍼스 내 흡연구역은 학교 홈페이지나 안내판을 통해 확인할 수 있습니다."}}
+
+질문: "튜터 근무시간은?" + TUTOR 근무일지 문서
+→ {{"can_answer": true, "answer": "튜터 근무시간은 다음과 같습니다: ..."}}
+
 답변:"""
 
 # PromptTemplate 객체 생성
@@ -1712,9 +1733,49 @@ def get_ai_message(question):
         answer_f_time=time.time()-answer_time
         print(f"답변 생성하는 시간: {answer_f_time}")
 
-        logger.info(f"💬 LLM 답변 생성 완료:")
-        logger.info(f"   답변 길이: {len(answer_result)}자")
-        logger.info(f"   답변 미리보기: {answer_result[:150]}...")
+        # ✅ JSON 파싱 시도 (LLM이 JSON 형식으로 응답했는지 확인)
+        import json
+        import re
+
+        llm_can_answer = None  # LLM이 판단한 can_answer 값
+        llm_answer_text = None  # LLM이 생성한 답변 텍스트
+
+        try:
+            # JSON 파싱 시도
+            # LLM이 가끔 ```json...``` 로 감쌀 수 있으므로 정리
+            clean_result = answer_result.strip()
+            if clean_result.startswith("```json"):
+                clean_result = clean_result[7:]
+            if clean_result.startswith("```"):
+                clean_result = clean_result[3:]
+            if clean_result.endswith("```"):
+                clean_result = clean_result[:-3]
+            clean_result = clean_result.strip()
+
+            parsed = json.loads(clean_result)
+
+            # JSON 파싱 성공
+            if "can_answer" in parsed and "answer" in parsed:
+                llm_can_answer = parsed["can_answer"]
+                llm_answer_text = parsed["answer"]
+                logger.info(f"✅ JSON 파싱 성공: can_answer={llm_can_answer}")
+                logger.info(f"   답변 길이: {len(llm_answer_text)}자")
+                logger.info(f"   답변 미리보기: {llm_answer_text[:150]}...")
+            else:
+                logger.warning(f"⚠️ JSON 파싱 성공했으나 필수 필드 누락 → 폴백 사용")
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"⚠️ JSON 파싱 실패 (LLM이 형식 안 지킴) → 폴백 패턴 매칭 사용")
+            logger.debug(f"   에러: {e}")
+            logger.debug(f"   원본 응답: {answer_result[:200]}...")
+
+        # JSON 파싱 실패 시: 기존 answer_result 사용
+        if llm_answer_text is None:
+            llm_answer_text = answer_result
+            logger.info(f"💬 LLM 답변 생성 완료 (비-JSON 형식):")
+            logger.info(f"   답변 길이: {len(llm_answer_text)}자")
+            logger.info(f"   답변 미리보기: {llm_answer_text[:150]}...")
+
         logger.info(f"   사용된 참고문서 수: {len(relevant_docs)}")
 
         # 답변 검증 및 경고 추가 (범용)
@@ -1724,29 +1785,34 @@ def get_ai_message(question):
         # 완전성 요구 + Context와 답변 차이가 크면 경고
         if has_completeness_request:
             # Context에 있는 숫자 패턴 (학번, 날짜 등)
-            import re
             context_numbers = len(re.findall(r'\b20\d{6,8}\b', relevant_docs_content))
-            answer_numbers = len(re.findall(r'\b20\d{6,8}\b', answer_result))
+            answer_numbers = len(re.findall(r'\b20\d{6,8}\b', llm_answer_text))
 
             logger.info(f"   📊 완전성 검증: Context {context_numbers}건 / 답변 {answer_numbers}건")
 
             # Context의 50% 미만만 답변에 포함되면 경고
             if context_numbers >= 10 and answer_numbers < context_numbers * 0.5:
                 logger.warning(f"   ⚠️ 완전성 요구했으나 답변 불완전! LLM이 임의로 요약한 것으로 판단")
-                answer_result += f"\n\n⚠️ 일부 내용이 생략되었을 수 있습니다 (문서: 약 {context_numbers}건 / 답변: {answer_numbers}건). 전체 내용은 참고 URL을 확인하세요."
+                llm_answer_text += f"\n\n⚠️ 일부 내용이 생략되었을 수 있습니다 (문서: 약 {context_numbers}건 / 답변: {answer_numbers}건). 전체 내용은 참고 URL을 확인하세요."
 
         doc_references = "\n".join([
             f"\n참고 문서 URL: {doc.metadata['url']}"
             for doc in relevant_docs[:1] if doc.metadata.get('url') != 'No URL'
         ])
 
-        # 답변 가능 여부 판단 (PROMPT에서 지시한 특정 문구로 시작하는지 확인)
-        # "제공된 문서에는 ... 없습니다" 패턴 감지 (LLM이 변형된 표현 사용 가능)
-        answer_start = answer_result[:150]  # 앞부분만 체크
-        if answer_start.startswith("제공된 문서에는") and any(phrase in answer_start for phrase in ["없습니다", "포함되어 있지 않습니다"]):
-            can_answer = False
+        # ✅ can_answer 최종 판단
+        if llm_can_answer is not None:
+            # JSON 파싱 성공 → LLM이 직접 판단한 값 사용
+            can_answer = llm_can_answer
+            logger.info(f"✅ can_answer 판단: JSON 파싱 결과 사용 (LLM 직접 판단: {can_answer})")
         else:
-            can_answer = True
+            # JSON 파싱 실패 → 폴백: 패턴 매칭으로 판단
+            answer_start = llm_answer_text[:150]
+            if answer_start.startswith("제공된 문서에는") and any(phrase in answer_start for phrase in ["없습니다", "포함되어 있지 않습니다"]):
+                can_answer = False
+            else:
+                can_answer = True
+            logger.info(f"⚠️ can_answer 판단: 폴백 패턴 매칭 사용 (결과: {can_answer})")
 
         if can_answer:
             logger.info("✅ LLM이 문서에서 답변을 찾았습니다")
@@ -1755,7 +1821,7 @@ def get_ai_message(question):
 
         # JSON 형식으로 반환할 객체 생성
         data = {
-            "answer": answer_result,
+            "answer": llm_answer_text,  # JSON 파싱된 답변 또는 원본 답변
             "can_answer": can_answer,  # 답변 가능 여부
             "references": doc_references,
             "disclaimer": "항상 정확한 답변을 제공하지 못할 수 있습니다. 아래의 URL들을 참고하여 정확하고 자세한 정보를 확인하세요.",
