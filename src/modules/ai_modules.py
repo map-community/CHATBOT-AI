@@ -1021,8 +1021,44 @@ def best_docs(user_question):
       # get_ai_message()에서 최종 선택된 문서의 전체 청크를 다시 수집하므로 클러스터링 불필요
       return final_best_docs, query_noun
 
+def format_temporal_intent(temporal_filter):
+    """
+    시간 의도를 LLM이 이해하기 쉬운 문자열로 변환
+
+    Args:
+        temporal_filter: parse_temporal_intent()의 반환값
+
+    Returns:
+        str: 시간 의도 설명
+    """
+    if not temporal_filter:
+        return "시간 의도 없음 (일반 검색)"
+
+    if temporal_filter.get('is_ongoing'):
+        return "🎯 현재 진행중인 것을 묻고 있습니다 (마감일이 지나지 않은 항목, 현재 신청/참여 가능한 것)"
+
+    elif temporal_filter.get('is_policy'):
+        return "📜 정책/규정 질문 (시간 무관, 최신 정보 제공)"
+
+    elif temporal_filter.get('year') and temporal_filter.get('semester'):
+        year = temporal_filter['year']
+        semester = temporal_filter['semester']
+        return f"📅 {year}학년도 {semester}학기 정보를 묻고 있습니다"
+
+    elif temporal_filter.get('year'):
+        year = temporal_filter['year']
+        return f"📅 {year}년도 정보를 묻고 있습니다"
+
+    elif temporal_filter.get('year_from'):
+        year_from = temporal_filter['year_from']
+        return f"📅 {year_from}년 이후 최근 정보를 묻고 있습니다"
+
+    else:
+        return "시간 의도 없음"
+
 prompt_template = """당신은 경북대학교 컴퓨터학부 공지사항을 전달하는 직원이고, 사용자의 질문에 대해 올바른 공지사항의 내용을 참조하여 정확하게 전달해야 할 의무가 있습니다.
 현재 한국 시간: {current_time}
+사용자 시간 의도: {temporal_intent}
 
 주어진 컨텍스트를 기반으로 다음 질문에 답변해주세요:
 
@@ -1033,6 +1069,10 @@ prompt_template = """당신은 경북대학교 컴퓨터학부 공지사항을 �
 답변 시 다음 사항을 고려해주세요:
 
 1. **시간 비교 및 명시 (매우 중요!):**
+  - ⚠️ **사용자의 시간 의도를 반드시 확인**하세요. 위의 "사용자 시간 의도"를 참고하세요.
+  - 사용자가 "현재 진행중"을 묻는데 문서가 과거 것이면 **명확히 알려주세요**:
+    * "⚠️ 이 정보는 20XX년 XX월에 종료되었습니다. 현재 진행중인 항목이 아닙니다."
+    * "마감일이 지났습니다. 최신 공지사항을 확인하세요."
   - 질문에 시간 표현(이번학기, 올해 등)이 없더라도, 반드시 문서의 날짜와 현재 시간을 비교하세요.
   - 문서가 올해가 아니라면 **반드시 명시**하세요. 예: "⚠️ 주의: 이 정보는 2024년 자료입니다."
   - 이벤트 기간 비교:
@@ -1084,7 +1124,7 @@ prompt_template = """당신은 경북대학교 컴퓨터학부 공지사항을 �
 # PromptTemplate 객체 생성
 PROMPT = PromptTemplate(
     template=prompt_template,
-    input_variables=["current_time", "context", "question"]
+    input_variables=["current_time", "temporal_intent", "context", "question"]
 )
 
 def format_docs(docs):
@@ -1125,7 +1165,7 @@ def format_docs(docs):
     return "\n\n".join(formatted)
 
 
-def get_answer_from_chain(best_docs, user_question,query_noun):
+def get_answer_from_chain(best_docs, user_question, query_noun, temporal_filter=None):
 
     # ✅ HTML(Markdown) 중복 제거 - 비싼 Upstage API 결과 최대 활용!
     # 같은 이미지의 여러 청크가 모두 같은 Markdown을 가지므로 첫 번째만 사용
@@ -1326,6 +1366,7 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
     qa_chain = (
         {
             "current_time": lambda _: get_korean_time().strftime("%Y년 %m월 %d일 %H시 %M분"),
+            "temporal_intent": lambda _: format_temporal_intent(temporal_filter),
             "context": RunnableLambda(lambda _: relevant_docs_content),
             "question": RunnablePassthrough()
         }
@@ -1344,6 +1385,11 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
 
 def get_ai_message(question):
     s_time=time.time()
+
+    # ✅ 시간 의도 파싱 (LLM 답변 시 활용)
+    from datetime import datetime
+    temporal_filter = parse_temporal_intent(question, datetime.now())
+
     best_time=time.time()
     top_doc, query_noun = best_docs(question)  # 가장 유사한 문서 가져오기
     best_f_time=time.time()-best_time
@@ -1615,7 +1661,7 @@ def get_ai_message(question):
         print(f"청크 수집 시간: {enrich_f_time}")
 
         chain_time=time.time()
-        qa_chain, relevant_docs, relevant_docs_content = get_answer_from_chain(top_docs, question,query_noun)
+        qa_chain, relevant_docs, relevant_docs_content = get_answer_from_chain(top_docs, question, query_noun, temporal_filter)
         chain_f_time=time.time()-chain_time
         print(f"chain 생성하는 시간: {chain_f_time}")
         if final_url == PROFESSOR_BASE_URL + "&lang=kor" and any(keyword in query_noun for keyword in ['연락처', '전화', '번호', '전화번호']):
