@@ -735,6 +735,9 @@ def rewrite_query_with_llm(query, current_date):
         # JSON 파싱
         result = json.loads(response.content.strip())
 
+        # 로그: LLM 응답 JSON 전체
+        logger.info(f"   📋 LLM 응답 JSON: {json.dumps(result, ensure_ascii=False)}")
+
         # 로그: LLM 추론 과정
         logger.info(f"   💬 LLM 시간 분석: {result.get('reasoning', '')}")
 
@@ -833,9 +836,6 @@ def best_docs(user_question):
 
 
       remove_noticement = ['제일','가장','공고', '공지사항','필독','첨부파일','수업','컴학','상위','관련']
-
-      # ✅ 시간 표현 감지 및 필터 생성
-      temporal_filter = parse_temporal_intent(user_question)
 
       # BM25 검색 (리팩토링됨 - BM25Retriever 사용)
       bm_title_time = time.time()
@@ -1396,6 +1396,9 @@ def get_answer_from_chain(best_docs, user_question, query_noun, temporal_filter=
 def get_ai_message(question):
     s_time=time.time()
 
+    # 검색된 문서 정보 로깅 (가장 먼저!)
+    logger.info(f"📝 사용자 질문: {question}")
+
     # ✅ 시간 의도 파싱 (LLM 답변 시 활용)
     from datetime import datetime
     temporal_filter = parse_temporal_intent(question, datetime.now())
@@ -1404,9 +1407,6 @@ def get_ai_message(question):
     top_doc, query_noun = best_docs(question)  # 가장 유사한 문서 가져오기
     best_f_time=time.time()-best_time
     print(f"best_docs 뽑는 시간:{best_f_time}")
-
-    # 검색된 문서 정보 로깅
-    logger.info(f"📝 사용자 질문: {question}")
     logger.info(f"🔍 추출된 키워드: {query_noun}")
 
     # query_noun이 없거나 top_doc이 비어있는 경우 처리
