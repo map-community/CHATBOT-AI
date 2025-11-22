@@ -1741,7 +1741,12 @@ def get_ai_message(question):
         ])
 
         # 답변 가능 여부 판단 (PROMPT에서 지시한 특정 문구로 시작하는지 확인)
-        can_answer = not answer_result.startswith("제공된 문서에는 관련 내용이 없습니다")
+        # "제공된 문서에는 ... 없습니다" 패턴 감지 (LLM이 변형된 표현 사용 가능)
+        answer_start = answer_result[:150]  # 앞부분만 체크
+        if answer_start.startswith("제공된 문서에는") and any(phrase in answer_start for phrase in ["없습니다", "포함되어 있지 않습니다"]):
+            can_answer = False
+        else:
+            can_answer = True
 
         if can_answer:
             logger.info("✅ LLM이 문서에서 답변을 찾았습니다")
