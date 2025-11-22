@@ -1053,7 +1053,12 @@ prompt_template = """당신은 경북대학교 컴퓨터학부 공지사항을 �
      * 예: "수강신청 방법은?" → 핵심 절차만 간결하게 설명
 4. 에이빅과 관련된 질문이 들어오면 임의로 판단해서 네 아니오 하지 말고 문서에 있는 내용을 그대로 알려주세요.
 5. 답변은 친절하게 존댓말로 제공하세요.
-6. 질문이 공지사항의 내용과 전혀 관련이 없다고 판단하면 응답하지 말아주세요. 예를 들면 "너는 무엇을 알까", "점심메뉴 추천"과 같이 일반 상식을 요구하는 질문은 거절해주세요.
+6. **답변 불가능 판단 (매우 중요!):**
+   - 제공된 문서에서 질문에 대한 답을 찾을 수 없는 경우 (예: 문서 내용과 질문이 전혀 무관한 경우), **반드시 다음 문구로 시작**하세요:
+     **"제공된 문서에는 관련 내용이 없습니다."**
+   - 예시 1: "흡연구역 어디야?" + TUTOR 근무일지 문서 → "제공된 문서에는 관련 내용이 없습니다. 일반적으로..."
+   - 예시 2: "점심메뉴 추천" + 공지사항 문서 → "제공된 문서에는 관련 내용이 없습니다. 이 챗봇은 컴퓨터학부 공지사항만 답변합니다."
+   - 이 문구로 시작하면 프론트엔드에서 사용자에게 "질문 작성 요청" 안내를 표시합니다.
 7. 에이빅 인정 관련 질문이 들어오면 계절학기인지 그냥 학기를 묻는것인지 질문을 체크해야합니다. 계절학기가 아닌 경우에 심컴,글솝,인컴 개설이 아니면 에이빅 인정이 안됩니다.
 
 **멀티모달 컨텍스트 활용 가이드:**
@@ -1363,6 +1368,7 @@ def get_ai_message(question):
         notice_url = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_1"
         not_in_notices_response = {
             "answer": "해당 질문은 공지사항에 없는 내용입니다.\n 자세한 사항은 공지사항을 살펴봐주세요.",
+            "can_answer": False,  # 검색 결과 없음
             "references": notice_url,
             "disclaimer": "항상 정확한 답변을 제공하지 못할 수 있습니다. 아래의 URL들을 참고하여 정확하고 자세한 정보를 확인하세요.",
             "images": ["No content"]
@@ -1387,6 +1393,7 @@ def get_ai_message(question):
       # 최종 data 구조 생성
       data = {
         "answer": response,
+        "can_answer": True,  # 목록 제공 성공
         "references": show_url,  # show_url을 넘기기
         "disclaimer": "\n\n항상 정확한 답변을 제공하지 못할 수 있습니다. 아래의 URL을 참고하여 정확하고 자세한 정보를 확인하세요.",
         "images": ["No content"]
@@ -1626,6 +1633,7 @@ def get_ai_message(question):
         if final_url == PROFESSOR_BASE_URL + "&lang=kor" and any(keyword in query_noun for keyword in ['연락처', '전화', '번호', '전화번호']):
             data = {
                 "answer": "해당 교수님은 연락처 정보가 포함되어 있지 않습니다.\n 자세한 정보는 교수진 페이지를 참고하세요.",
+                "can_answer": False,  # 연락처 정보 없음
                 "references": final_url,
                 "disclaimer": "항상 정확한 답변을 제공하지 못할 수 있습니다. 아래의 URL들을 참고하여 정확하고 자세한 정보를 확인하세요.",
                 "images": final_image
@@ -1676,6 +1684,7 @@ def get_ai_message(question):
             if final_image[0] != "No content" and final_score > MINIMUM_SIMILARITY_SCORE:
                 data = {
                     "answer": "해당 질문에 대한 내용은 이미지 파일로 확인해주세요.",
+                    "can_answer": True,  # 이미지로 답변 제공
                     "references": final_url,
                     "disclaimer": "항상 정확한 답변을 제공하지 못할 수 있습니다. 아래의 URL들을 참고하여 정확하고 자세한 정보를 확인하세요.",
                     "images": final_image
@@ -1731,9 +1740,18 @@ def get_ai_message(question):
             for doc in relevant_docs[:1] if doc.metadata.get('url') != 'No URL'
         ])
 
+        # 답변 가능 여부 판단 (PROMPT에서 지시한 특정 문구로 시작하는지 확인)
+        can_answer = not answer_result.startswith("제공된 문서에는 관련 내용이 없습니다")
+
+        if can_answer:
+            logger.info("✅ LLM이 문서에서 답변을 찾았습니다")
+        else:
+            logger.info("❌ LLM이 문서에서 답변을 찾지 못했습니다 (프론트엔드에서 질문 작성 요청 안내 표시)")
+
         # JSON 형식으로 반환할 객체 생성
         data = {
             "answer": answer_result,
+            "can_answer": can_answer,  # 답변 가능 여부
             "references": doc_references,
             "disclaimer": "항상 정확한 답변을 제공하지 못할 수 있습니다. 아래의 URL들을 참고하여 정확하고 자세한 정보를 확인하세요.",
             "images": final_image
