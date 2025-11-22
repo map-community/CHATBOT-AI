@@ -921,54 +921,47 @@ def best_docs(user_question):
 
       logger.info(f"🚀 날짜 부스팅 완료 (최신 문서 우선: 6개월 이내 +50%, 1년 이내 +30%)")
 
-      # ✨ 텍스트 유사도 기반 중복 제거 (Phase 1 개선 - 수정)
-      # 문제: URL 기준 제한은 같은 게시글의 다른 첨부파일까지 차단함
-      # 해결: 텍스트가 정말 비슷한 청크만 제거 (90% 이상 유사 시)
+      # ✨ URL 기반 중복 제거 (같은 게시글의 서로 다른 청크 제거)
+      # 목적: 검색 결과 다양성 확보 (Top N이 모두 서로 다른 게시글이 되도록)
+      # 전략: 같은 URL(게시글)에서 최고 점수 청크만 선택
+      # 효과:
+      #   - BGE-Reranker 효율성 향상 (서로 다른 문서 재정렬)
+      #   - 로그 가독성 향상 (다양성 지표 개선)
+      #   - 향후 확장 대비 (복수 답변, 관련 문서 추천 등)
       dedup_time = time.time()
 
-      import hashlib
-      from difflib import SequenceMatcher
-
-      seen_text_hashes = set()
+      seen_urls = {}  # {url: (score, title, date, text, url)}
       deduplicated_docs = []
       duplicate_count = 0
       original_count = len(final_best_docs)
 
       for score, title, date, text, url in final_best_docs:
-          # 1. 완전 중복 체크 (텍스트 해시 - 빠름)
-          normalized_text = ''.join(text.split())  # 공백/줄바꿈 제거
-          text_hash = hashlib.md5(normalized_text.encode()).hexdigest()
+          if url in seen_urls:
+              # 같은 URL이 이미 있음 → 점수 비교
+              existing_score = seen_urls[url][0]
 
-          if text_hash in seen_text_hashes:
-              duplicate_count += 1
-              logger.debug(f"⏭️  완전 중복 청크 제거: {title[:30]}... (해시: {text_hash[:8]})")
-              continue
-
-          # 2. 유사 중복 체크 (90% 이상 같으면 중복으로 판단)
-          is_similar_duplicate = False
-          for selected_doc in deduplicated_docs:
-              selected_text = selected_doc[3]
-
-              # 유사도 계산 (0.0~1.0)
-              similarity = SequenceMatcher(None, text, selected_text).ratio()
-
-              if similarity > 0.9:
-                  is_similar_duplicate = True
+              if score > existing_score:
+                  # 더 높은 점수면 기존 문서 제거하고 새 문서 추가
+                  deduplicated_docs.remove(seen_urls[url])
+                  deduplicated_docs.append((score, title, date, text, url))
+                  seen_urls[url] = (score, title, date, text, url)
+                  logger.debug(f"🔄 URL 중복 - 더 높은 점수로 교체: {title[:30]}... ({existing_score:.2f} → {score:.2f})")
+              else:
+                  # 낮은 점수면 무시
                   duplicate_count += 1
-                  logger.debug(f"⏭️  유사 중복 청크 제거 ({similarity:.2%} 유사): {title[:30]}...")
-                  break
-
-          # 3. 중복이 아니면 선택
-          if not is_similar_duplicate:
-              seen_text_hashes.add(text_hash)
+                  logger.debug(f"⏭️  URL 중복 제거: {title[:30]}... (점수: {score:.2f} < {existing_score:.2f})")
+          else:
+              # 새 URL이면 추가
+              seen_urls[url] = (score, title, date, text, url)
               deduplicated_docs.append((score, title, date, text, url))
 
-      # 4. 점수순 재정렬 후 Top 20
+      # 점수순 재정렬 후 Top 20
       deduplicated_docs.sort(key=lambda x: x[0], reverse=True)
       final_best_docs = deduplicated_docs[:20]
 
       dedup_f_time = time.time() - dedup_time
-      print(f"중복 제거 시간: {dedup_f_time:.4f}초 (원본: {original_count}개 → 중복 {duplicate_count}개 제거 → 최종: {len(final_best_docs)}개)")
+      unique_urls = len(seen_urls)
+      print(f"URL 중복 제거: {dedup_f_time:.4f}초 (원본: {original_count}개 → 중복 {duplicate_count}개 제거 → 최종: {len(final_best_docs)}개 서로 다른 게시글, 고유 URL {unique_urls}개)")
 
       # 문서 클러스터링 및 최적 클러스터 선택 (리팩토링됨 - DocumentClusterer 사용)
       cluster_time = time.time()
