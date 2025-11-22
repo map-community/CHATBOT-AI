@@ -42,6 +42,9 @@ except Exception as e:
 # StorageManager import
 from modules.storage_manager import get_storage_manager
 
+# Configuration import
+from config.settings import MINIMUM_SIMILARITY_SCORE
+
 # StorageManager 싱글톤 인스턴스 가져오기
 storage = get_storage_manager()
 
@@ -918,69 +921,51 @@ def best_docs(user_question):
 
       logger.info(f"🚀 날짜 부스팅 완료 (최신 문서 우선: 6개월 이내 +50%, 1년 이내 +30%)")
 
-      # ✨ 텍스트 유사도 기반 중복 제거 (Phase 1 개선 - 수정)
-      # 문제: URL 기준 제한은 같은 게시글의 다른 첨부파일까지 차단함
-      # 해결: 텍스트가 정말 비슷한 청크만 제거 (90% 이상 유사 시)
+      # ✨ URL 기반 중복 제거 (같은 게시글의 서로 다른 청크 제거)
+      # 목적: 검색 결과 다양성 확보 (Top N이 모두 서로 다른 게시글이 되도록)
+      # 전략: 같은 URL(게시글)에서 최고 점수 청크만 선택
+      # 효과:
+      #   - BGE-Reranker 효율성 향상 (서로 다른 문서 재정렬)
+      #   - 로그 가독성 향상 (다양성 지표 개선)
+      #   - 향후 확장 대비 (복수 답변, 관련 문서 추천 등)
       dedup_time = time.time()
 
-      import hashlib
-      from difflib import SequenceMatcher
-
-      seen_text_hashes = set()
+      seen_urls = {}  # {url: (score, title, date, text, url)}
       deduplicated_docs = []
       duplicate_count = 0
       original_count = len(final_best_docs)
 
       for score, title, date, text, url in final_best_docs:
-          # 1. 완전 중복 체크 (텍스트 해시 - 빠름)
-          normalized_text = ''.join(text.split())  # 공백/줄바꿈 제거
-          text_hash = hashlib.md5(normalized_text.encode()).hexdigest()
+          if url in seen_urls:
+              # 같은 URL이 이미 있음 → 점수 비교
+              existing_score = seen_urls[url][0]
 
-          if text_hash in seen_text_hashes:
-              duplicate_count += 1
-              logger.debug(f"⏭️  완전 중복 청크 제거: {title[:30]}... (해시: {text_hash[:8]})")
-              continue
-
-          # 2. 유사 중복 체크 (90% 이상 같으면 중복으로 판단)
-          is_similar_duplicate = False
-          for selected_doc in deduplicated_docs:
-              selected_text = selected_doc[3]
-
-              # 유사도 계산 (0.0~1.0)
-              similarity = SequenceMatcher(None, text, selected_text).ratio()
-
-              if similarity > 0.9:
-                  is_similar_duplicate = True
+              if score > existing_score:
+                  # 더 높은 점수면 기존 문서 제거하고 새 문서 추가
+                  deduplicated_docs.remove(seen_urls[url])
+                  deduplicated_docs.append((score, title, date, text, url))
+                  seen_urls[url] = (score, title, date, text, url)
+                  logger.debug(f"🔄 URL 중복 - 더 높은 점수로 교체: {title[:30]}... ({existing_score:.2f} → {score:.2f})")
+              else:
+                  # 낮은 점수면 무시
                   duplicate_count += 1
-                  logger.debug(f"⏭️  유사 중복 청크 제거 ({similarity:.2%} 유사): {title[:30]}...")
-                  break
-
-          # 3. 중복이 아니면 선택
-          if not is_similar_duplicate:
-              seen_text_hashes.add(text_hash)
+                  logger.debug(f"⏭️  URL 중복 제거: {title[:30]}... (점수: {score:.2f} < {existing_score:.2f})")
+          else:
+              # 새 URL이면 추가
+              seen_urls[url] = (score, title, date, text, url)
               deduplicated_docs.append((score, title, date, text, url))
 
-      # 4. 점수순 재정렬 후 Top 20
+      # 점수순 재정렬 후 Top 20
       deduplicated_docs.sort(key=lambda x: x[0], reverse=True)
       final_best_docs = deduplicated_docs[:20]
 
       dedup_f_time = time.time() - dedup_time
-      print(f"중복 제거 시간: {dedup_f_time:.4f}초 (원본: {original_count}개 → 중복 {duplicate_count}개 제거 → 최종: {len(final_best_docs)}개)")
+      unique_urls = len(seen_urls)
+      print(f"URL 중복 제거: {dedup_f_time:.4f}초 (원본: {original_count}개 → 중복 {duplicate_count}개 제거 → 최종: {len(final_best_docs)}개 서로 다른 게시글, 고유 URL {unique_urls}개)")
 
-      # 문서 클러스터링 및 최적 클러스터 선택 (리팩토링됨 - DocumentClusterer 사용)
-      cluster_time = time.time()
-      final_cluster, count = storage.document_clusterer.cluster_and_select(
-          documents=final_best_docs,
-          query_nouns=query_noun,
-          all_titles=titles_from_pinecone,
-          all_dates=dates_from_pinecone,
-          all_texts=texts_from_pinecone,
-          all_urls=urls_from_pinecone
-      )
-      cluster_f_time = time.time() - cluster_time
-      print(f"cluster로 문서 추출하는 시간:{cluster_f_time}")
-
-      return final_cluster, query_noun
+      # 클러스터링 제거: URL 중복 제거만으로 충분 (각 게시글당 대표 청크 1개 선택 완료)
+      # get_ai_message()에서 최종 선택된 문서의 전체 청크를 다시 수집하므로 클러스터링 불필요
+      return final_best_docs, query_noun
 
 prompt_template = """당신은 경북대학교 컴퓨터학부 공지사항을 전달하는 직원이고, 사용자의 질문에 대해 올바른 공지사항의 내용을 참조하여 정확하게 전달해야 할 의무가 있습니다.
 현재 한국 시간: {current_time}
@@ -1088,48 +1073,65 @@ def format_docs(docs):
 
 def get_answer_from_chain(best_docs, user_question,query_noun):
 
-    documents = []
-    doc_titles = []
-    doc_dates = []
-    doc_texts = []
-    doc_urls = []
+    # ✅ HTML(Markdown) 중복 제거 - 비싼 Upstage API 결과 최대 활용!
+    # 같은 이미지의 여러 청크가 모두 같은 Markdown을 가지므로 첫 번째만 사용
+    seen_htmls = set()
+    deduplicated_docs = []
+    duplicate_html_count = 0
+
+    # 디버깅: 중복 제거 전 문서 목록
+    logger.info(f"   📦 중복 제거 전: {len(best_docs)}개 청크")
+    for i, doc in enumerate(best_docs[:10]):  # 처음 10개만
+        source = doc[7] if len(doc) > 7 else "unknown"
+        html_len = len(doc[5]) if len(doc) > 5 and doc[5] else 0
+        text_len = len(doc[3])
+        logger.info(f"      [{i+1}] {source}: text={text_len}자, html={html_len}자")
+
     for doc in best_docs:
-        tit = doc[1]
+        html = doc[5] if len(doc) > 5 else ""
+
+        # HTML이 있고 이미 본 적 있으면 스킵 (중복 Markdown 제거)
+        if html and html in seen_htmls:
+            duplicate_html_count += 1
+            continue
+
+        # 새로운 HTML이거나 HTML이 없으면 추가
+        if html:
+            seen_htmls.add(html)
+        deduplicated_docs.append(doc)
+
+    logger.info(f"   🔄 중복 제거 후: {len(deduplicated_docs)}개 청크 ({duplicate_html_count}개 Markdown 중복 제거)")
+    if duplicate_html_count > 0:
+        logger.info(f"      💡 고유 Markdown: {len(seen_htmls)}개 (Upstage API 결과 효율적 활용)")
+
+    # ✅ best_docs에서 메타데이터 직접 추출 (URL로 다시 찾지 않음)
+    documents = []
+    markdown_used = 0
+    html_converted = 0
+    text_fallback = 0
+
+    for doc in deduplicated_docs:
+        score = doc[0]
+        title = doc[1]
         date = doc[2]
         text = doc[3]
         url = doc[4]
-        # score,tit, date, text, url,im_url = doc
-        doc_titles.append(tit)  # 제목
-        doc_dates.append(date)    # 날짜
-        doc_texts.append(text)    # 본문
-        doc_urls.append(url)     # URL
-
-    # 멀티모달 메타데이터를 포함한 Document 객체 생성
-    documents = []
-    for title, text, url, date in zip(doc_titles, doc_texts, doc_urls, doc_dates):
-        # URL로 캐시된 데이터에서 해당 문서의 멀티모달 메타데이터 찾기
-        try:
-            idx = storage.cached_urls.index(url)
-            html = storage.cached_htmls[idx] if idx < len(storage.cached_htmls) else ""
-            content_type = storage.cached_content_types[idx] if idx < len(storage.cached_content_types) else "text"
-            source = storage.cached_sources[idx] if idx < len(storage.cached_sources) else "original_post"
-            attachment_type = storage.cached_attachment_types[idx] if idx < len(storage.cached_attachment_types) else ""
-        except (ValueError, IndexError):
-            # URL을 찾지 못하면 기본값 사용
-            html = ""
-            content_type = "text"
-            source = "original_post"
-            attachment_type = ""
+        # ✅ 메타데이터를 tuple에서 직접 가져옴 (버그 수정!)
+        html = doc[5] if len(doc) > 5 else ""
+        content_type = doc[6] if len(doc) > 6 else "text"
+        source = doc[7] if len(doc) > 7 else "original_post"
+        attachment_type = doc[8] if len(doc) > 8 else ""
 
         # HTML/Markdown 우선 사용 (표 구조 보존), 없으면 text 사용
         if html:
             # Markdown 형식 감지 (Upstage API 제공, 고품질 표 구조)
             # 이미 Markdown이면 그대로 사용 (토큰 효율적, LLM 최적화)
             if '|' in html and ('---' in html or '\n' in html):
-                # Markdown 표 형식
+                # ① Markdown 표 형식 (Upstage API 결과)
                 page_content = html
+                markdown_used += 1
             else:
-                # HTML → Markdown 변환 (fallback)
+                # ② HTML → Markdown 변환 (fallback)
                 try:
                     soup = BeautifulSoup(html, 'html.parser')
 
@@ -1159,11 +1161,17 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
                     # 내용이 없으면 원본 text 사용
                     if not page_content:
                         page_content = text
+                        text_fallback += 1
+                    else:
+                        html_converted += 1
                 except Exception as e:
                     logger.debug(f"HTML 변환 실패, 원본 텍스트 사용: {e}")
                     page_content = text
+                    text_fallback += 1
         else:
+            # ③ html 없음 → text 사용
             page_content = text
+            text_fallback += 1
 
         # 날짜 파싱 (ISO 8601과 레거시 형식 모두 지원)
         try:
@@ -1188,6 +1196,13 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
             }
         )
         documents.append(doc)
+
+    # 폴백 통계 로그
+    logger.info(f"   📊 콘텐츠 소스 통계:")
+    logger.info(f"      ① Markdown (Upstage API): {markdown_used}개")
+    logger.info(f"      ② HTML → Markdown 변환: {html_converted}개")
+    logger.info(f"      ③ Text 폴백: {text_fallback}개")
+    logger.info(f"      총 {len(documents)}개 문서 생성")
 
     # ✅ 개선된 필터링: 같은 게시글의 모든 청크 vs 키워드 필터링
     # 핵심 개선: 같은 게시글에서 수집된 청크들은 이미 BM25 + Dense + Reranker로 검증됨
@@ -1219,13 +1234,7 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
     for i, doc in enumerate(relevant_docs):
         source = doc.metadata.get('source', 'unknown')
         content_len = len(doc.page_content)
-        # 이름 개수 추정 (학번 패턴 "202XXXXXXX" 개수)
-        import re
-        name_count = len(re.findall(r'\b20\d{8}\b', doc.page_content))
-        logger.info(f"      청크{i+1}: [{source}] {content_len}자, 학번 패턴: {name_count}개")
-        if name_count > 0:
-            # 학번이 있는 청크는 미리보기 출력
-            logger.info(f"         미리보기: {doc.page_content[:200]}...")
+        logger.info(f"      청크{i+1}: [{source}] {content_len}자")
 
     # LLM 초기화 (명단 질문을 위한 충분한 max_tokens 설정)
     llm = ChatUpstage(
@@ -1236,12 +1245,7 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
 
     # 🔍 디버깅: 전체 context 크기 및 내용 확인
     logger.info(f"   📊 전체 Context 크기: {len(relevant_docs_content)}자")
-
-    # 🔍 디버깅: 실제 LLM에 전달되는 context 요약 출력 (각 청크당 앞뒤 5줄)
-    import re
-    total_student_ids = len(re.findall(r'\b20\d{8}\b', relevant_docs_content))
-    logger.info(f"   📋 Context 내 총 학번 개수: {total_student_ids}개")
-    logger.info(f"   📄 실제 전달되는 Context 요약 (각 청크당 앞 5줄 + 뒤 5줄):")
+    logger.info(f"   📄 실제 전달되는 Context 요약 (각 청크당 앞 100자 + 뒤 100자):")
     logger.info(f"{'='*80}")
 
     # 각 청크를 "\n\n문서 제목:"으로 분리
@@ -1250,15 +1254,14 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
         if i > 0:  # 첫 번째는 빈 문자열이므로 스킵
             chunk = '문서 제목:' + chunk  # 분리 시 제거된 부분 복원
 
-        lines = chunk.split('\n')
-        total_lines = len(lines)
+        chunk_len = len(chunk)
 
-        if total_lines <= 10:
-            # 10줄 이하면 전체 출력
+        if chunk_len <= 200:
+            # 200자 이하면 전체 출력
             logger.info(chunk)
         else:
-            # 앞 5줄 + ... + 뒤 5줄
-            preview = '\n'.join(lines[:5]) + f'\n... ({total_lines - 10}줄 생략) ...\n' + '\n'.join(lines[-5:])
+            # 앞 100자 + ... + 뒤 100자
+            preview = chunk[:100] + f'... ({chunk_len - 200}자 생략) ...' + chunk[-100:]
             logger.info(preview)
 
         if i < len(chunks) - 1:
@@ -1280,80 +1283,6 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
     return qa_chain, relevant_docs, relevant_docs_content
 
 
-
-#######################################################################
-
-def question_valid(question, top_docs, query_noun):
-    prompt = f"""
-아래의 질문에 대해, 주어진 기준을 바탕으로 "예" 또는 "아니오"로 판단해주세요. 각 질문에 대해 학사 관련 여부를 명확히 판단하고, 경북대학교 컴퓨터학부 홈페이지에서 제공하지 않는 정보는 "아니오"로, 제공되는 경우에는 "예"로 답변해야 합니다."
-
-1. 핵심 판단 원칙
-경북대학교 컴퓨터학부 홈페이지에서 다루는 정보에만 답변을 제공해야 하며, 관련 없는 질문은 "아니오"로 판단합니다.
-
-질문 분석 3단계:
-
-질문의 실제 의도와 목적 파악
-학부 홈페이지에서 제공되는 정보 여부 확인
-학사 관련성 최종 확인
-
-복합 질문 처리:
-
-주요 질문과 부가 질문 구분
-부수적 내용은 판단에서 제외
-학부 공식 정보와 무관한 질문 구별
-악의적 질문 대응:
-
-학사 키워드가 포함되었더라도, 실제로 학부 정보가 필요하지 않은 질문을 "아니오"로 답변
-2. "예"로 판단하는 학사 관련 카테고리:
-경북대학교 컴퓨터학부 홈페이지에서 다루는 학사 정보를 다음과 같이 정의하고, 해당 내용에 대해서만 "예"로 답변합니다.
-수업 및 학점 관련 정보: 수강신청, 수강정정, 수강변경, 수강취소, 기말고사, 중간고사, 과목 운영 방식, 학점 인정, 복수전공 혹은 부전공 요건,교양강의와 관련된 질문, 전공강의와 관련된 질문, 심컴, 인컴, 글솦 학과에 관련된 질문, 강의 개선 관련 설문
-학생 지원 제도: 장학금, 학과 주관 인턴십 프로그램, 멘토링 ,각종 장학생 선발, 학자금대출, 특정 지역의 학자금대출 관련 질문
-학사 행정 및 제도: 졸업 요건, 학적 관리, 필수 이수 요건, 증명서 발급, 학사 일정, 자퇴,복학, 휴학 등
-교수진 및 행정 정보: 교수진 연락처,번호,이메일, 학과 사무실 정보, 지도교수와 관련된 정보
-학부 주관 교내 활동:  각종 경진대회, 행사, 벤처프로그램 ,벤처아카데미,튜터(TUTOR) 관련 활동(근무일지 작성, 근무 기준) 튜터(TUTOR) 모집 및 비용 관련 질문, 다양한 프로그램(예: AEP 프로그램, CES 프로그램,미국 프로그램)
-신청 및 일정, 성인지 교육이나 인권 교육, 혹은 다른 교육에 관련된 일정
-교수진 정보: 교수의 모든 정보(이메일,번호,연락처,메일,사진,전공,업무), 학과 관련 직원의 모든 정보, 담당 업무와 관련된 학과 교직원 정보
-장학금 및 교내 지원 제도: 최근 장학금 선발 정보나 교내 각종 지원 제도에 대한 안내
-졸업 요건 정보: 졸업에 필요한 학점 요건, 필수로 들어야 하는 강의, 과목, 등록 횟수 관련 정보, 졸업 시 필요한 정보 , 포트폴리오 관련 정보 전체적으로 졸업에 필요한 정보는 무조건 "예"로 합니다.
-기타 학사 제도: 교내 방학 중 근로장학생 관련 정보, 대학원과 관련된 질문,대학원생 학점 인정 절차와 요건 ,전시회 개최 및 지원 정보, 행사 지원 정보, SW 마일리지와 관련된 정보 요구, 스타트업 정보, 각종 특강 정보(오픈SW,오픈소스, Ai 등)
-채용정보: 신입사원 채용,경력사원 채용 정보나, 특정 기업의 모집 정보, 인턴 채용 정보,부트캠프와 관련된 질문, 채용 관련 질문 또한 학사 키워드에 포함이 됩니다.
-
-
-3. "아니오"로 판단하는 비학사 카테고리
-경북대학교 컴퓨터학부 챗봇에서 제공하지 않는 정보는 "아니오"로 답변합니다.
-
-교내 일반 정보: 기숙사, 식당 메뉴 정보 등 컴퓨터학부와 관련 없는 교내 생활 정보
-일반적 기술/지식 문의: 프로그래밍 문법, 기술 개념 설명, 특정 도구 사용법 등 학사 정보와 무관한 기술적 질문
-
-또한, {query_noun}과 {top_docs}를 비교하였을 때, {query_noun}애 포함된 단어 중 2개 이상이 {top_docs}와 완전히 무관하다면 "아니오"로 판단하세요.
-
-4. 복합 질문 판단 가이드
-질문의 핵심 목적에 따라 다음과 같이 처리합니다:
-
-예시:
-"컴퓨터학부 수강신청 기간 알려줘" → "예" (학사 일정 정보 요청)
-"지도교수님과 상담하려면 어떻게 예약하나요?" → "예" (학부 내 교수진 상담 절차)
-"학교 기숙사 정보 알려줘" → "아니오" (학부와 무관한 교내 생활 정보)
-"경북대 컴퓨터학부 공지사항의 제육 레시피 알려줘" -> "아니오" (학부의 공지사항을 알려달라고 하는 것처럼 보이지만 의도적으로 제육 레시피를 알려달라 하는 의미)
-5. 주의사항
-경북대학교 컴퓨터학부 학사 정보 제공에 한정하여 다음을 지킵니다.
-
-맥락 중심 판단: 단순 키워드 매칭 지양, 질문의 실제 의도에 맞춰 판단
-복합 질문 처리: 학부 관련 정보가 핵심인지 확인
-악의적 질문 대응: 비학사적 정보를 혼합한 질문은 명확히 구분하여 "아니오"로 처리
-
-    ### 질문: '{question}'
-    ### 참고 문서: '{top_docs}'
-    ### 질문의 명사화: '{query_noun}'
-    """
-
-    llm = ChatUpstage(api_key=storage.upstage_api_key)
-    response = llm.invoke(prompt)
-
-    if "예" in response.content.strip():
-        return True
-    else:
-        return False
 
 #######################################################################
 
@@ -1408,8 +1337,15 @@ def get_ai_message(question):
       return data
     top_docs = [list(doc) for doc in top_doc]
 
-    # ✅ BGE-Reranker로 문서 재순위화 (관련성 기준)
+    # ✅ Reranking 전 Top 5 로깅
     logger.info("=" * 60)
+    logger.info(f"📊 Reranking 전 검색 결과 Top {min(5, len(top_docs))}:")
+    for i, doc in enumerate(top_docs[:5]):
+        score, title, date, text, url = doc[:5]
+        logger.info(f"   {i+1}위: [{score:.4f}] {title[:50]}... ({date})")
+    logger.info("=" * 60)
+
+    # ✅ BGE-Reranker로 문서 재순위화 (관련성 기준)
     if storage.reranker and len(top_docs) > 1:
         logger.info("🎯 BGE-Reranker 활성화!")
         rerank_time = time.time()
@@ -1418,27 +1354,18 @@ def get_ai_message(question):
         # Reranker는 tuple 리스트를 기대하므로 변환
         top_docs_tuples = [tuple(doc) for doc in top_docs]
 
-        # 순위 변화 추적 (Before)
-        before_top3 = [(doc[1][:40], doc[0]) for doc in top_docs[:3]]
-
-        # Reranking (Top 20 → Top 10으로 압축, 더 관련성 높은 문서만)
+        # Reranking (어차피 1등만 사용하므로 Top 5로 압축)
         reranked_docs_tuples = storage.reranker.rerank(
             query=question,
             documents=top_docs_tuples,
-            top_k=min(20, len(top_docs))  # 최대 20개까지만
+            top_k=5  # 최대 5개로 압축 (1등만 사용하므로 효율화)
         )
 
         # 다시 리스트로 변환
         top_docs = [list(doc) for doc in reranked_docs_tuples]
 
-        # 순위 변화 추적 (After)
-        after_top3 = [(doc[1][:40], doc[0]) for doc in top_docs[:3]]
-
         rerank_f_time = time.time() - rerank_time
         logger.info(f"   출력: {len(top_docs)}개 문서 (처리 시간: {rerank_f_time:.2f}초)")
-        logger.info(f"   📈 순위 변화:")
-        for i, (before, after) in enumerate(zip(before_top3, after_top3)):
-            logger.info(f"      {i+1}위: [{after[1]:.4f}] {after[0]}...")
         print(f"✅ Reranking 완료: {rerank_f_time:.2f}초")
     elif not storage.reranker:
         logger.info("⏭️  BGE-Reranker 비활성화 (미설치 또는 로딩 실패)")
@@ -1446,10 +1373,10 @@ def get_ai_message(question):
     elif len(top_docs) <= 1:
         logger.info("⏭️  BGE-Reranker 스킵 (문서 1개 이하)")
         logger.info("   → Reranking 불필요")
-    logger.info("=" * 60)
 
-    # 상위 검색 결과 로깅 (Top 5) - URL 중복 제거 효과 확인용
-    logger.info(f"🔝 검색 결과 Top {min(5, len(top_docs))}:")
+    # ✅ Reranking 후 Top 5 로깅
+    logger.info("=" * 60)
+    logger.info(f"🔝 Reranking 후 최종 결과 Top {min(5, len(top_docs))}:")
     seen_urls = set()
     unique_url_count = 0
     for i, doc in enumerate(top_docs[:5]):
@@ -1463,15 +1390,11 @@ def get_ai_message(question):
         else:
             url_marker = "🔁"  # 중복 URL (같은 문서의 다른 청크)
 
-        logger.info(f"   {i+1}. [{score:.4f}] {url_marker} {title} ({date})")
+        logger.info(f"   {i+1}위: [{score:.4f}] {url_marker} {title[:50]}... ({date})")
         logger.info(f"      URL: {url}")
 
     logger.info(f"   💡 다양성: Top 5 중 {unique_url_count}개 서로 다른 문서")
-
-    valid_time=time.time()
-    if False == (question_valid(question, top_docs[0][1], query_noun)):
-        for i in range(len(top_docs)):
-            top_docs[i][0] -= 2
+    logger.info("=" * 60)
 
     final_score = top_docs[0][0]
     final_title = top_docs[0][1]
@@ -1524,12 +1447,11 @@ def get_ai_message(question):
     else:
         logger.warning("⚠️  MongoDB 연결 없음 - 이미지 URL 조회 불가")
         final_image = ["No content"]
-    valid_f_time=time.time()-valid_time
-    print(f"질문 적합도 체크하는 시간: {valid_f_time}")
+
     # top_docs 인덱스 구성
     # 0: 유사도, 1: 제목, 2: 날짜, 3: 본문내용, 4: url, 5: 이미지url
 
-    if final_image[0] != "No content" and final_text == "No content" and final_score > 1.8:
+    if final_image[0] != "No content" and final_text == "No content" and final_score > MINIMUM_SIMILARITY_SCORE:
         # JSON 형식으로 반환할 객체 생성
         only_image_response = {
             "answer": None,
@@ -1581,8 +1503,11 @@ def get_ai_message(question):
 
                     # 디버깅 로그 (처음 5개만)
                     if matched_count <= 5:
+                        html_data = storage.cached_htmls[i] if i < len(storage.cached_htmls) else ""
                         logger.info(f"   [{matched_count}] URL: {url[:80]}...")
-                        logger.info(f"       타입: {content_type}, 소스: {source}, 텍스트: {len(text)}자")
+                        logger.info(f"       타입: {content_type}, 소스: {source}")
+                        logger.info(f"       텍스트: {len(text)}자, HTML: {len(html_data)}자")
+                        logger.info(f"       인덱스: {i}")
 
                     # 빈 텍스트는 건너뛰지 않음! (중요: "No content"도 포함)
                     text_key = ''.join(text.split())  # 공백 제거 후 비교
@@ -1595,7 +1520,11 @@ def get_ai_message(question):
                             storage.cached_titles[i],
                             storage.cached_dates[i],
                             text,
-                            url
+                            url,
+                            storage.cached_htmls[i] if i < len(storage.cached_htmls) else "",
+                            storage.cached_content_types[i] if i < len(storage.cached_content_types) else "unknown",
+                            storage.cached_sources[i] if i < len(storage.cached_sources) else "unknown",
+                            storage.cached_attachment_types[i] if i < len(storage.cached_attachment_types) else ""
                         ))
                     else:
                         duplicate_count += 1
@@ -1607,24 +1536,20 @@ def get_ai_message(question):
                 logger.info(f"🔧 같은 게시글의 모든 청크 수집: {len(top_docs)}개 → {len(enriched_docs)}개")
 
                 # 타입별 카운트 (source 기준으로 정확히 카운트)
-                本문_count = 0
+                original_post_count = 0
                 image_count = 0
                 attachment_count = 0
 
-                for i, (score, title, date, text, url) in enumerate(enriched_docs):
-                    try:
-                        idx = storage.cached_urls.index(url)
-                        source = storage.cached_sources[idx] if idx < len(storage.cached_sources) else "unknown"
-                        if source == "original_post":
-                            本문_count += 1
-                        elif source == "image_ocr":
-                            image_count += 1
-                        elif source == "document_parse":
-                            attachment_count += 1
-                    except:
-                        pass
+                for i, (score, title, date, text, url, html, content_type, source, attachment_type) in enumerate(enriched_docs):
+                    # ✅ source를 tuple에서 직접 사용 (URL로 찾지 않음)
+                    if source == "original_post":
+                        original_post_count += 1
+                    elif source == "image_ocr":
+                        image_count += 1
+                    elif source == "document_parse":
+                        attachment_count += 1
 
-                logger.info(f"   📦 본문 청크: {本문_count}개")
+                logger.info(f"   📦 본문 청크: {original_post_count}개")
                 logger.info(f"   🖼️  이미지 OCR 청크: {image_count}개")
                 logger.info(f"   📎 첨부파일 청크: {attachment_count}개")
                 top_docs = enriched_docs
@@ -1689,7 +1614,7 @@ def get_ai_message(question):
 
         # 답변 생성 실패
         if not qa_chain or not relevant_docs:
-            if final_image[0] != "No content" and final_score > 1.8:
+            if final_image[0] != "No content" and final_score > MINIMUM_SIMILARITY_SCORE:
                 data = {
                     "answer": "해당 질문에 대한 내용은 이미지 파일로 확인해주세요.",
                     "references": final_url,
@@ -1705,7 +1630,7 @@ def get_ai_message(question):
                 return not_in_notices_response
 
         # 유사도가 낮은 경우
-        if final_score < 1.8:
+        if final_score < MINIMUM_SIMILARITY_SCORE:
             f_time=time.time()-s_time
             print(f"get_ai_message 총 돌아가는 시간 : {f_time}")
             return not_in_notices_response
