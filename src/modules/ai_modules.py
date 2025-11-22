@@ -1543,7 +1543,7 @@ def get_ai_message(question):
                 for i, (score, title, date, text, url, html, content_type, source, attachment_type) in enumerate(enriched_docs):
                     # ✅ source를 tuple에서 직접 사용 (URL로 찾지 않음)
                     if source == "original_post":
-                        本文_count += 1
+                        original_post_count += 1
                     elif source == "image_ocr":
                         image_count += 1
                     elif source == "document_parse":
