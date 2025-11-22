@@ -1196,7 +1196,7 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
 
     # 🔍 디버깅: 전체 context 크기 및 내용 확인
     logger.info(f"   📊 전체 Context 크기: {len(relevant_docs_content)}자")
-    logger.info(f"   📄 실제 전달되는 Context 요약 (각 청크당 앞 20자 + 뒤 20자):")
+    logger.info(f"   📄 실제 전달되는 Context 요약 (각 청크당 앞 100자 + 뒤 100자):")
     logger.info(f"{'='*80}")
 
     # 각 청크를 "\n\n문서 제목:"으로 분리
@@ -1207,12 +1207,12 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
 
         chunk_len = len(chunk)
 
-        if chunk_len <= 40:
-            # 40자 이하면 전체 출력
+        if chunk_len <= 200:
+            # 200자 이하면 전체 출력
             logger.info(chunk)
         else:
-            # 앞 20자 + ... + 뒤 20자
-            preview = chunk[:20] + f'... ({chunk_len - 40}자 생략) ...' + chunk[-20:]
+            # 앞 100자 + ... + 뒤 100자
+            preview = chunk[:100] + f'... ({chunk_len - 200}자 생략) ...' + chunk[-100:]
             logger.info(preview)
 
         if i < len(chunks) - 1:
