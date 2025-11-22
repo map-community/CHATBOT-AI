@@ -1079,6 +1079,14 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
     deduplicated_docs = []
     duplicate_html_count = 0
 
+    # 디버깅: 중복 제거 전 문서 목록
+    logger.info(f"   📦 중복 제거 전: {len(best_docs)}개 청크")
+    for i, doc in enumerate(best_docs[:10]):  # 처음 10개만
+        source = doc[7] if len(doc) > 7 else "unknown"
+        html_len = len(doc[5]) if len(doc) > 5 and doc[5] else 0
+        text_len = len(doc[3])
+        logger.info(f"      [{i+1}] {source}: text={text_len}자, html={html_len}자")
+
     for doc in best_docs:
         html = doc[5] if len(doc) > 5 else ""
 
@@ -1092,11 +1100,16 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
             seen_htmls.add(html)
         deduplicated_docs.append(doc)
 
+    logger.info(f"   🔄 중복 제거 후: {len(deduplicated_docs)}개 청크 ({duplicate_html_count}개 Markdown 중복 제거)")
     if duplicate_html_count > 0:
-        logger.info(f"   🔄 Markdown 중복 제거: {len(best_docs)}개 → {len(deduplicated_docs)}개 ({duplicate_html_count}개 중복 제거)")
+        logger.info(f"      💡 고유 Markdown: {len(seen_htmls)}개 (Upstage API 결과 효율적 활용)")
 
     # ✅ best_docs에서 메타데이터 직접 추출 (URL로 다시 찾지 않음)
     documents = []
+    markdown_used = 0
+    html_converted = 0
+    text_fallback = 0
+
     for doc in deduplicated_docs:
         score = doc[0]
         title = doc[1]
@@ -1114,10 +1127,11 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
             # Markdown 형식 감지 (Upstage API 제공, 고품질 표 구조)
             # 이미 Markdown이면 그대로 사용 (토큰 효율적, LLM 최적화)
             if '|' in html and ('---' in html or '\n' in html):
-                # Markdown 표 형식
+                # ① Markdown 표 형식 (Upstage API 결과)
                 page_content = html
+                markdown_used += 1
             else:
-                # HTML → Markdown 변환 (fallback)
+                # ② HTML → Markdown 변환 (fallback)
                 try:
                     soup = BeautifulSoup(html, 'html.parser')
 
@@ -1147,11 +1161,17 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
                     # 내용이 없으면 원본 text 사용
                     if not page_content:
                         page_content = text
+                        text_fallback += 1
+                    else:
+                        html_converted += 1
                 except Exception as e:
                     logger.debug(f"HTML 변환 실패, 원본 텍스트 사용: {e}")
                     page_content = text
+                    text_fallback += 1
         else:
+            # ③ html 없음 → text 사용
             page_content = text
+            text_fallback += 1
 
         # 날짜 파싱 (ISO 8601과 레거시 형식 모두 지원)
         try:
@@ -1176,6 +1196,13 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
             }
         )
         documents.append(doc)
+
+    # 폴백 통계 로그
+    logger.info(f"   📊 콘텐츠 소스 통계:")
+    logger.info(f"      ① Markdown (Upstage API): {markdown_used}개")
+    logger.info(f"      ② HTML → Markdown 변환: {html_converted}개")
+    logger.info(f"      ③ Text 폴백: {text_fallback}개")
+    logger.info(f"      총 {len(documents)}개 문서 생성")
 
     # ✅ 개선된 필터링: 같은 게시글의 모든 청크 vs 키워드 필터링
     # 핵심 개선: 같은 게시글에서 수집된 청크들은 이미 BM25 + Dense + Reranker로 검증됨
