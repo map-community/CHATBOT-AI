@@ -1088,21 +1088,21 @@ prompt_template = """당신은 경북대학교 컴퓨터학부 공지사항을 �
 반드시 다음 JSON 형식으로만 출력하세요. 다른 텍스트는 포함하지 마세요.
 
 {{
-  "can_answer": true 또는 false,
+  "answerable": true 또는 false,
   "answer": "답변 내용"
 }}
 
-**can_answer 판단 기준:**
+**answerable 판단 기준:**
 - true: 제공된 문서에서 질문에 대한 답을 찾았음
 - false: 제공된 문서에서 질문에 대한 답을 찾지 못했음 (문서 내용과 질문이 무관)
 
 **예시:**
 
 질문: "흡연구역 어디야?" + TUTOR 근무일지 문서
-→ {{"can_answer": false, "answer": "제공된 문서에는 흡연구역에 대한 정보가 없습니다. 일반적으로 캠퍼스 내 흡연구역은 학교 홈페이지나 안내판을 통해 확인할 수 있습니다."}}
+→ {{"answerable": false, "answer": "제공된 문서에는 흡연구역에 대한 정보가 없습니다. 일반적으로 캠퍼스 내 흡연구역은 학교 홈페이지나 안내판을 통해 확인할 수 있습니다."}}
 
 질문: "튜터 근무시간은?" + TUTOR 근무일지 문서
-→ {{"can_answer": true, "answer": "튜터 근무시간은 다음과 같습니다: ..."}}
+→ {{"answerable": true, "answer": "튜터 근무시간은 다음과 같습니다: ..."}}
 
 답변:"""
 
@@ -1389,7 +1389,7 @@ def get_ai_message(question):
         notice_url = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_1"
         not_in_notices_response = {
             "answer": "해당 질문은 공지사항에 없는 내용입니다.\n 자세한 사항은 공지사항을 살펴봐주세요.",
-            "can_answer": False,  # 검색 결과 없음
+            "answerable": False,  # 검색 결과 없음
             "references": notice_url,
             "disclaimer": "항상 정확한 답변을 제공하지 못할 수 있습니다. 아래의 URL들을 참고하여 정확하고 자세한 정보를 확인하세요.",
             "images": ["No content"]
@@ -1414,7 +1414,7 @@ def get_ai_message(question):
       # 최종 data 구조 생성
       data = {
         "answer": response,
-        "can_answer": True,  # 목록 제공 성공
+        "answerable": True,  # 목록 제공 성공
         "references": show_url,  # show_url을 넘기기
         "disclaimer": "\n\n항상 정확한 답변을 제공하지 못할 수 있습니다. 아래의 URL을 참고하여 정확하고 자세한 정보를 확인하세요.",
         "images": ["No content"]
@@ -1654,7 +1654,7 @@ def get_ai_message(question):
         if final_url == PROFESSOR_BASE_URL + "&lang=kor" and any(keyword in query_noun for keyword in ['연락처', '전화', '번호', '전화번호']):
             data = {
                 "answer": "해당 교수님은 연락처 정보가 포함되어 있지 않습니다.\n 자세한 정보는 교수진 페이지를 참고하세요.",
-                "can_answer": False,  # 연락처 정보 없음
+                "answerable": False,  # 연락처 정보 없음
                 "references": final_url,
                 "disclaimer": "항상 정확한 답변을 제공하지 못할 수 있습니다. 아래의 URL들을 참고하여 정확하고 자세한 정보를 확인하세요.",
                 "images": final_image
@@ -1705,7 +1705,7 @@ def get_ai_message(question):
             if final_image[0] != "No content" and final_score > MINIMUM_SIMILARITY_SCORE:
                 data = {
                     "answer": "해당 질문에 대한 내용은 이미지 파일로 확인해주세요.",
-                    "can_answer": True,  # 이미지로 답변 제공
+                    "answerable": True,  # 이미지로 답변 제공
                     "references": final_url,
                     "disclaimer": "항상 정확한 답변을 제공하지 못할 수 있습니다. 아래의 URL들을 참고하여 정확하고 자세한 정보를 확인하세요.",
                     "images": final_image
@@ -1737,7 +1737,7 @@ def get_ai_message(question):
         import json
         import re
 
-        llm_can_answer = None  # LLM이 판단한 can_answer 값
+        llm_answerable = None  # LLM이 판단한 answerable 값
         llm_answer_text = None  # LLM이 생성한 답변 텍스트
 
         try:
@@ -1755,10 +1755,10 @@ def get_ai_message(question):
             parsed = json.loads(clean_result)
 
             # JSON 파싱 성공
-            if "can_answer" in parsed and "answer" in parsed:
-                llm_can_answer = parsed["can_answer"]
+            if "answerable" in parsed and "answer" in parsed:
+                llm_answerable = parsed["answerable"]
                 llm_answer_text = parsed["answer"]
-                logger.info(f"✅ JSON 파싱 성공: can_answer={llm_can_answer}")
+                logger.info(f"✅ JSON 파싱 성공: answerable={llm_answerable}")
                 logger.info(f"   답변 길이: {len(llm_answer_text)}자")
                 logger.info(f"   답변 미리보기: {llm_answer_text[:150]}...")
             else:
@@ -1800,21 +1800,21 @@ def get_ai_message(question):
             for doc in relevant_docs[:1] if doc.metadata.get('url') != 'No URL'
         ])
 
-        # ✅ can_answer 최종 판단
-        if llm_can_answer is not None:
+        # ✅ answerable 최종 판단
+        if llm_answerable is not None:
             # JSON 파싱 성공 → LLM이 직접 판단한 값 사용
-            can_answer = llm_can_answer
-            logger.info(f"✅ can_answer 판단: JSON 파싱 결과 사용 (LLM 직접 판단: {can_answer})")
+            answerable = llm_answerable
+            logger.info(f"✅ answerable 판단: JSON 파싱 결과 사용 (LLM 직접 판단: {answerable})")
         else:
             # JSON 파싱 실패 → 폴백: 패턴 매칭으로 판단
             answer_start = llm_answer_text[:150]
             if answer_start.startswith("제공된 문서에는") and any(phrase in answer_start for phrase in ["없습니다", "포함되어 있지 않습니다"]):
-                can_answer = False
+                answerable = False
             else:
-                can_answer = True
-            logger.info(f"⚠️ can_answer 판단: 폴백 패턴 매칭 사용 (결과: {can_answer})")
+                answerable = True
+            logger.info(f"⚠️ answerable 판단: 폴백 패턴 매칭 사용 (결과: {answerable})")
 
-        if can_answer:
+        if answerable:
             logger.info("✅ LLM이 문서에서 답변을 찾았습니다")
         else:
             logger.info("❌ LLM이 문서에서 답변을 찾지 못했습니다 (프론트엔드에서 질문 작성 요청 안내 표시)")
@@ -1822,7 +1822,7 @@ def get_ai_message(question):
         # JSON 형식으로 반환할 객체 생성
         data = {
             "answer": llm_answer_text,  # JSON 파싱된 답변 또는 원본 답변
-            "can_answer": can_answer,  # 답변 가능 여부
+            "answerable": answerable,  # 답변 가능 여부
             "references": doc_references,
             "disclaimer": "항상 정확한 답변을 제공하지 못할 수 있습니다. 아래의 URL들을 참고하여 정확하고 자세한 정보를 확인하세요.",
             "images": final_image
