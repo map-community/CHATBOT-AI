@@ -1073,38 +1073,19 @@ def format_docs(docs):
 
 def get_answer_from_chain(best_docs, user_question,query_noun):
 
+    # ✅ best_docs에서 메타데이터 직접 추출 (URL로 다시 찾지 않음)
     documents = []
-    doc_titles = []
-    doc_dates = []
-    doc_texts = []
-    doc_urls = []
     for doc in best_docs:
-        tit = doc[1]
+        score = doc[0]
+        title = doc[1]
         date = doc[2]
         text = doc[3]
         url = doc[4]
-        # score,tit, date, text, url,im_url = doc
-        doc_titles.append(tit)  # 제목
-        doc_dates.append(date)    # 날짜
-        doc_texts.append(text)    # 본문
-        doc_urls.append(url)     # URL
-
-    # 멀티모달 메타데이터를 포함한 Document 객체 생성
-    documents = []
-    for title, text, url, date in zip(doc_titles, doc_texts, doc_urls, doc_dates):
-        # URL로 캐시된 데이터에서 해당 문서의 멀티모달 메타데이터 찾기
-        try:
-            idx = storage.cached_urls.index(url)
-            html = storage.cached_htmls[idx] if idx < len(storage.cached_htmls) else ""
-            content_type = storage.cached_content_types[idx] if idx < len(storage.cached_content_types) else "text"
-            source = storage.cached_sources[idx] if idx < len(storage.cached_sources) else "original_post"
-            attachment_type = storage.cached_attachment_types[idx] if idx < len(storage.cached_attachment_types) else ""
-        except (ValueError, IndexError):
-            # URL을 찾지 못하면 기본값 사용
-            html = ""
-            content_type = "text"
-            source = "original_post"
-            attachment_type = ""
+        # ✅ 메타데이터를 tuple에서 직접 가져옴 (버그 수정!)
+        html = doc[5] if len(doc) > 5 else ""
+        content_type = doc[6] if len(doc) > 6 else "text"
+        source = doc[7] if len(doc) > 7 else "original_post"
+        attachment_type = doc[8] if len(doc) > 8 else ""
 
         # HTML/Markdown 우선 사용 (표 구조 보존), 없으면 text 사용
         if html:
@@ -1487,7 +1468,11 @@ def get_ai_message(question):
                             storage.cached_titles[i],
                             storage.cached_dates[i],
                             text,
-                            url
+                            url,
+                            storage.cached_htmls[i] if i < len(storage.cached_htmls) else "",
+                            storage.cached_content_types[i] if i < len(storage.cached_content_types) else "unknown",
+                            storage.cached_sources[i] if i < len(storage.cached_sources) else "unknown",
+                            storage.cached_attachment_types[i] if i < len(storage.cached_attachment_types) else ""
                         ))
                     else:
                         duplicate_count += 1
@@ -1503,18 +1488,14 @@ def get_ai_message(question):
                 image_count = 0
                 attachment_count = 0
 
-                for i, (score, title, date, text, url) in enumerate(enriched_docs):
-                    try:
-                        idx = storage.cached_urls.index(url)
-                        source = storage.cached_sources[idx] if idx < len(storage.cached_sources) else "unknown"
-                        if source == "original_post":
-                            本문_count += 1
-                        elif source == "image_ocr":
-                            image_count += 1
-                        elif source == "document_parse":
-                            attachment_count += 1
-                    except:
-                        pass
+                for i, (score, title, date, text, url, html, content_type, source, attachment_type) in enumerate(enriched_docs):
+                    # ✅ source를 tuple에서 직접 사용 (URL로 찾지 않음)
+                    if source == "original_post":
+                        本文_count += 1
+                    elif source == "image_ocr":
+                        image_count += 1
+                    elif source == "document_parse":
+                        attachment_count += 1
 
                 logger.info(f"   📦 본문 청크: {本문_count}개")
                 logger.info(f"   🖼️  이미지 OCR 청크: {image_count}개")
