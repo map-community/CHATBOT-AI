@@ -631,16 +631,14 @@ def parse_temporal_intent(query, current_date=None):
             logger.info(f"⏰ 시간 표현 감지 (규칙): '{keyword}' → {time_filter}")
             return time_filter
 
-    # 2단계: 복잡한 시간 표현은 LLM으로 해석 (유연하고 정확)
-    # "저번학기", "작년 2학기", "다음 학기", "지난달" 등
-    complex_temporal_keywords = ['학기', '학년', '년도', '작년', '올해', '내년', '지난', '다음', '전', '후']
-
-    if any(keyword in query for keyword in complex_temporal_keywords):
-        logger.info(f"🤔 복잡한 시간 표현 감지 → LLM 리라이팅 시작...")
-        llm_filter = rewrite_query_with_llm(query, current_date)
-        if llm_filter:
-            logger.info(f"✨ LLM 리라이팅 결과: {llm_filter}")
-            return llm_filter
+    # 2단계: 모든 질문을 LLM으로 분석 (시간 의도 파악)
+    # 키워드 체크 제거 → 모든 질문에서 시간 의도 감지
+    # 예: "인턴십 있어?" → 암묵적으로 현재 진행중인 것을 묻는 것
+    logger.info(f"🤔 LLM으로 시간 의도 분석 중...")
+    llm_filter = rewrite_query_with_llm(query, current_date)
+    if llm_filter:
+        logger.info(f"✨ LLM 분석 결과: {llm_filter}")
+        return llm_filter
 
     return None
 
@@ -683,49 +681,108 @@ def rewrite_query_with_llm(query, current_date):
 
 사용자 질문: "{query}"
 
-위 질문에서 시간 표현을 추출하고, 정확한 학년도와 학기를 JSON 형식으로 반환하세요.
+질문을 분석하여 다음을 판단하세요:
+
+1. **특정 학기를 묻는가?** (예: "저번학기", "2학기")
+2. **현재 진행중인 것을 묻는가?**
+   - 명시적 표현: "현재", "지금", "당장", "요즘", "진행중", "모집중", "접수중", "신청중"
+   - 암묵적 표현: 시간 표현 없이 인턴십, 세미나, 채용 등을 물으면 보통 현재 진행중인 것을 의미
+   - 예: "인턴십 어디 있어?" → 현재 지원 가능한 인턴십
+   - 예: "세미나 일정" → 앞으로 열릴 세미나
+3. **예외 (시간 무관)**: 정책/규정/제도 질문은 시간과 무관
+   - 예: "졸업요건", "에이빅 인정 기준", "복수전공 자격"
+4. **명시적 과거**: "작년", "지난", "2024년도" 등
 
 출력 형식 (JSON만):
 {{
-  "year": 2025,
-  "semester": 1,
-  "reasoning": "현재 2025년 2학기이므로, 저번학기는 2025년 1학기입니다"
-}}
-
-시간 표현이 없으면:
-{{
-  "year": null,
-  "semester": null,
-  "reasoning": "시간 표현 없음"
+  "year": 2025 또는 null,
+  "semester": 1 또는 null,
+  "is_ongoing": true 또는 false,
+  "is_policy": true 또는 false,
+  "reasoning": "판단 근거"
 }}
 
 예시:
-- "저번학기" → {{"year": {current_year if current_semester == 2 else current_year - 1}, "semester": {2 if current_semester == 1 else 1}, "reasoning": "..."}}
-- "작년 2학기" → {{"year": {current_year - 1}, "semester": 2, "reasoning": "..."}}
-- "다음 학기" → {{"year": {current_year + 1 if current_semester == 2 else current_year}, "semester": {1 if current_semester == 2 else 2}, "reasoning": "..."}}
+
+- "저번학기 장학금"
+  → {{"year": {current_year if current_semester == 2 else current_year - 1}, "semester": {2 if current_semester == 1 else 1}, "is_ongoing": false, "is_policy": false, "reasoning": "저번학기를 명시적으로 요청"}}
+
+- "현재 진행중인 인턴십"
+  → {{"year": null, "semester": null, "is_ongoing": true, "is_policy": false, "reasoning": "'현재 진행중'이라는 명시적 표현"}}
+
+- "인턴십 어디 있어?"
+  → {{"year": null, "semester": null, "is_ongoing": true, "is_policy": false, "reasoning": "시간 표현 없지만 인턴십은 보통 현재 지원 가능한 것을 묻는 것"}}
+
+- "지금 신청할 수 있는 세미나"
+  → {{"year": null, "semester": null, "is_ongoing": true, "is_policy": false, "reasoning": "'지금', '신청할 수 있는'은 현재 진행중을 의미"}}
+
+- "졸업요건이 뭐야?"
+  → {{"year": null, "semester": null, "is_ongoing": false, "is_policy": true, "reasoning": "정책 질문, 시간 무관"}}
+
+- "작년 수혜자 누구야?"
+  → {{"year": {current_year - 1}, "semester": null, "is_ongoing": false, "is_policy": false, "reasoning": "'작년'이라는 명시적 과거 표현"}}
+
+- "튜터 명단"
+  → {{"year": null, "semester": null, "is_ongoing": true, "is_policy": false, "reasoning": "시간 표현 없지만 튜터는 현재 활동중인 사람을 묻는 것"}}
 
 **중요**: JSON만 출력하고, 다른 텍스트는 포함하지 마세요.
 """
 
     try:
-        llm = ChatUpstage(api_key=storage.upstage_api_key, model="solar-pro")
+        llm = ChatUpstage(api_key=storage.upstage_api_key, model="solar-mini")
         response = llm.invoke(prompt)
 
         # JSON 파싱
         result = json.loads(response.content.strip())
 
-        if result.get('year') is None or result.get('semester') is None:
+        # 로그: LLM 응답 JSON 전체
+        logger.info(f"   📋 LLM 응답 JSON: {json.dumps(result, ensure_ascii=False)}")
+
+        # 로그: LLM 추론 과정
+        logger.info(f"   💬 LLM 시간 분석: {result.get('reasoning', '')}")
+
+        # ✅ 새로운 필드 추출
+        is_ongoing = result.get('is_ongoing', False)
+        is_policy = result.get('is_policy', False)
+        year = result.get('year')
+        semester = result.get('semester')
+
+        # 필터 조건 생성
+        if is_ongoing:
+            # "진행중" 의도 감지
+            logger.info(f"   🎯 '진행중' 의도 감지됨 (is_ongoing=true)")
+            return {
+                'type': 'ongoing',
+                'is_ongoing': True,
+                'is_policy': is_policy
+            }
+
+        elif year is not None and semester is not None:
+            # 학기 필터 (기존 로직 유지)
+            logger.info(f"   📅 학기 필터: {year}학년도 {semester}학기")
+            return {
+                'year': year,
+                'semester': semester,
+                'is_ongoing': False,
+                'is_policy': is_policy
+            }
+
+        elif is_policy:
+            # 정책 질문 (시간 무관)
+            logger.info(f"   📜 정책 질문 감지 (시간 필터 비활성화)")
+            return {
+                'type': 'policy',
+                'is_policy': True,
+                'is_ongoing': False
+            }
+
+        else:
+            # 시간 표현 없음
+            logger.debug(f"   ℹ️  시간 표현 없음")
             return None
 
-        logger.info(f"   💬 LLM 추론: {result.get('reasoning', '')}")
-
-        return {
-            'year': result['year'],
-            'semester': result['semester']
-        }
-
     except Exception as e:
-        logger.warning(f"⚠️  LLM 리라이팅 실패 (규칙 기반으로 폴백): {e}")
+        logger.warning(f"⚠️  LLM 시간 파싱 실패 (규칙 기반으로 폴백): {e}")
         return None
 
 
@@ -780,9 +837,6 @@ def best_docs(user_question):
 
       remove_noticement = ['제일','가장','공고', '공지사항','필독','첨부파일','수업','컴학','상위','관련']
 
-      # ✅ 시간 표현 감지 및 필터 생성
-      temporal_filter = parse_temporal_intent(user_question)
-
       # BM25 검색 (리팩토링됨 - BM25Retriever 사용)
       bm_title_time = time.time()
       Bm25_best_docs, adjusted_similarities = storage.bm25_retriever.search(
@@ -802,57 +856,6 @@ def best_docs(user_question):
       )
       pinecone_time = time.time() - dense_time
       print(f"파인콘에서 top k 뽑는데 걸리는 시간 {pinecone_time}")
-
-      # ✅ 시간 필터 적용 (검색 결과를 날짜 기준으로 필터링)
-      if temporal_filter:
-          from datetime import datetime
-
-          def matches_temporal_filter(doc_date_str, time_filter):
-              """날짜 문자열이 시간 필터 조건을 만족하는지 확인"""
-              try:
-                  # ISO 포맷 파싱: "2024-09-19T10:57:00+09:00"
-                  doc_date = datetime.fromisoformat(doc_date_str.replace('+09:00', ''))
-                  doc_year = doc_date.year
-                  doc_month = doc_date.month
-
-                  # 학기 계산
-                  if 3 <= doc_month <= 8:
-                      doc_semester = 1
-                  else:
-                      doc_semester = 2
-                      if doc_month <= 2:
-                          doc_year -= 1
-
-                  # 필터 조건 체크
-                  if 'year' in time_filter and doc_year != time_filter['year']:
-                      return False
-                  if 'semester' in time_filter and doc_semester != time_filter['semester']:
-                      return False
-                  if 'year_from' in time_filter and doc_year < time_filter['year_from']:
-                      return False
-
-                  return True
-              except Exception as e:
-                  logger.debug(f"날짜 파싱 실패: {doc_date_str} - {e}")
-                  return True  # 파싱 실패 시 포함 (안전장치)
-
-          # BM25 결과 필터링
-          original_bm25_count = len(Bm25_best_docs)
-          Bm25_best_docs = [
-              (title, date, text, url)
-              for title, date, text, url in Bm25_best_docs
-              if matches_temporal_filter(date, temporal_filter)
-          ]
-
-          # Dense 결과 필터링
-          original_dense_count = len(combine_dense_docs)
-          combine_dense_docs = [
-              (score, doc)
-              for score, doc in combine_dense_docs
-              if matches_temporal_filter(doc[1], temporal_filter)  # doc[1] = date
-          ]
-
-          logger.info(f"📅 날짜 필터링 완료: BM25 {original_bm25_count}→{len(Bm25_best_docs)}개, Dense {original_dense_count}→{len(combine_dense_docs)}개")
 
       # ## 결과 출력
       # print("\n통합된 파인콘문서 유사도:")
@@ -967,8 +970,44 @@ def best_docs(user_question):
       # get_ai_message()에서 최종 선택된 문서의 전체 청크를 다시 수집하므로 클러스터링 불필요
       return final_best_docs, query_noun
 
+def format_temporal_intent(temporal_filter):
+    """
+    시간 의도를 LLM이 이해하기 쉬운 문자열로 변환
+
+    Args:
+        temporal_filter: parse_temporal_intent()의 반환값
+
+    Returns:
+        str: 시간 의도 설명
+    """
+    if not temporal_filter:
+        return "시간 의도 없음 (일반 검색)"
+
+    if temporal_filter.get('is_ongoing'):
+        return "🎯 현재 진행중인 것을 묻고 있습니다 (마감일이 지나지 않은 항목, 현재 신청/참여 가능한 것)"
+
+    elif temporal_filter.get('is_policy'):
+        return "📜 정책/규정 질문 (시간 무관, 최신 정보 제공)"
+
+    elif temporal_filter.get('year') and temporal_filter.get('semester'):
+        year = temporal_filter['year']
+        semester = temporal_filter['semester']
+        return f"📅 {year}학년도 {semester}학기 정보를 묻고 있습니다"
+
+    elif temporal_filter.get('year'):
+        year = temporal_filter['year']
+        return f"📅 {year}년도 정보를 묻고 있습니다"
+
+    elif temporal_filter.get('year_from'):
+        year_from = temporal_filter['year_from']
+        return f"📅 {year_from}년 이후 최근 정보를 묻고 있습니다"
+
+    else:
+        return "시간 의도 없음"
+
 prompt_template = """당신은 경북대학교 컴퓨터학부 공지사항을 전달하는 직원이고, 사용자의 질문에 대해 올바른 공지사항의 내용을 참조하여 정확하게 전달해야 할 의무가 있습니다.
 현재 한국 시간: {current_time}
+사용자 시간 의도: {temporal_intent}
 
 주어진 컨텍스트를 기반으로 다음 질문에 답변해주세요:
 
@@ -979,6 +1018,20 @@ prompt_template = """당신은 경북대학교 컴퓨터학부 공지사항을 �
 답변 시 다음 사항을 고려해주세요:
 
 1. **시간 비교 및 명시 (매우 중요!):**
+  - ⚠️ **사용자의 시간 의도를 반드시 확인**하세요. 위의 "사용자 시간 의도"를 참고하세요.
+
+  - **마감일/신청기간 확인 (최우선!):**
+    * 문서에 "신청 마감", "접수 마감", "지원 마감", "신청기간", "접수기간" 등이 있으면 **반드시 날짜를 확인**하세요
+    * 마감일이 현재 시간보다 **과거**면 → **이미 종료된 것**입니다
+    * 예시 1: 현재 11월 23일, 신청 마감 6월 29일 → "⚠️ 신청 마감이 6월 29일로 이미 지났습니다. 현재는 신청할 수 없습니다."
+    * 예시 2: 현재 11월 23일, 교육 기간 7월~9월 → "⚠️ 교육이 7월~9월에 이미 종료되었습니다."
+    * 예시 3: 현재 11월 23일, 신청 마감 12월 15일 → "✅ 현재 신청 가능합니다 (마감: 12월 15일)"
+
+  - 사용자가 "현재 진행중" 또는 "~하고 싶어", "~배우고 싶어"를 묻는데 마감일이 지났으면:
+    * **답변 시작을 반드시 경고로 시작**: "⚠️ 주의: 이 프로그램은 20XX년 XX월 XX일에 신청이 마감되었습니다. 현재는 참여할 수 없습니다."
+    * 그 다음에 참고용으로 프로그램 내용 설명
+    * 마지막에 "최신 정보는 공지사항을 확인하세요" 안내
+
   - 질문에 시간 표현(이번학기, 올해 등)이 없더라도, 반드시 문서의 날짜와 현재 시간을 비교하세요.
   - 문서가 올해가 아니라면 **반드시 명시**하세요. 예: "⚠️ 주의: 이 정보는 2024년 자료입니다."
   - 이벤트 기간 비교:
@@ -1000,7 +1053,12 @@ prompt_template = """당신은 경북대학교 컴퓨터학부 공지사항을 �
      * 예: "수강신청 방법은?" → 핵심 절차만 간결하게 설명
 4. 에이빅과 관련된 질문이 들어오면 임의로 판단해서 네 아니오 하지 말고 문서에 있는 내용을 그대로 알려주세요.
 5. 답변은 친절하게 존댓말로 제공하세요.
-6. 질문이 공지사항의 내용과 전혀 관련이 없다고 판단하면 응답하지 말아주세요. 예를 들면 "너는 무엇을 알까", "점심메뉴 추천"과 같이 일반 상식을 요구하는 질문은 거절해주세요.
+6. **답변 불가능 판단 (매우 중요!):**
+   - 제공된 문서에서 질문에 대한 답을 찾을 수 없는 경우 (예: 문서 내용과 질문이 전혀 무관한 경우), **반드시 다음 문구로 시작**하세요:
+     **"제공된 문서에는 관련 내용이 없습니다."**
+   - 예시 1: "흡연구역 어디야?" + TUTOR 근무일지 문서 → "제공된 문서에는 관련 내용이 없습니다. 일반적으로..."
+   - 예시 2: "점심메뉴 추천" + 공지사항 문서 → "제공된 문서에는 관련 내용이 없습니다. 이 챗봇은 컴퓨터학부 공지사항만 답변합니다."
+   - 이 문구로 시작하면 프론트엔드에서 사용자에게 "질문 작성 요청" 안내를 표시합니다.
 7. 에이빅 인정 관련 질문이 들어오면 계절학기인지 그냥 학기를 묻는것인지 질문을 체크해야합니다. 계절학기가 아닌 경우에 심컴,글솝,인컴 개설이 아니면 에이빅 인정이 안됩니다.
 
 **멀티모달 컨텍스트 활용 가이드:**
@@ -1025,12 +1083,33 @@ prompt_template = """당신은 경북대학교 컴퓨터학부 공지사항을 �
 13. 표의 헤더와 데이터가 섞여있거나 줄바꿈이 누락된 경우:
   - 패턴을 파악하여 정보를 재구성하세요.
   - 불확실한 경우 "문서가 일부 손상되어 정확한 정보를 확인하기 어렵습니다. 참고 URL을 확인하세요."라고 명시하세요.
+
+**출력 형식 (매우 중요!):**
+반드시 다음 JSON 형식으로만 출력하세요. 다른 텍스트는 포함하지 마세요.
+
+{{
+  "answerable": true 또는 false,
+  "answer": "답변 내용"
+}}
+
+**answerable 판단 기준:**
+- true: 제공된 문서에서 질문에 대한 답을 찾았음
+- false: 제공된 문서에서 질문에 대한 답을 찾지 못했음 (문서 내용과 질문이 무관)
+
+**예시:**
+
+질문: "흡연구역 어디야?" + TUTOR 근무일지 문서
+→ {{"answerable": false, "answer": "제공된 문서에는 흡연구역에 대한 정보가 없습니다. 일반적으로 캠퍼스 내 흡연구역은 학교 홈페이지나 안내판을 통해 확인할 수 있습니다."}}
+
+질문: "튜터 근무시간은?" + TUTOR 근무일지 문서
+→ {{"answerable": true, "answer": "튜터 근무시간은 다음과 같습니다: ..."}}
+
 답변:"""
 
 # PromptTemplate 객체 생성
 PROMPT = PromptTemplate(
     template=prompt_template,
-    input_variables=["current_time", "context", "question"]
+    input_variables=["current_time", "temporal_intent", "context", "question"]
 )
 
 def format_docs(docs):
@@ -1071,7 +1150,7 @@ def format_docs(docs):
     return "\n\n".join(formatted)
 
 
-def get_answer_from_chain(best_docs, user_question,query_noun):
+def get_answer_from_chain(best_docs, user_question, query_noun, temporal_filter=None):
 
     # ✅ HTML(Markdown) 중복 제거 - 비싼 Upstage API 결과 최대 활용!
     # 같은 이미지의 여러 청크가 모두 같은 Markdown을 가지므로 첫 번째만 사용
@@ -1272,6 +1351,7 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
     qa_chain = (
         {
             "current_time": lambda _: get_korean_time().strftime("%Y년 %m월 %d일 %H시 %M분"),
+            "temporal_intent": lambda _: format_temporal_intent(temporal_filter),
             "context": RunnableLambda(lambda _: relevant_docs_content),
             "question": RunnablePassthrough()
         }
@@ -1290,13 +1370,18 @@ def get_answer_from_chain(best_docs, user_question,query_noun):
 
 def get_ai_message(question):
     s_time=time.time()
+
+    # 검색된 문서 정보 로깅 (가장 먼저!)
+    logger.info(f"📝 사용자 질문: {question}")
+
+    # ✅ 시간 의도 파싱 (LLM 답변 시 활용)
+    from datetime import datetime
+    temporal_filter = parse_temporal_intent(question, datetime.now())
+
     best_time=time.time()
     top_doc, query_noun = best_docs(question)  # 가장 유사한 문서 가져오기
     best_f_time=time.time()-best_time
     print(f"best_docs 뽑는 시간:{best_f_time}")
-
-    # 검색된 문서 정보 로깅
-    logger.info(f"📝 사용자 질문: {question}")
     logger.info(f"🔍 추출된 키워드: {query_noun}")
 
     # query_noun이 없거나 top_doc이 비어있는 경우 처리
@@ -1304,6 +1389,7 @@ def get_ai_message(question):
         notice_url = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_1"
         not_in_notices_response = {
             "answer": "해당 질문은 공지사항에 없는 내용입니다.\n 자세한 사항은 공지사항을 살펴봐주세요.",
+            "answerable": False,  # 검색 결과 없음
             "references": notice_url,
             "disclaimer": "항상 정확한 답변을 제공하지 못할 수 있습니다. 아래의 URL들을 참고하여 정확하고 자세한 정보를 확인하세요.",
             "images": ["No content"]
@@ -1328,6 +1414,7 @@ def get_ai_message(question):
       # 최종 data 구조 생성
       data = {
         "answer": response,
+        "answerable": True,  # 목록 제공 성공
         "references": show_url,  # show_url을 넘기기
         "disclaimer": "\n\n항상 정확한 답변을 제공하지 못할 수 있습니다. 아래의 URL을 참고하여 정확하고 자세한 정보를 확인하세요.",
         "images": ["No content"]
@@ -1561,12 +1648,13 @@ def get_ai_message(question):
         print(f"청크 수집 시간: {enrich_f_time}")
 
         chain_time=time.time()
-        qa_chain, relevant_docs, relevant_docs_content = get_answer_from_chain(top_docs, question,query_noun)
+        qa_chain, relevant_docs, relevant_docs_content = get_answer_from_chain(top_docs, question, query_noun, temporal_filter)
         chain_f_time=time.time()-chain_time
         print(f"chain 생성하는 시간: {chain_f_time}")
         if final_url == PROFESSOR_BASE_URL + "&lang=kor" and any(keyword in query_noun for keyword in ['연락처', '전화', '번호', '전화번호']):
             data = {
                 "answer": "해당 교수님은 연락처 정보가 포함되어 있지 않습니다.\n 자세한 정보는 교수진 페이지를 참고하세요.",
+                "answerable": False,  # 연락처 정보 없음
                 "references": final_url,
                 "disclaimer": "항상 정확한 답변을 제공하지 못할 수 있습니다. 아래의 URL들을 참고하여 정확하고 자세한 정보를 확인하세요.",
                 "images": final_image
@@ -1617,6 +1705,7 @@ def get_ai_message(question):
             if final_image[0] != "No content" and final_score > MINIMUM_SIMILARITY_SCORE:
                 data = {
                     "answer": "해당 질문에 대한 내용은 이미지 파일로 확인해주세요.",
+                    "answerable": True,  # 이미지로 답변 제공
                     "references": final_url,
                     "disclaimer": "항상 정확한 답변을 제공하지 못할 수 있습니다. 아래의 URL들을 참고하여 정확하고 자세한 정보를 확인하세요.",
                     "images": final_image
@@ -1644,9 +1733,49 @@ def get_ai_message(question):
         answer_f_time=time.time()-answer_time
         print(f"답변 생성하는 시간: {answer_f_time}")
 
-        logger.info(f"💬 LLM 답변 생성 완료:")
-        logger.info(f"   답변 길이: {len(answer_result)}자")
-        logger.info(f"   답변 미리보기: {answer_result[:150]}...")
+        # ✅ JSON 파싱 시도 (LLM이 JSON 형식으로 응답했는지 확인)
+        import json
+        import re
+
+        llm_answerable = None  # LLM이 판단한 answerable 값
+        llm_answer_text = None  # LLM이 생성한 답변 텍스트
+
+        try:
+            # JSON 파싱 시도
+            # LLM이 가끔 ```json...``` 로 감쌀 수 있으므로 정리
+            clean_result = answer_result.strip()
+            if clean_result.startswith("```json"):
+                clean_result = clean_result[7:]
+            if clean_result.startswith("```"):
+                clean_result = clean_result[3:]
+            if clean_result.endswith("```"):
+                clean_result = clean_result[:-3]
+            clean_result = clean_result.strip()
+
+            parsed = json.loads(clean_result)
+
+            # JSON 파싱 성공
+            if "answerable" in parsed and "answer" in parsed:
+                llm_answerable = parsed["answerable"]
+                llm_answer_text = parsed["answer"]
+                logger.info(f"✅ JSON 파싱 성공: answerable={llm_answerable}")
+                logger.info(f"   답변 길이: {len(llm_answer_text)}자")
+                logger.info(f"   답변 미리보기: {llm_answer_text[:150]}...")
+            else:
+                logger.warning(f"⚠️ JSON 파싱 성공했으나 필수 필드 누락 → 폴백 사용")
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"⚠️ JSON 파싱 실패 (LLM이 형식 안 지킴) → 폴백 패턴 매칭 사용")
+            logger.debug(f"   에러: {e}")
+            logger.debug(f"   원본 응답: {answer_result[:200]}...")
+
+        # JSON 파싱 실패 시: 기존 answer_result 사용
+        if llm_answer_text is None:
+            llm_answer_text = answer_result
+            logger.info(f"💬 LLM 답변 생성 완료 (비-JSON 형식):")
+            logger.info(f"   답변 길이: {len(llm_answer_text)}자")
+            logger.info(f"   답변 미리보기: {llm_answer_text[:150]}...")
+
         logger.info(f"   사용된 참고문서 수: {len(relevant_docs)}")
 
         # 답변 검증 및 경고 추가 (범용)
@@ -1656,25 +1785,44 @@ def get_ai_message(question):
         # 완전성 요구 + Context와 답변 차이가 크면 경고
         if has_completeness_request:
             # Context에 있는 숫자 패턴 (학번, 날짜 등)
-            import re
             context_numbers = len(re.findall(r'\b20\d{6,8}\b', relevant_docs_content))
-            answer_numbers = len(re.findall(r'\b20\d{6,8}\b', answer_result))
+            answer_numbers = len(re.findall(r'\b20\d{6,8}\b', llm_answer_text))
 
             logger.info(f"   📊 완전성 검증: Context {context_numbers}건 / 답변 {answer_numbers}건")
 
             # Context의 50% 미만만 답변에 포함되면 경고
             if context_numbers >= 10 and answer_numbers < context_numbers * 0.5:
                 logger.warning(f"   ⚠️ 완전성 요구했으나 답변 불완전! LLM이 임의로 요약한 것으로 판단")
-                answer_result += f"\n\n⚠️ 일부 내용이 생략되었을 수 있습니다 (문서: 약 {context_numbers}건 / 답변: {answer_numbers}건). 전체 내용은 참고 URL을 확인하세요."
+                llm_answer_text += f"\n\n⚠️ 일부 내용이 생략되었을 수 있습니다 (문서: 약 {context_numbers}건 / 답변: {answer_numbers}건). 전체 내용은 참고 URL을 확인하세요."
 
         doc_references = "\n".join([
             f"\n참고 문서 URL: {doc.metadata['url']}"
             for doc in relevant_docs[:1] if doc.metadata.get('url') != 'No URL'
         ])
 
+        # ✅ answerable 최종 판단
+        if llm_answerable is not None:
+            # JSON 파싱 성공 → LLM이 직접 판단한 값 사용
+            answerable = llm_answerable
+            logger.info(f"✅ answerable 판단: JSON 파싱 결과 사용 (LLM 직접 판단: {answerable})")
+        else:
+            # JSON 파싱 실패 → 폴백: 패턴 매칭으로 판단
+            answer_start = llm_answer_text[:150]
+            if answer_start.startswith("제공된 문서에는") and any(phrase in answer_start for phrase in ["없습니다", "포함되어 있지 않습니다"]):
+                answerable = False
+            else:
+                answerable = True
+            logger.info(f"⚠️ answerable 판단: 폴백 패턴 매칭 사용 (결과: {answerable})")
+
+        if answerable:
+            logger.info("✅ LLM이 문서에서 답변을 찾았습니다")
+        else:
+            logger.info("❌ LLM이 문서에서 답변을 찾지 못했습니다 (프론트엔드에서 질문 작성 요청 안내 표시)")
+
         # JSON 형식으로 반환할 객체 생성
         data = {
-            "answer": answer_result,
+            "answer": llm_answer_text,  # JSON 파싱된 답변 또는 원본 답변
+            "answerable": answerable,  # 답변 가능 여부
             "references": doc_references,
             "disclaimer": "항상 정확한 답변을 제공하지 못할 수 있습니다. 아래의 URL들을 참고하여 정확하고 자세한 정보를 확인하세요.",
             "images": final_image
