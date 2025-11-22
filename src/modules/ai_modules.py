@@ -1454,8 +1454,11 @@ def get_ai_message(question):
 
                     # 디버깅 로그 (처음 5개만)
                     if matched_count <= 5:
+                        html_data = storage.cached_htmls[i] if i < len(storage.cached_htmls) else ""
                         logger.info(f"   [{matched_count}] URL: {url[:80]}...")
-                        logger.info(f"       타입: {content_type}, 소스: {source}, 텍스트: {len(text)}자")
+                        logger.info(f"       타입: {content_type}, 소스: {source}")
+                        logger.info(f"       텍스트: {len(text)}자, HTML: {len(html_data)}자")
+                        logger.info(f"       인덱스: {i}")
 
                     # 빈 텍스트는 건너뛰지 않음! (중요: "No content"도 포함)
                     text_key = ''.join(text.split())  # 공백 제거 후 비교
