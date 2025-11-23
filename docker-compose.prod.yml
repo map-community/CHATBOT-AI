@@ -122,7 +122,7 @@ services:
       resources:
         limits:
           cpus: '1.5'
-          memory: 2.5G  # 유지 (임베딩 모델 필요)
+          memory: 3G  # BGE-Reranker 모델 로딩을 위해 3GB 필요
         reservations:
           cpus: '0.5'
           memory: 1G
