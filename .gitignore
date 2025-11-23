@@ -47,8 +47,8 @@ Thumbs.db
 # Database
 *.db
 *.sqlite
-data/  # MongoDB, Redis 데이터 디렉토리 (Docker volume)
-data-backups/  # 크롤링 전 백업 디렉토리
+data/
+data-backups/
 
 # Jupyter Notebook
 .ipynb_checkpoints
