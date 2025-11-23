@@ -1,4 +1,4 @@
-# Python 3.11 slim 이미지 사용 (Apple Silicon Mac 호환성)
+# Python 3.11 slim 이미지 사용
 FROM --platform=linux/amd64 python:3.11-slim
 
 # 작업 디렉토리 설정
@@ -8,7 +8,13 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
-    LC_ALL=C.UTF-8
+    LC_ALL=C.UTF-8 \
+    # CPU 최적화 설정
+    OMP_NUM_THREADS=2 \
+    MKL_NUM_THREADS=2 \
+    OPENBLAS_NUM_THREADS=2 \
+    # PyTorch CPU 설정
+    PYTORCH_ENABLE_MPS_FALLBACK=1
 
 # 시스템 패키지 업데이트 및 필수 도구 설치
 RUN apt-get update && apt-get install -y \
@@ -34,7 +40,6 @@ RUN apt-get update && apt-get install -y \
 # Mecab 설치 (한국어 형태소 분석기)
 RUN echo "📦 Mecab 설치 중..." && \
     cd /tmp && \
-    # Mecab-ko 다운로드 및 설치
     curl -LO https://bitbucket.org/eunjeon/mecab-ko/downloads/mecab-0.996-ko-0.9.2.tar.gz && \
     tar zxfv mecab-0.996-ko-0.9.2.tar.gz && \
     cd mecab-0.996-ko-0.9.2 && \
@@ -43,7 +48,6 @@ RUN echo "📦 Mecab 설치 중..." && \
     make check && \
     make install && \
     ldconfig && \
-    # Mecab-ko-dic 다운로드 및 설치
     cd /tmp && \
     curl -LO https://bitbucket.org/eunjeon/mecab-ko-dic/downloads/mecab-ko-dic-2.1.1-20180720.tar.gz && \
     tar -zxvf mecab-ko-dic-2.1.1-20180720.tar.gz && \
@@ -52,7 +56,6 @@ RUN echo "📦 Mecab 설치 중..." && \
     ./configure && \
     make && \
     make install && \
-    # 정리
     cd / && \
     rm -rf /tmp/* && \
     echo "✅ Mecab 설치 완료!"
@@ -65,8 +68,9 @@ COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip && \
     # PyTorch CPU 버전 먼저 설치 (CUDA 방지)
-    pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
-    pip install -r requirements.txt && \
+    pip install torch==2.3.0 torchvision==0.18.0 --index-url https://download.pytorch.org/whl/cpu && \
+    # 나머지 패키지 설치 (torch, torchvision 제외)
+    pip install --no-cache-dir -r requirements.txt && \
     echo "✅ Python 패키지 설치 완료!"
 
 # NLTK 데이터 다운로드

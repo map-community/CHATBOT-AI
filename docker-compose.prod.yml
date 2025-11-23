@@ -10,11 +10,7 @@ services:
       - "27017:27017"
     environment:
       - MONGO_INITDB_DATABASE=knu_chatbot
-      # 프로덕션에서는 인증 설정 권장
-      # - MONGO_INITDB_ROOT_USERNAME=admin
-      # - MONGO_INITDB_ROOT_PASSWORD=${MONGODB_ROOT_PASSWORD}
     volumes:
-      # 로컬 경로에 데이터 저장 (영속성 보장)
       - ./data/mongodb:/data/db
       - ./data/mongodb-config:/data/configdb
     networks:
@@ -25,16 +21,14 @@ services:
       timeout: 10s
       retries: 5
       start_period: 40s
-    # 리소스 제한 (t3.medium 4GB 기준)
     deploy:
       resources:
         limits:
-          cpus: '1.0'
-          memory: 1.5G
+          cpus: '0.5'
+          memory: 1G  # 1.5G → 1G 감소
         reservations:
           cpus: '0.25'
           memory: 512M
-    # 로그 설정
     logging:
       driver: "json-file"
       options:
@@ -52,7 +46,7 @@ services:
       redis-server
       --appendonly yes
       --appendfsync everysec
-      --maxmemory 1gb
+      --maxmemory 1024mb
       --maxmemory-policy allkeys-lru
 
     volumes:
@@ -67,11 +61,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'
-          memory: 512M
+          cpus: '0.3'
+          memory: 1G  # Pinecone 메타데이터 캐시 저장을 위해 1GB 필요
         reservations:
           cpus: '0.1'
-          memory: 128M
+          memory: 256M
     logging:
       driver: "json-file"
       options:
@@ -95,7 +89,6 @@ services:
       - MONGODB_URI=mongodb://mongodb:27017/
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      # - REDIS_PASSWORD=${REDIS_PASSWORD}  # Redis 비밀번호 사용 시
 
       # Flask 프로덕션 설정
       - FLASK_ENV=production
@@ -106,10 +99,12 @@ services:
       # Python 설정
       - PYTHONUNBUFFERED=1
       - PYTHONDONTWRITEBYTECODE=1
+
+      # CPU 최적화 설정
+      - OMP_NUM_THREADS=2
+      - MKL_NUM_THREADS=2
     volumes:
-      # 로그만 마운트 (코드는 이미지에 포함)
       - ./logs:/app/logs
-      # 프로덕션에서는 코드 볼륨 마운트 제거 (보안)
     depends_on:
       mongodb:
         condition: service_healthy
@@ -127,7 +122,7 @@ services:
       resources:
         limits:
           cpus: '1.5'
-          memory: 2.5G
+          # memory: 3G  # ← 주석 처리: Swap 사용 허용
         reservations:
           cpus: '0.5'
           memory: 1G

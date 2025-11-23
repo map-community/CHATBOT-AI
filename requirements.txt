@@ -7,13 +7,18 @@ beautifulsoup4==4.12.2
 requests==2.31.0
 html2text==2020.1.16
 
+# PyTorch CPU 버전 (경량화)
+torch==2.3.0
+torchvision==0.18.0
+
 # Machine Learning & NLP
 scikit-learn==1.3.2
 numpy==1.26.2
-sentence-transformers==2.2.2
+transformers==4.41.0  # langchain-upstage 0.3.0과 호환 (tokenizers>=0.19.1)
+sentence-transformers==3.0.1  # 3.x 최소 버전 (안정적)
 rank-bm25==0.2.2
 python-Levenshtein==0.23.0
-FlagEmbedding==1.2.10  # BGE-Reranker for document reranking
+FlagEmbedding==1.2.10
 
 # LangChain & AI
 langchain==0.3.15
@@ -21,7 +26,7 @@ langchain-community==0.3.15
 langchain-core==0.3.31
 langsmith==0.2.0
 langchain-upstage==0.3.0
-faiss-cpu==1.7.4
+faiss-cpu==1.8.0  # 업그레이드 (1.7.4 불안정)
 
 # Vector Database
 pinecone>=6.0.0
