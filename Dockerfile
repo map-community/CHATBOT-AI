@@ -67,6 +67,9 @@ RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/mecab.conf && ldconfig
 COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip && \
+    # PyTorch CPU 버전 먼저 설치 (CUDA 방지)
+    pip install torch==2.3.0 torchvision==0.18.0 --index-url https://download.pytorch.org/whl/cpu && \
+    # 나머지 패키지 설치 (torch, torchvision 제외)
     pip install --no-cache-dir -r requirements.txt && \
     echo "✅ Python 패키지 설치 완료!"
 
