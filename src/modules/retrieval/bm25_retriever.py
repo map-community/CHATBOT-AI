@@ -11,8 +11,34 @@ import logging
 from bs4 import BeautifulSoup
 from multiprocessing import Pool, cpu_count
 import time
+import os
 
 logger = logging.getLogger(__name__)
+
+
+def get_safe_cpu_count() -> int:
+    """
+    Docker CPU 제한을 고려한 안전한 CPU 개수 반환
+
+    Returns:
+        사용 가능한 CPU 개수
+
+    Note:
+        1. 환경변수 OMP_NUM_THREADS 우선 사용 (Docker에서 설정)
+        2. 없으면 물리 CPU의 절반 사용 (컨텍스트 스위칭 최소화)
+        3. 최소 1개 보장
+    """
+    # Docker 환경변수 우선 확인
+    env_threads = os.getenv("OMP_NUM_THREADS")
+    if env_threads:
+        try:
+            return max(1, int(env_threads))
+        except ValueError:
+            pass
+
+    # 물리 CPU의 절반 사용 (안전한 기본값)
+    physical_cores = cpu_count() or 1
+    return max(1, physical_cores // 2)
 
 
 def _parse_html_to_text(html_or_markdown: str) -> str:
@@ -154,11 +180,11 @@ class BM25Retriever:
             # 2-1. HTML 파싱 (병렬 처리)
             html_count = sum(1 for h in self.htmls if h) if self.htmls else 0
             if html_count > 0:
-                logger.info(f"   📄 HTML 파싱 시작 ({html_count}개, 병렬 처리: {cpu_count()}코어)...")
+                logger.info(f"   📄 HTML 파싱 시작 ({html_count}개, 병렬 처리: {get_safe_cpu_count()}코어)...")
                 parse_start = time.time()
 
                 # 병렬 처리로 HTML 파싱
-                with Pool(processes=cpu_count()) as pool:
+                with Pool(processes=get_safe_cpu_count()) as pool:
                     html_texts = pool.map(_parse_html_to_text, self.htmls)
 
                 parse_time = time.time() - parse_start
@@ -182,16 +208,16 @@ class BM25Retriever:
             logger.info(f"      [1/2] 텍스트 결합 완료 ({len(combined_texts)}개)")
 
             # ✅ 2단계: 병렬 토큰화 (실제 형태소 분석 - 시간 소요!)
-            logger.info(f"      [2/2] 병렬 토큰화 진행 중 ({cpu_count()}코어, Mecab 형태소 분석)...")
+            logger.info(f"      [2/2] 병렬 토큰화 진행 중 ({get_safe_cpu_count()}코어, Mecab 형태소 분석)...")
             logger.info(f"      ⏳ 예상 소요 시간: 1-2분 (13000개 기준)")
 
             parallel_start = time.time()
             # 🚀 최적화 1: chunksize 추가 (프로세스 생성 오버헤드 최소화)
-            # 13073개 / 16코어 = 817개/코어 → chunksize=100 (8번 통신)
-            chunksize = max(1, len(combined_texts) // (cpu_count() * 10))
+            # 13073개 / 2코어 = 6500개/코어 → chunksize 동적 계산
+            chunksize = max(1, len(combined_texts) // (get_safe_cpu_count() * 10))
             logger.info(f"      📦 Batch 크기: {chunksize} (프로세스 통신 최소화)")
 
-            with Pool(processes=cpu_count(), initializer=_set_global_query_transformer, initargs=(query_transformer,)) as pool:
+            with Pool(processes=get_safe_cpu_count(), initializer=_set_global_query_transformer, initargs=(query_transformer,)) as pool:
                 self.tokenized_documents = pool.map(_tokenize_combined_text, combined_texts, chunksize=chunksize)
 
             parallel_time = time.time() - parallel_start
@@ -312,11 +338,11 @@ class BM25Retriever:
         html_texts = []
 
         if html_count > 0:
-            logger.info(f"   📄 HTML 파싱 시작 ({html_count}개, 병렬 처리: {cpu_count()}코어)...")
+            logger.info(f"   📄 HTML 파싱 시작 ({html_count}개, 병렬 처리: {get_safe_cpu_count()}코어)...")
             parse_start = time.time()
 
             # 병렬 처리로 HTML 파싱
-            with Pool(processes=cpu_count()) as pool:
+            with Pool(processes=get_safe_cpu_count()) as pool:
                 html_texts = pool.map(_parse_html_to_text, self.htmls)
 
             parse_time = time.time() - parse_start
@@ -339,15 +365,15 @@ class BM25Retriever:
         logger.info(f"      [1/2] 텍스트 결합 완료 ({len(combined_texts)}개)")
 
         # ✅ 2단계: 병렬 토큰화 (실제 형태소 분석 - 시간 소요!)
-        logger.info(f"      [2/2] 병렬 토큰화 진행 중 ({cpu_count()}코어, Mecab 형태소 분석)...")
+        logger.info(f"      [2/2] 병렬 토큰화 진행 중 ({get_safe_cpu_count()}코어, Mecab 형태소 분석)...")
         logger.info(f"      ⏳ 예상 소요 시간: 1-2분 (13000개 기준)")
 
         parallel_start = time.time()
         # 🚀 최적화 1: chunksize 추가 (프로세스 생성 오버헤드 최소화)
-        chunksize = max(1, len(combined_texts) // (cpu_count() * 10))
+        chunksize = max(1, len(combined_texts) // (get_safe_cpu_count() * 10))
         logger.info(f"      📦 Batch 크기: {chunksize} (프로세스 통신 최소화)")
 
-        with Pool(processes=cpu_count(), initializer=_set_global_query_transformer, initargs=(self.query_transformer,)) as pool:
+        with Pool(processes=get_safe_cpu_count(), initializer=_set_global_query_transformer, initargs=(self.query_transformer,)) as pool:
             self.tokenized_documents = pool.map(_tokenize_combined_text, combined_texts, chunksize=chunksize)
 
         parallel_time = time.time() - parallel_start
