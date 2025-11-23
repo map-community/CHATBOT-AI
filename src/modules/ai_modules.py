@@ -1306,7 +1306,7 @@ def get_answer_from_chain(best_docs, user_question, query_noun, temporal_filter=
         ]
 
     if not relevant_docs:
-      return None, None
+      return None, None, None
 
     # 🔍 디버깅: 각 청크의 내용 길이 확인 (데이터 누락 검증)
     logger.info(f"   📋 LLM에 전달될 청크 상세:")
