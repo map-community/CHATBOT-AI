@@ -3,7 +3,7 @@ version: '3.8'
 services:
   # MongoDB 서비스
   mongodb:
-    image: mongo:7.0
+    image: mongo:latest
     container_name: knu-chatbot-mongodb
     restart: always
     ports:
