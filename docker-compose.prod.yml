@@ -122,7 +122,7 @@ services:
       resources:
         limits:
           cpus: '1.5'
-          memory: 3G  # BGE-Reranker 모델 로딩을 위해 3GB 필요
+          # memory: 3G  # ← 주석 처리: Swap 사용 허용
         reservations:
           cpus: '0.5'
           memory: 1G
