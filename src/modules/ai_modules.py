@@ -1695,6 +1695,7 @@ def get_ai_message(question):
         notice_url = NOTICE_BASE_URL
         not_in_notices_response = {
             "answer": "해당 질문은 공지사항에 없는 내용입니다.\n 자세한 사항은 공지사항을 살펴봐주세요.",
+            "answerable": False,  # 검색 결과 없음
             "references": notice_url,
             "disclaimer": "항상 정확한 답변을 제공하지 못할 수 있습니다. 아래의 URL들을 참고하여 정확하고 자세한 정보를 확인하세요.",
             "images": ["No content"]
