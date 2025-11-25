@@ -45,9 +45,13 @@ from modules.storage_manager import get_storage_manager
 # Configuration import
 from config.settings import MINIMUM_SIMILARITY_SCORE
 from config.prompts import get_qa_prompt, get_temporal_intent_prompt
+from config.ml_settings import get_ml_config
 
 # StorageManager 싱글톤 인스턴스 가져오기
 storage = get_storage_manager()
+
+# ML 설정 로드
+ml_config = get_ml_config()
 
 # URL 상수
 NOTICE_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_1"
@@ -374,8 +378,8 @@ def _initialize_retrievers():
         query_transformer=transformed_query,
         similarity_adjuster=adjust_similarity_scores,
         htmls=storage.cached_htmls,  # HTML 구조화 데이터 추가
-        k1=1.5,
-        b=0.75,
+        k1=ml_config.bm25.k1,
+        b=ml_config.bm25.b,
         redis_client=storage.redis_client  # Redis 캐싱 활성화
     )
     storage.set_bm25_retriever(bm25_retriever)
@@ -385,9 +389,9 @@ def _initialize_retrievers():
         embeddings_factory=get_embeddings,
         pinecone_index=storage.pinecone_index,
         date_adjuster=adjust_date_similarity,
-        similarity_scale=3.26,
-        noun_weight=0.20,
-        digit_weight=0.24
+        similarity_scale=ml_config.dense_retrieval.similarity_scale,
+        noun_weight=ml_config.dense_retrieval.noun_weight,
+        digit_weight=ml_config.dense_retrieval.digit_weight
     )
     storage.set_dense_retriever(dense_retriever)
 
@@ -401,7 +405,7 @@ def _initialize_retrievers():
     # DocumentClusterer 초기화
     document_clusterer = DocumentClusterer(
         date_parser=parse_date_change_korea_time,
-        similarity_threshold=0.89
+        similarity_threshold=ml_config.clustering.similarity_threshold
     )
     storage.set_document_clusterer(document_clusterer)
 

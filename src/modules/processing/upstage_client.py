@@ -3,6 +3,7 @@ Upstage API 클라이언트
 Document Parse, OCR 등 Upstage 서비스 통합
 """
 import os
+import sys
 import requests
 import logging
 from typing import Optional, Dict, List
@@ -11,7 +12,18 @@ import time
 import zipfile
 import io
 
+# Python path 설정 (config 모듈 import를 위해)
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
 logger = logging.getLogger(__name__)
+
+# ML 설정 로드 (ZIP 처리 제한값)
+try:
+    from config.ml_settings import get_ml_config
+    _ml_config = get_ml_config()
+except Exception:
+    # 설정 로드 실패 시 None (각 메서드에서 기본값 사용)
+    _ml_config = None
 
 
 class UpstageClient:
@@ -840,9 +852,16 @@ class UpstageClient:
                 "total_files": N
             }
         """
-        MAX_ZIP_SIZE = 100 * 1024 * 1024  # 100MB
-        MAX_TOTAL_FILES = 50  # ZIP 내 최대 파일 수
-        MAX_EXTRACTION_SIZE = 500 * 1024 * 1024  # 압축 해제 후 최대 크기 (500MB, Zip Bomb 방지)
+        # ZIP 처리 제한값 (ml_config에서 로드, 실패 시 기본값)
+        if _ml_config:
+            MAX_ZIP_SIZE = _ml_config.zip_processing.max_zip_size
+            MAX_TOTAL_FILES = _ml_config.zip_processing.max_total_files
+            MAX_EXTRACTION_SIZE = _ml_config.zip_processing.max_extraction_size
+        else:
+            # 폴백 기본값
+            MAX_ZIP_SIZE = 100 * 1024 * 1024  # 100MB
+            MAX_TOTAL_FILES = 50
+            MAX_EXTRACTION_SIZE = 500 * 1024 * 1024  # 500MB
 
         successful = []
         failed = []

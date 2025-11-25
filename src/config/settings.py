@@ -74,10 +74,22 @@ EMBEDDING_MODEL = 'solar-embedding-1-large'
 EMBEDDING_DIMENSION = 4096
 
 # Retrieval Configuration
-BM25_K1 = 1.5
-BM25_B = 0.75
+# ML 하이퍼파라미터는 config/ml_config.yaml 및 ml_settings.py에서 관리
+# 하위 호환성을 위해 여기서는 import만 수행
+from config.ml_settings import get_ml_config
+
+# ML 설정 로드
+_ml_config = get_ml_config()
+
+# 하위 호환성을 위한 상수들 (기존 코드가 이 변수를 참조하는 경우)
+BM25_K1 = _ml_config.bm25.k1
+BM25_B = _ml_config.bm25.b
+CLUSTER_SIMILARITY_THRESHOLD = _ml_config.clustering.similarity_threshold
+CHUNK_SIZE = _ml_config.text_processing.chunk_size
+CHUNK_OVERLAP = _ml_config.text_processing.chunk_overlap
+
+# 검색 문서 수 (환경별로 다를 수 있음)
 TOP_K_DOCUMENTS = 30
-CLUSTER_SIMILARITY_THRESHOLD = 0.89
 
 # 최소 유사도 임계값 (Minimum Similarity Score Threshold)
 # - 검색된 문서와 질문의 관련성을 판단하는 기준점
@@ -90,7 +102,3 @@ CLUSTER_SIMILARITY_THRESHOLD = 0.89
 #   * 값이 너무 낮으면 (1.0-): 관련 없는 질문에도 답변 (정밀도↓)
 #   * 현재값 1.8: 실험적으로 설정된 값 (추후 A/B 테스트로 최적화 권장)
 MINIMUM_SIMILARITY_SCORE = 1.8
-
-# Text Splitting Configuration
-CHUNK_SIZE = 850
-CHUNK_OVERLAP = 100
