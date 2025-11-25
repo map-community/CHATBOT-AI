@@ -8,11 +8,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import logging
 import hashlib
-import requests
 from typing import List, Tuple, Dict, Optional
 from pymongo import MongoClient
 from config import CrawlerConfig
 from processing.upstage_client import UpstageClient
+from utils.file_downloader import download_file
 
 logger = logging.getLogger(__name__)
 
@@ -414,8 +414,8 @@ class MultimodalProcessor:
                     continue
 
                 # 2. 파일 다운로드 및 해시 계산
-                file_data = self._download_file(img_url)
-                if not file_data:
+                download_result = download_file(img_url, extract_metadata=False)
+                if not download_result.success:
                     failed.append({
                         "url": img_url,
                         "reason": "파일 다운로드 실패"
@@ -430,6 +430,7 @@ class MultimodalProcessor:
                         )
                     continue
 
+                file_data = download_result.content
                 file_hash = self._calculate_file_hash(file_data)
 
                 # 3. 파일 해시 기반 캐시 확인 (중복 이미지 감지)
@@ -718,8 +719,8 @@ class MultimodalProcessor:
                         continue
 
                     # 2. 파일 다운로드 및 해시 계산
-                    file_data = self._download_file(att_url)
-                    if not file_data:
+                    download_result = download_file(att_url, extract_metadata=False)
+                    if not download_result.success:
                         failed.append({
                             "url": att_url,
                             "reason": "파일 다운로드 실패"
@@ -734,6 +735,7 @@ class MultimodalProcessor:
                             )
                         continue
 
+                    file_data = download_result.content
                     file_hash = self._calculate_file_hash(file_data)
 
                     # 3. 파일 해시 기반 캐시 확인 (중복 이미지 감지)
@@ -960,58 +962,6 @@ class MultimodalProcessor:
             MD5 해시 문자열
         """
         return hashlib.md5(file_data).hexdigest()
-
-    def _download_file(self, url: str) -> Optional[bytes]:
-        """
-        URL에서 파일 다운로드
-
-        Args:
-            url: 다운로드할 URL (Data URI도 지원)
-
-        Returns:
-            파일 바이너리 데이터, 실패 시 None
-        """
-        try:
-            # Data URI 처리
-            if url.startswith('data:'):
-                import base64
-                import re
-
-                # data:image/png;base64,iVBORw0KGgo... 형식 파싱
-                if ';base64,' in url:
-                    parts = url.split(';base64,')
-                    if len(parts) == 2:
-                        base64_data = parts[1]
-                        return base64.b64decode(base64_data)
-                return None
-
-            # HTTP/HTTPS URL 처리
-            # view_image.php 같은 프록시 URL을 실제 이미지 URL로 변환
-            actual_url = url
-            from urllib.parse import urlparse, parse_qs, unquote as url_unquote
-
-            parsed = urlparse(url)
-
-            # view_image.php?fn=... 처리
-            if 'view_image.php' in parsed.path:
-                query_params = parse_qs(parsed.query)
-                if 'fn' in query_params:
-                    fn_value = query_params['fn'][0]
-                    decoded_path = url_unquote(fn_value)  # /data/editor/2511/...png
-
-                    # 절대 URL로 변환
-                    base_url = f"{parsed.scheme}://{parsed.netloc}"
-                    actual_url = f"{base_url}{decoded_path}"
-                    logger.info(f"🔍 프록시 URL 변환: view_image.php → {decoded_path}")
-
-            response = requests.get(actual_url, timeout=30, allow_redirects=True)
-            if response.status_code == 200:
-                return response.content
-            return None
-
-        except Exception as e:
-            logger.warning(f"파일 다운로드 오류 ({url[:50]}...): {e}")
-            return None
 
     def _get_from_cache_by_file_hash(self, file_hash: str) -> Optional[Dict]:
         """
