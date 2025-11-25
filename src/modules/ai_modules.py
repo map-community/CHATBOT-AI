@@ -1306,7 +1306,7 @@ def get_answer_from_chain(best_docs, user_question, query_noun, temporal_filter=
         ]
 
     if not relevant_docs:
-      return None, None
+      return None, None, None
 
     # 🔍 디버깅: 각 청크의 내용 길이 확인 (데이터 누락 검증)
     logger.info(f"   📋 LLM에 전달될 청크 상세:")
@@ -1433,6 +1433,7 @@ def get_ai_message(question):
     logger.info("=" * 60)
 
     # ✅ BGE-Reranker로 문서 재순위화 (관련성 기준)
+    reranking_used = False  # Reranking 사용 여부 추적
     if storage.reranker and len(top_docs) > 1:
         logger.info("🎯 BGE-Reranker 활성화!")
         rerank_time = time.time()
@@ -1450,6 +1451,7 @@ def get_ai_message(question):
 
         # 다시 리스트로 변환
         top_docs = [list(doc) for doc in reranked_docs_tuples]
+        reranking_used = True  # Reranking 사용됨
 
         rerank_f_time = time.time() - rerank_time
         logger.info(f"   출력: {len(top_docs)}개 문서 (처리 시간: {rerank_f_time:.2f}초)")
@@ -1538,7 +1540,8 @@ def get_ai_message(question):
     # top_docs 인덱스 구성
     # 0: 유사도, 1: 제목, 2: 날짜, 3: 본문내용, 4: url, 5: 이미지url
 
-    if final_image[0] != "No content" and final_text == "No content" and final_score > MINIMUM_SIMILARITY_SCORE:
+    # Reranker 점수는 음수일 수 있으므로 final_score < 0이면 유사도 체크 스킵
+    if final_image[0] != "No content" and final_text == "No content" and (final_score < 0 or final_score > MINIMUM_SIMILARITY_SCORE):
         # JSON 형식으로 반환할 객체 생성
         only_image_response = {
             "answer": None,
@@ -1651,6 +1654,12 @@ def get_ai_message(question):
         qa_chain, relevant_docs, relevant_docs_content = get_answer_from_chain(top_docs, question, query_noun, temporal_filter)
         chain_f_time=time.time()-chain_time
         print(f"chain 생성하는 시간: {chain_f_time}")
+
+        # 🔍 디버깅: get_answer_from_chain 반환값 확인
+        logger.info(f"🔍 get_answer_from_chain 반환값 확인:")
+        logger.info(f"   qa_chain: {type(qa_chain)} (None? {qa_chain is None})")
+        logger.info(f"   relevant_docs: {type(relevant_docs)} (None? {relevant_docs is None}, 개수: {len(relevant_docs) if relevant_docs else 0})")
+        logger.info(f"   relevant_docs_content: {type(relevant_docs_content)} (None? {relevant_docs_content is None})")
         if final_url == PROFESSOR_BASE_URL + "&lang=kor" and any(keyword in query_noun for keyword in ['연락처', '전화', '번호', '전화번호']):
             data = {
                 "answer": "해당 교수님은 연락처 정보가 포함되어 있지 않습니다.\n 자세한 정보는 교수진 페이지를 참고하세요.",
@@ -1703,7 +1712,11 @@ def get_ai_message(question):
 
         # 답변 생성 실패
         if not qa_chain or not relevant_docs:
-            if final_image[0] != "No content" and final_score > MINIMUM_SIMILARITY_SCORE:
+            logger.warning(f"⚠️ 답변 생성 실패 조건 진입!")
+            logger.warning(f"   조건: not qa_chain ({not qa_chain}) or not relevant_docs ({not relevant_docs})")
+            logger.warning(f"   → 기본 응답 반환 예정")
+            # Reranker 점수는 음수일 수 있으므로 final_score < 0이면 유사도 체크 스킵
+            if final_image[0] != "No content" and (final_score < 0 or final_score > MINIMUM_SIMILARITY_SCORE):
                 data = {
                     "answer": "해당 질문에 대한 내용은 이미지 파일로 확인해주세요.",
                     "answerable": True,  # 이미지로 답변 제공
@@ -1719,13 +1732,21 @@ def get_ai_message(question):
                 print(f"get_ai_message 총 돌아가는 시간 : {f_time}")
                 return not_in_notices_response
 
-        # 유사도가 낮은 경우
-        if final_score < MINIMUM_SIMILARITY_SCORE:
+        # 유사도가 낮은 경우 (단, Reranker 점수는 음수일 수 있으므로 체크 스킵)
+        # BGE-Reranker 점수 범위: 약 -10 ~ +10 (음수도 정상)
+        # BM25 점수 범위: 0 ~ 무한대 (항상 양수)
+        if final_score >= 0 and final_score < MINIMUM_SIMILARITY_SCORE:
+            logger.warning(f"⚠️ 유사도 조건 진입!")
+            logger.warning(f"   final_score ({final_score:.4f}) < MINIMUM_SIMILARITY_SCORE ({MINIMUM_SIMILARITY_SCORE})")
+            logger.warning(f"   → 기본 응답 반환")
             f_time=time.time()-s_time
             print(f"get_ai_message 총 돌아가는 시간 : {f_time}")
             return not_in_notices_response
+        elif final_score < 0:
+            logger.info(f"✅ Reranker 점수 감지 ({final_score:.4f}) → 유사도 체크 스킵")
 
         # LLM에서 답변을 생성하는 경우
+        logger.info(f"✅ 모든 조건 통과! LLM 답변 생성 시작...")
         answer_time=time.time()
 
         # qa_chain.invoke() 사용 (기존 방식 유지)

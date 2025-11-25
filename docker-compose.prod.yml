@@ -3,7 +3,7 @@ version: '3.8'
 services:
   # MongoDB 서비스
   mongodb:
-    image: mongo:7.0
+    image: mongo:latest
     container_name: knu-chatbot-mongodb
     restart: always
     ports:
@@ -16,11 +16,11 @@ services:
     networks:
       - chatbot-network
     healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 40s
+      start_period: 60s
     deploy:
       resources:
         limits:
