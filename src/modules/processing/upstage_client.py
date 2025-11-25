@@ -241,7 +241,10 @@ class UpstageClient:
                         "ocr": "auto"
                     }
 
-                    for attempt in range(self.max_retries):
+                    from utils.retry_helper import RetryContext
+
+                    retry_ctx = RetryContext(max_retries=self.max_retries)
+                    for attempt in retry_ctx:
                         try:
                             response = requests.post(
                                 self.API_URL,
@@ -273,13 +276,7 @@ class UpstageClient:
                                 logger.warning(f"OCR API 오류: {response.status_code} - {response.text[:200]}")
 
                         except Exception as e:
-                            if attempt < self.max_retries - 1:
-                                wait_time = 2 ** attempt
-                                logger.warning(f"재시도 {attempt + 1}/{self.max_retries} (대기: {wait_time}초)")
-                                time.sleep(wait_time)
-                            else:
-                                logger.error(f"OCR 실패 (이미지 첨부파일): {e}")
-                                raise
+                            retry_ctx.handle_exception(e, attempt)
 
                     return None
 
@@ -323,7 +320,10 @@ class UpstageClient:
                     "ocr": "auto"  # OCR 자동 활성화 (PDF 내장 텍스트 우선, 필요시 OCR)
                 }
 
-                for attempt in range(self.max_retries):
+                from utils.retry_helper import RetryContext
+
+                retry_ctx = RetryContext(max_retries=self.max_retries)
+                for attempt in retry_ctx:
                     try:
                         response = requests.post(
                             self.API_URL,
@@ -365,13 +365,7 @@ class UpstageClient:
                             logger.warning(f"Document Parse API 오류: {response.status_code} - {response.text[:200]}")
 
                     except Exception as e:
-                        if attempt < self.max_retries - 1:
-                            wait_time = 2 ** attempt
-                            logger.warning(f"재시도 {attempt + 1}/{self.max_retries} (대기: {wait_time}초)")
-                            time.sleep(wait_time)
-                        else:
-                            logger.error(f"Document Parse 실패: {e}")
-                            raise
+                        retry_ctx.handle_exception(e, attempt)
 
             except Exception as download_error:
                 logger.error(f"파일 다운로드 오류: {download_error}")
@@ -461,7 +455,10 @@ class UpstageClient:
                         "ocr": "auto"
                     }
 
-                    for attempt in range(self.max_retries):
+                    from utils.retry_helper import RetryContext
+
+                    retry_ctx = RetryContext(max_retries=self.max_retries)
+                    for attempt in retry_ctx:
                         try:
                             response = requests.post(
                                 self.API_URL,
@@ -498,13 +495,7 @@ class UpstageClient:
                                 logger.warning(f"OCR API 오류: {response.status_code} - {response.text[:200]}")
 
                         except Exception as e:
-                            if attempt < self.max_retries - 1:
-                                wait_time = 2 ** attempt
-                                logger.warning(f"재시도 {attempt + 1}/{self.max_retries} (대기: {wait_time}초)")
-                                time.sleep(wait_time)
-                            else:
-                                logger.error(f"OCR 실패 (Data URI): {e}")
-                                raise
+                            retry_ctx.handle_exception(e, attempt)
 
                     return None
 
@@ -616,7 +607,10 @@ class UpstageClient:
                     "ocr": "auto"
                 }
 
-                for attempt in range(self.max_retries):
+                from utils.retry_helper import RetryContext
+
+                retry_ctx = RetryContext(max_retries=self.max_retries)
+                for attempt in retry_ctx:
                     try:
                         response = requests.post(
                             self.API_URL,
@@ -654,13 +648,7 @@ class UpstageClient:
                             logger.warning(f"OCR API 오류: {response.status_code} - {response.text[:200]}")
 
                     except Exception as e:
-                        if attempt < self.max_retries - 1:
-                            wait_time = 2 ** attempt
-                            logger.warning(f"재시도 {attempt + 1}/{self.max_retries} (대기: {wait_time}초)")
-                            time.sleep(wait_time)
-                        else:
-                            logger.error(f"OCR 실패: {e}")
-                            raise
+                        retry_ctx.handle_exception(e, attempt)
 
             except Exception as download_error:
                 logger.error(f"이미지 다운로드 오류: {download_error}")
