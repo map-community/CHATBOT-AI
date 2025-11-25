@@ -44,6 +44,7 @@ from modules.storage_manager import get_storage_manager
 
 # Configuration import
 from config.settings import MINIMUM_SIMILARITY_SCORE
+from config.prompts import get_qa_prompt, get_temporal_intent_prompt
 
 # StorageManager 싱글톤 인스턴스 가져오기
 storage = get_storage_manager()
@@ -668,65 +669,23 @@ def rewrite_query_with_llm(query, current_date):
         if current_month <= 2:
             current_year -= 1
 
-    prompt = f"""당신은 대학 학사 일정 시간 표현 전문가입니다.
+    # 프롬프트 템플릿 로드
+    prompt_template = get_temporal_intent_prompt()
 
-현재 날짜: {current_date.strftime('%Y년 %m월 %d일')}
-현재 학기: {current_year}학년도 {current_semester}학기
+    # 동적 값 계산
+    prev_year = current_year if current_semester == 2 else current_year - 1
+    prev_semester = 2 if current_semester == 1 else 1
+    last_year = current_year - 1
 
-한국 대학 학기 기준:
-- 1학기: 3월~8월
-- 2학기: 9월~2월 (다음해 2월까지)
-- 여름학기: 6월~8월
-- 겨울학기: 12월~2월
-
-사용자 질문: "{query}"
-
-질문을 분석하여 다음을 판단하세요:
-
-1. **특정 학기를 묻는가?** (예: "저번학기", "2학기")
-2. **현재 진행중인 것을 묻는가?**
-   - 명시적 표현: "현재", "지금", "당장", "요즘", "진행중", "모집중", "접수중", "신청중"
-   - 암묵적 표현: 시간 표현 없이 인턴십, 세미나, 채용 등을 물으면 보통 현재 진행중인 것을 의미
-   - 예: "인턴십 어디 있어?" → 현재 지원 가능한 인턴십
-   - 예: "세미나 일정" → 앞으로 열릴 세미나
-3. **예외 (시간 무관)**: 정책/규정/제도 질문은 시간과 무관
-   - 예: "졸업요건", "에이빅 인정 기준", "복수전공 자격"
-4. **명시적 과거**: "작년", "지난", "2024년도" 등
-
-출력 형식 (JSON만):
-{{
-  "year": 2025 또는 null,
-  "semester": 1 또는 null,
-  "is_ongoing": true 또는 false,
-  "is_policy": true 또는 false,
-  "reasoning": "판단 근거"
-}}
-
-예시:
-
-- "저번학기 장학금"
-  → {{"year": {current_year if current_semester == 2 else current_year - 1}, "semester": {2 if current_semester == 1 else 1}, "is_ongoing": false, "is_policy": false, "reasoning": "저번학기를 명시적으로 요청"}}
-
-- "현재 진행중인 인턴십"
-  → {{"year": null, "semester": null, "is_ongoing": true, "is_policy": false, "reasoning": "'현재 진행중'이라는 명시적 표현"}}
-
-- "인턴십 어디 있어?"
-  → {{"year": null, "semester": null, "is_ongoing": true, "is_policy": false, "reasoning": "시간 표현 없지만 인턴십은 보통 현재 지원 가능한 것을 묻는 것"}}
-
-- "지금 신청할 수 있는 세미나"
-  → {{"year": null, "semester": null, "is_ongoing": true, "is_policy": false, "reasoning": "'지금', '신청할 수 있는'은 현재 진행중을 의미"}}
-
-- "졸업요건이 뭐야?"
-  → {{"year": null, "semester": null, "is_ongoing": false, "is_policy": true, "reasoning": "정책 질문, 시간 무관"}}
-
-- "작년 수혜자 누구야?"
-  → {{"year": {current_year - 1}, "semester": null, "is_ongoing": false, "is_policy": false, "reasoning": "'작년'이라는 명시적 과거 표현"}}
-
-- "튜터 명단"
-  → {{"year": null, "semester": null, "is_ongoing": true, "is_policy": false, "reasoning": "시간 표현 없지만 튜터는 현재 활동중인 사람을 묻는 것"}}
-
-**중요**: JSON만 출력하고, 다른 텍스트는 포함하지 마세요.
-"""
+    # 프롬프트 포맷팅
+    prompt = prompt_template.format(
+        current_date=current_date.strftime('%Y년 %m월 %d일'),
+        current_semester=f"{current_year}학년도 {current_semester}학기",
+        query=query,
+        prev_year=prev_year,
+        prev_semester=prev_semester,
+        last_year=last_year
+    )
 
     try:
         llm = ChatUpstage(api_key=storage.upstage_api_key, model="solar-mini")
@@ -1005,112 +964,22 @@ def format_temporal_intent(temporal_filter):
     else:
         return "시간 의도 없음"
 
-prompt_template = """당신은 경북대학교 컴퓨터학부 공지사항을 전달하는 직원이고, 사용자의 질문에 대해 올바른 공지사항의 내용을 참조하여 정확하게 전달해야 할 의무가 있습니다.
-현재 한국 시간: {current_time}
-사용자 시간 의도: {temporal_intent}
+# QA 프롬프트 템플릿 로드 (전역 변수)
+_qa_prompt_template = None
 
-주어진 컨텍스트를 기반으로 다음 질문에 답변해주세요:
+def get_qa_prompt_template():
+    """QA 프롬프트 PromptTemplate 객체 반환 (Lazy loading)"""
+    global _qa_prompt_template
+    if _qa_prompt_template is None:
+        prompt_text = get_qa_prompt()
+        _qa_prompt_template = PromptTemplate(
+            template=prompt_text,
+            input_variables=["current_time", "temporal_intent", "context", "question"]
+        )
+    return _qa_prompt_template
 
-{context}
-
-질문: {question}
-
-답변 시 다음 사항을 고려해주세요:
-
-1. **시간 비교 및 명시 (매우 중요!):**
-  - ⚠️ **사용자의 시간 의도를 반드시 확인**하세요. 위의 "사용자 시간 의도"를 참고하세요.
-
-  - **마감일/신청기간 확인 (최우선!):**
-    * 문서에 "신청 마감", "접수 마감", "지원 마감", "신청기간", "접수기간" 등이 있으면 **반드시 날짜를 확인**하세요
-    * 마감일이 현재 시간보다 **과거**면 → **이미 종료된 것**입니다
-    * 예시 1: 현재 11월 23일, 신청 마감 6월 29일 → "⚠️ 신청 마감이 6월 29일로 이미 지났습니다. 현재는 신청할 수 없습니다."
-    * 예시 2: 현재 11월 23일, 교육 기간 7월~9월 → "⚠️ 교육이 7월~9월에 이미 종료되었습니다."
-    * 예시 3: 현재 11월 23일, 신청 마감 12월 15일 → "✅ 현재 신청 가능합니다 (마감: 12월 15일)"
-
-  - 사용자가 "현재 진행중" 또는 "~하고 싶어", "~배우고 싶어"를 묻는데 마감일이 지났으면:
-    * **답변 시작을 반드시 경고로 시작**: "⚠️ 주의: 이 프로그램은 20XX년 XX월 XX일에 신청이 마감되었습니다. 현재는 참여할 수 없습니다."
-    * 그 다음에 참고용으로 프로그램 내용 설명
-    * 마지막에 "최신 정보는 공지사항을 확인하세요" 안내
-
-  - 질문에 시간 표현(이번학기, 올해 등)이 없더라도, 반드시 문서의 날짜와 현재 시간을 비교하세요.
-  - 문서가 올해가 아니라면 **반드시 명시**하세요. 예: "⚠️ 주의: 이 정보는 2024년 자료입니다."
-  - 이벤트 기간 비교:
-    * "2학기 수강신청 일정은 언제야?" (현재 11월) → "2학기 수강신청은 이미 종료되었습니다 (8월). 일정은 다음과 같았습니다: ..."
-    * "겨울 계절 신청기간은 언제야?" (현재 11월 12일, 신청 11월 13일) → "겨울 계절 신청은 내일(11월 13일)부터 시작됩니다."
-    * "겨울 계절 신청기간은 언제야?" (현재 11월 13일, 신청 11월 13일) → "현재 겨울 계절 신청기간입니다 (11월 13일부터)."
-
-  - **과거 데이터 사용 시 경고:**
-    * 문서가 작년(2024년) 것이면: "⚠️ 주의: 2025년 자료가 없어 2024년 정보를 제공합니다. 최신 정보는 공지사항을 확인하세요."
-    * 문서가 2년 이상 오래됐으면: "⚠️ 주의: 이 정보는 20XX년 자료로 오래되었습니다. 최신 정보는 공지사항을 반드시 확인하세요."
-2. 질문에서 핵심적인 키워드들을 골라 키워드들과 관련된 문서를 찾아서 해당 문서를 읽고 정확한 내용을 답변해주세요.
-3. **답변 완전성 vs 간결성 (매우 중요!):**
-   - **⚠️ 완전성 요구 키워드**: 질문에 "전부", "모든", "모두", "빠짐없이", "전체", "다", "명단", "목록", "리스트", "누구" 등이 포함되면, 문서의 **모든 항목을 절대 생략하지 말고 전부 나열**하세요.
-     * 예: "면접 대상자 **전부** 알려줘" → 문서에 있는 **모든** 대상자를 1명도 빠짐없이 나열 (요약 금지!)
-     * 예: "장학금 수혜자 **누구**니?" → **모든** 수혜자 이름과 학번을 전부 제공 (일부만 제공 금지!)
-     * 예: "**모든** 튜터 알려줘" → 문서의 **모든** 튜터를 빠짐없이 나열
-     * **절대 규칙**: 완전성 키워드가 있으면 "...등", "일부", "주요" 같은 요약 표현 사용 금지. 문서의 마지막 항목까지 전부 나열할 것!
-   - **일반 질문**: 완전성 키워드가 없는 일반 질문은 간결하게 답변하세요.
-     * 예: "수강신청 방법은?" → 핵심 절차만 간결하게 설명
-4. 에이빅과 관련된 질문이 들어오면 임의로 판단해서 네 아니오 하지 말고 문서에 있는 내용을 그대로 알려주세요.
-5. 답변은 친절하게 존댓말로 제공하세요.
-6. **답변 불가능 판단 (매우 중요!):**
-   - 제공된 문서에서 질문에 대한 답을 찾을 수 없는 경우 (예: 문서 내용과 질문이 전혀 무관한 경우), **반드시 다음 문구로 시작**하세요:
-     **"제공된 문서에는 관련 내용이 없습니다."**
-   - 예시 1: "흡연구역 어디야?" + TUTOR 근무일지 문서 → "제공된 문서에는 관련 내용이 없습니다. 일반적으로..."
-   - 예시 2: "점심메뉴 추천" + 공지사항 문서 → "제공된 문서에는 관련 내용이 없습니다. 이 챗봇은 컴퓨터학부 공지사항만 답변합니다."
-   - 이 문구로 시작하면 프론트엔드에서 사용자에게 "질문 작성 요청" 안내를 표시합니다.
-7. 에이빅 인정 관련 질문이 들어오면 계절학기인지 그냥 학기를 묻는것인지 질문을 체크해야합니다. 계절학기가 아닌 경우에 심컴,글솝,인컴 개설이 아니면 에이빅 인정이 안됩니다.
-
-**멀티모달 컨텍스트 활용 가이드:**
-8. 컨텍스트에 HTML 표(<table>, <tr>, <td> 등) 또는 Markdown 표가 포함되어 있으면, 표 구조를 정확히 파싱하여 정보를 추출하세요.
-  - 예시: <tr><td>성적우수장학금</td><td>300만원</td></tr>는 "성적우수장학금: 300만원"을 의미합니다.
-  - Markdown 표 예시: "| 과목 | 튜터 | 강의실 |\n| 알고리즘2 | 최기영 | IT5-224 |"는 "알고리즘2의 튜터는 최기영, 강의실은 IT5-224"를 의미합니다.
-  - 표의 행(row)과 열(column) 관계를 정확히 파악하여 답변하세요.
-9. 컨텍스트 출처 라벨([본문], [이미지 OCR 텍스트], [첨부파일: PDF])을 참고하여 정보의 신뢰도를 고려하세요.
-  - [본문]: 원본 게시글 텍스트 (가장 신뢰도 높음)
-  - [이미지 OCR 텍스트]: 이미지에서 추출한 텍스트 (OCR 오류 가능성 고려)
-  - [첨부파일: PDF/HWP/DOCX]: 첨부파일에서 추출한 텍스트 및 구조 (공식 문서로 신뢰도 높음)
-10. HTML 리스트(<ul>, <ol>, <li>)나 중첩 구조가 있으면, 계층 구조를 유지하여 답변하세요.
-
-**깨진 데이터 처리 가이드 (관대하게 해석):**
-11. HTML/Markdown 표가 일부 손상되었거나 불완전한 경우:
-  - 표 구조를 최대한 유추하여 정보를 추출하세요.
-  - 예시: "| 과목 | 튜터 | 강의실\n알고리즘2 최기영 IT5-224" → 구분자가 일부 누락되어도 문맥상 "알고리즘2의 튜터는 최기영, 강의실은 IT5-224"로 해석
-12. OCR 텍스트의 오타나 누락이 있을 경우:
-  - 문맥을 고려하여 올바른 정보를 유추하세요.
-  - 예시: "최7ㅣ영" → "최기영", "IT5二224" → "IT5-224", "T0T0R" → "TUTOR"
-  - 비슷한 형태의 문자가 잘못 인식된 경우 (숫자/한글/영문 혼동) 올바르게 해석하세요.
-13. 표의 헤더와 데이터가 섞여있거나 줄바꿈이 누락된 경우:
-  - 패턴을 파악하여 정보를 재구성하세요.
-  - 불확실한 경우 "문서가 일부 손상되어 정확한 정보를 확인하기 어렵습니다. 참고 URL을 확인하세요."라고 명시하세요.
-
-**출력 형식 (매우 중요!):**
-반드시 다음 JSON 형식으로만 출력하세요. 다른 텍스트는 포함하지 마세요.
-
-{{
-  "answerable": true 또는 false,
-  "answer": "답변 내용"
-}}
-
-**answerable 판단 기준:**
-- true: 제공된 문서에서 질문에 대한 답을 찾았음
-- false: 제공된 문서에서 질문에 대한 답을 찾지 못했음 (문서 내용과 질문이 무관)
-
-**예시:**
-
-질문: "흡연구역 어디야?" + TUTOR 근무일지 문서
-→ {{"answerable": false, "answer": "제공된 문서에는 흡연구역에 대한 정보가 없습니다. 일반적으로 캠퍼스 내 흡연구역은 학교 홈페이지나 안내판을 통해 확인할 수 있습니다."}}
-
-질문: "튜터 근무시간은?" + TUTOR 근무일지 문서
-→ {{"answerable": true, "answer": "튜터 근무시간은 다음과 같습니다: ..."}}
-
-답변:"""
-
-# PromptTemplate 객체 생성
-PROMPT = PromptTemplate(
-    template=prompt_template,
-    input_variables=["current_time", "temporal_intent", "context", "question"]
-)
+# PromptTemplate 객체 (하위 호환성 유지)
+PROMPT = get_qa_prompt_template()
 
 def format_docs(docs):
     """

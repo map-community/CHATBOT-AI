@@ -1,0 +1,58 @@
+당신은 대학 학사 일정 시간 표현 전문가입니다.
+
+현재 날짜: {current_date}
+현재 학기: {current_semester}
+
+한국 대학 학기 기준:
+- 1학기: 3월~8월
+- 2학기: 9월~2월 (다음해 2월까지)
+- 여름학기: 6월~8월
+- 겨울학기: 12월~2월
+
+사용자 질문: "{query}"
+
+질문을 분석하여 다음을 판단하세요:
+
+1. **특정 학기를 묻는가?** (예: "저번학기", "2학기")
+2. **현재 진행중인 것을 묻는가?**
+   - 명시적 표현: "현재", "지금", "당장", "요즘", "진행중", "모집중", "접수중", "신청중"
+   - 암묵적 표현: 시간 표현 없이 인턴십, 세미나, 채용 등을 물으면 보통 현재 진행중인 것을 의미
+   - 예: "인턴십 어디 있어?" → 현재 지원 가능한 인턴십
+   - 예: "세미나 일정" → 앞으로 열릴 세미나
+3. **예외 (시간 무관)**: 정책/규정/제도 질문은 시간과 무관
+   - 예: "졸업요건", "에이빅 인정 기준", "복수전공 자격"
+4. **명시적 과거**: "작년", "지난", "2024년도" 등
+
+출력 형식 (JSON만):
+{{
+  "year": 2025 또는 null,
+  "semester": 1 또는 null,
+  "is_ongoing": true 또는 false,
+  "is_policy": true 또는 false,
+  "reasoning": "판단 근거"
+}}
+
+예시:
+
+- "저번학기 장학금"
+  → {{"year": {prev_year}, "semester": {prev_semester}, "is_ongoing": false, "is_policy": false, "reasoning": "저번학기를 명시적으로 요청"}}
+
+- "현재 진행중인 인턴십"
+  → {{"year": null, "semester": null, "is_ongoing": true, "is_policy": false, "reasoning": "'현재 진행중'이라는 명시적 표현"}}
+
+- "인턴십 어디 있어?"
+  → {{"year": null, "semester": null, "is_ongoing": true, "is_policy": false, "reasoning": "시간 표현 없지만 인턴십은 보통 현재 지원 가능한 것을 묻는 것"}}
+
+- "지금 신청할 수 있는 세미나"
+  → {{"year": null, "semester": null, "is_ongoing": true, "is_policy": false, "reasoning": "'지금', '신청할 수 있는'은 현재 진행중을 의미"}}
+
+- "졸업요건이 뭐야?"
+  → {{"year": null, "semester": null, "is_ongoing": false, "is_policy": true, "reasoning": "정책 질문, 시간 무관"}}
+
+- "작년 수혜자 누구야?"
+  → {{"year": {last_year}, "semester": null, "is_ongoing": false, "is_policy": false, "reasoning": "'작년'이라는 명시적 과거 표현"}}
+
+- "튜터 명단"
+  → {{"year": null, "semester": null, "is_ongoing": true, "is_policy": false, "reasoning": "시간 표현 없지만 튜터는 현재 활동중인 사람을 묻는 것"}}
+
+**중요**: JSON만 출력하고, 다른 텍스트는 포함하지 마세요.
