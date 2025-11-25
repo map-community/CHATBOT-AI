@@ -47,6 +47,10 @@ from config.settings import MINIMUM_SIMILARITY_SCORE
 from config.prompts import get_qa_prompt, get_temporal_intent_prompt
 from config.ml_settings import get_ml_config
 
+# Utils import
+from modules.utils.date_utils import get_current_kst as get_korean_time
+from modules.utils.url_utils import find_url
+
 # StorageManager 싱글톤 인스턴스 가져오기
 storage = get_storage_manager()
 
@@ -58,9 +62,6 @@ NOTICE_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_1"
 COMPANY_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_3_b"
 SEMINAR_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_4"
 PROFESSOR_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub2_2"
-
-def get_korean_time():
-    return datetime.now(pytz.timezone('Asia/Seoul'))
 
 # 단어 명사화 함수 (리팩토링됨 - QueryTransformer 사용)
 def transformed_query(content):
@@ -564,31 +565,6 @@ def last_filter_keyword(DOCS, query_noun, user_question):
     return storage.keyword_filter.filter(DOCS, query_noun, user_question)
 
 #################################################################################################
-
-def find_url(url, title, doc_date, text, doc_url, number):
-    return_docs = []
-    for i, urls in enumerate(doc_url):
-        if urls.startswith(url):  # indexs와 시작이 일치하는지 확인
-            return_docs.append((title[i], doc_date[i], text[i], doc_url[i]))
-    
-    # doc_url[i] 순서대로 정렬
-    return_docs.sort(key=lambda x: x[3],reverse=True) 
-
-    # 고유 숫자를 추적하며 number개의 문서 선택
-    unique_numbers = set()
-    filtered_docs = []
-
-    for doc in return_docs:
-        # 숫자가 서로 다른 number개가 모이면 종료
-        if len(unique_numbers) >= number:
-            break
-        url_number = ''.join(filter(str.isdigit, doc[3]))  # URL에서 숫자 추출
-        unique_numbers.add(url_number)
-        filtered_docs.append(doc)
-
-
-    return filtered_docs
-
 
 ########################################################################################  best_docs 시작 ##########################################################################################
 
