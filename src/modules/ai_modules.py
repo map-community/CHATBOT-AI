@@ -19,7 +19,6 @@ from langchain.schema.runnable import RunnableSequence, RunnableMap
 from langchain_core.runnables import RunnableLambda
 from langchain_upstage import UpstageEmbeddings, ChatUpstage
 from pymongo import MongoClient
-from bs4 import BeautifulSoup
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -1052,50 +1051,24 @@ def get_answer_from_chain(best_docs, user_question, query_noun, temporal_filter=
 
         # HTML/Markdown 우선 사용 (표 구조 보존), 없으면 text 사용
         if html:
+            from utils.html_parser import is_markdown, html_to_markdown_with_text
+
             # Markdown 형식 감지 (Upstage API 제공, 고품질 표 구조)
             # 이미 Markdown이면 그대로 사용 (토큰 효율적, LLM 최적화)
-            if '|' in html and ('---' in html or '\n' in html):
+            if is_markdown(html):
                 # ① Markdown 표 형식 (Upstage API 결과)
                 page_content = html
                 markdown_used += 1
             else:
                 # ② HTML → Markdown 변환 (fallback)
-                try:
-                    soup = BeautifulSoup(html, 'html.parser')
+                page_content = html_to_markdown_with_text(html)
 
-                    # 테이블이 있으면 Markdown 표로 변환
-                    markdown_content = ""
-                    for table in soup.find_all('table'):
-                        markdown_content += "\n\n**[표 데이터]**\n"
-                        rows = table.find_all('tr')
-                        for row_idx, row in enumerate(rows):
-                            cells = row.find_all(['th', 'td'])
-                            row_text = " | ".join([cell.get_text(strip=True) for cell in cells])
-                            markdown_content += f"| {row_text} |\n"
-                            # 헤더 행 다음에 구분선 추가
-                            if row_idx == 0:
-                                markdown_content += "| " + " | ".join(["---"] * len(cells)) + " |\n"
-                        markdown_content += "\n"
-
-                    # 테이블 외 텍스트 추출
-                    for table in soup.find_all('table'):
-                        table.decompose()  # 테이블 제거 (중복 방지)
-
-                    plain_text_from_html = soup.get_text(separator='\n', strip=True)
-
-                    # 최종 page_content: Markdown 표 + 평문
-                    page_content = (markdown_content + "\n" + plain_text_from_html).strip()
-
-                    # 내용이 없으면 원본 text 사용
-                    if not page_content:
-                        page_content = text
-                        text_fallback += 1
-                    else:
-                        html_converted += 1
-                except Exception as e:
-                    logger.debug(f"HTML 변환 실패, 원본 텍스트 사용: {e}")
+                # 내용이 없으면 원본 text 사용
+                if not page_content:
                     page_content = text
                     text_fallback += 1
+                else:
+                    html_converted += 1
         else:
             # ③ html 없음 → text 사용
             page_content = text

@@ -95,48 +95,12 @@ class MultimodalContent:
 
         Returns:
             Markdown 테이블 문자열 (테이블 없으면 빈 문자열)
+
+        Note:
+            utils.html_parser 모듈로 위임
         """
-        from bs4 import BeautifulSoup
-
-        try:
-            soup = BeautifulSoup(html, 'html.parser')
-            tables = soup.find_all('table')
-
-            if not tables:
-                return ""
-
-            markdown_tables = []
-            for table in tables:
-                rows = table.find_all('tr')
-                if not rows:
-                    continue
-
-                # 첫 행을 헤더로 사용
-                first_row = rows[0]
-                headers = [cell.get_text(strip=True) for cell in first_row.find_all(['th', 'td'])]
-
-                if not headers:
-                    continue
-
-                # Markdown 테이블 생성
-                md_table = "| " + " | ".join(headers) + " |\n"
-                md_table += "|" + "|".join([" --- " for _ in headers]) + "|\n"
-
-                # 데이터 행 (첫 행이 헤더가 아닌 경우도 고려)
-                data_rows = rows[1:] if len(rows) > 1 else []
-                for row in data_rows:
-                    cells = [cell.get_text(strip=True) for cell in row.find_all(['td', 'th'])]
-                    # 셀 개수가 헤더와 다르면 패딩
-                    while len(cells) < len(headers):
-                        cells.append("")
-                    md_table += "| " + " | ".join(cells[:len(headers)]) + " |\n"
-
-                markdown_tables.append(md_table)
-
-            return "\n\n".join(markdown_tables)
-        except Exception as e:
-            # 변환 실패 시 빈 문자열 반환
-            return ""
+        from utils.html_parser import html_to_markdown
+        return html_to_markdown(html, detailed=True)
 
     def add_image_content(self, url: str, ocr_text: str = "", ocr_html: str = "", ocr_elements: List = None, description: str = ""):
         """이미지 콘텐츠 추가 (캐시 HTML → Markdown 변환)"""
