@@ -51,6 +51,11 @@ class StorageManager:
         self._redis_host = os.getenv('REDIS_HOST', 'localhost')
         self._redis_port = int(os.getenv('REDIS_PORT', 6379))
 
+        # Reranker 설정
+        self._reranker_type = os.getenv('RERANKER_TYPE', 'bge')
+        self._reranker_model = os.getenv('RERANKER_MODEL', 'BAAI/bge-reranker-v2-m3')
+        self._reranker_use_fp16 = os.getenv('RERANKER_USE_FP16', 'true').lower() == 'true'
+
         # Lazy initialization용 플래그
         self._pinecone_client = None
         self._pinecone_index = None
@@ -302,16 +307,21 @@ class StorageManager:
     def reranker(self):
         """DocumentReranker 인스턴스 (즉시 초기화 가능)"""
         if self._reranker is None:
-            logger.info("🔄 DocumentReranker 초기화 중...")
+            logger.info(f"🔄 Reranker 초기화 중 (type: {self._reranker_type})...")
             try:
-                from modules.retrieval.reranker import DocumentReranker
-                self._reranker = DocumentReranker(
-                    model_name="BAAI/bge-reranker-v2-m3",
-                    use_fp16=True
+                from factories.reranker_factory import RerankerFactory
+                self._reranker = RerankerFactory.create(
+                    reranker_type=self._reranker_type,
+                    model_name=self._reranker_model,
+                    use_fp16=self._reranker_use_fp16
                 )
-                logger.info("✅ DocumentReranker 초기화 완료")
+                if self._reranker is not None:
+                    logger.info("✅ Reranker 초기화 완료")
+                else:
+                    logger.warning(f"⚠️  Reranker 초기화 실패 (타입: {self._reranker_type})")
+                    logger.warning("   Reranking이 비활성화됩니다 (원본 순서 유지)")
             except Exception as e:
-                logger.warning(f"⚠️  DocumentReranker 초기화 실패: {e}")
+                logger.warning(f"⚠️  Reranker 초기화 실패: {e}")
                 logger.warning("   Reranking이 비활성화됩니다 (원본 순서 유지)")
                 # 실패 시 None 유지 (ai_modules에서 None 체크 필요)
         return self._reranker
