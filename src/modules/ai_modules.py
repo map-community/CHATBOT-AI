@@ -47,8 +47,9 @@ from config.prompts import get_qa_prompt, get_temporal_intent_prompt
 from config.ml_settings import get_ml_config
 
 # Utils import
-from modules.utils.date_utils import get_current_kst as get_korean_time
+from modules.utils.date_utils import get_current_kst as get_korean_time, parse_date_change_korea_time
 from modules.utils.url_utils import find_url
+from modules.utils.formatter import format_temporal_intent, format_docs
 
 # StorageManager 싱글톤 인스턴스 가져오기
 storage = get_storage_manager()
@@ -416,43 +417,6 @@ def _initialize_retrievers():
 
 # 날짜를 파싱하는 함수 (하위 호환성 유지)
 # 이제는 utils.date_utils.parse_date_change_korea_time 사용 권장
-
-def parse_date_change_korea_time(date_str):
-    """
-    날짜 문자열을 datetime 객체로 변환
-    ISO 8601 형식과 레거시 한국어 형식 모두 지원
-
-    Args:
-        date_str: ISO 8601 형식 또는 "작성일25-10-17 15:48" 형식
-
-    Returns:
-        datetime 객체 (한국 시간대)
-    """
-    # 빈 문자열이면 None
-    if not date_str:
-        return None
-
-    try:
-        # 먼저 ISO 8601 형식 시도 (새 형식)
-        dt = datetime.fromisoformat(date_str)
-        # 시간대가 없으면 한국 시간대 추가
-        if dt.tzinfo is None:
-            korea_timezone = pytz.timezone('Asia/Seoul')
-            return korea_timezone.localize(dt)
-        return dt
-    except (ValueError, TypeError):
-        pass
-
-    try:
-        # 레거시 한국어 형식 시도 (하위 호환성)
-        clean_date_str = date_str.replace("작성일", "").strip()
-        naive_date = datetime.strptime(clean_date_str, "%y-%m-%d %H:%M")
-        # 한국 시간대 추가
-        korea_timezone = pytz.timezone('Asia/Seoul')
-        return korea_timezone.localize(naive_date)
-    except (ValueError, TypeError):
-        return None
-
 
 def calculate_weight_by_days_difference(post_date, current_date, query_nouns):
 
@@ -908,41 +872,6 @@ def best_docs(user_question):
       # get_ai_message()에서 최종 선택된 문서의 전체 청크를 다시 수집하므로 클러스터링 불필요
       return final_best_docs, query_noun
 
-def format_temporal_intent(temporal_filter):
-    """
-    시간 의도를 LLM이 이해하기 쉬운 문자열로 변환
-
-    Args:
-        temporal_filter: parse_temporal_intent()의 반환값
-
-    Returns:
-        str: 시간 의도 설명
-    """
-    if not temporal_filter:
-        return "시간 의도 없음 (일반 검색)"
-
-    if temporal_filter.get('is_ongoing'):
-        return "🎯 현재 진행중인 것을 묻고 있습니다 (마감일이 지나지 않은 항목, 현재 신청/참여 가능한 것)"
-
-    elif temporal_filter.get('is_policy'):
-        return "📜 정책/규정 질문 (시간 무관, 최신 정보 제공)"
-
-    elif temporal_filter.get('year') and temporal_filter.get('semester'):
-        year = temporal_filter['year']
-        semester = temporal_filter['semester']
-        return f"📅 {year}학년도 {semester}학기 정보를 묻고 있습니다"
-
-    elif temporal_filter.get('year'):
-        year = temporal_filter['year']
-        return f"📅 {year}년도 정보를 묻고 있습니다"
-
-    elif temporal_filter.get('year_from'):
-        year_from = temporal_filter['year_from']
-        return f"📅 {year_from}년 이후 최근 정보를 묻고 있습니다"
-
-    else:
-        return "시간 의도 없음"
-
 # QA 프롬프트 템플릿 로드 (전역 변수)
 _qa_prompt_template = None
 
@@ -959,43 +888,6 @@ def get_qa_prompt_template():
 
 # PromptTemplate 객체 (하위 호환성 유지)
 PROMPT = get_qa_prompt_template()
-
-def format_docs(docs):
-    """
-    문서 리스트를 LLM이 이해하기 쉬운 형식으로 포맷팅
-    출처(원본/이미지OCR/첨부파일)를 라벨로 표시하여 맥락 제공
-    각 청크에 제목 정보를 명시하여 문맥 단절(Context Fragmentation) 문제 해결
-
-    Args:
-        docs: Document 객체 리스트
-
-    Returns:
-        str: 포맷팅된 컨텍스트 문자열
-    """
-    formatted = []
-
-    for doc in docs:
-        # 메타데이터에서 제목 추출
-        title = doc.metadata.get('title', '제목 없음')
-
-        # 출처에 따라 라벨 생성
-        source = doc.metadata.get('source', 'original_post')
-        content_type = doc.metadata.get('content_type', 'text')
-
-        if source == "image_ocr":
-            label = "[이미지 OCR 텍스트]"
-        elif source == "document_parse":
-            # 첨부파일 타입 표시
-            attachment_type = doc.metadata.get('attachment_type', 'document')
-            label = f"[첨부파일: {attachment_type.upper()}]"
-        else:
-            # 원본 게시글
-            label = "[본문]"
-
-        # 제목 + 라벨 + 내용 (제목을 명시하여 청크의 문맥 제공)
-        formatted.append(f"문서 제목: {title}\n{label}\n{doc.page_content}")
-
-    return "\n\n".join(formatted)
 
 
 def get_answer_from_chain(best_docs, user_question, query_noun, temporal_filter=None):
