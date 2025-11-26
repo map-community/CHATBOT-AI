@@ -328,7 +328,7 @@ class StorageManager:
                     self._reranker = RerankerFactory.create(
                         reranker_type="cohere",
                         api_key=self._cohere_api_key,
-                        model=os.getenv('COHERE_RERANK_MODEL', 'rerank-multilingual-v3.0')
+                        model=os.getenv('COHERE_RERANK_MODEL', 'rerank-v3.5')
                     )
                 else:
                     logger.error(f"❌ 알 수 없는 Reranker 타입: {self._reranker_type}")

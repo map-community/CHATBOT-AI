@@ -26,12 +26,12 @@ class CohereReranker(BaseReranker):
     """
     Cohere Rerank API를 사용한 문서 재순위화 클래스
 
-    Cohere의 rerank-english-v3.0 또는 rerank-multilingual-v3.0 모델을 사용하여
+    Cohere의 최신 rerank-v3.5 모델을 사용하여
     검색 엔진(BM25 + Dense)이 반환한 후보 문서들을
     질문과의 실제 관련성을 기준으로 재평가하여 순위를 조정합니다.
 
     Features:
-        - 다국어 지원 (rerank-multilingual-v3.0)
+        - 다국어 지원 (rerank-v3.5는 multilingual 지원)
         - API 기반으로 별도 모델 다운로드 불필요
         - 높은 정확도와 빠른 응답 속도
 
@@ -47,7 +47,7 @@ class CohereReranker(BaseReranker):
     def __init__(
         self,
         api_key: str,
-        model: str = "rerank-multilingual-v3.0"
+        model: str = "rerank-v3.5"
     ):
         """
         CohereReranker 초기화
@@ -55,7 +55,8 @@ class CohereReranker(BaseReranker):
         Args:
             api_key: Cohere API 키
             model: 사용할 Rerank 모델
-                - "rerank-multilingual-v3.0": 다국어 지원 (한국어 포함), 권장
+                - "rerank-v3.5": 최신 모델 (다국어 지원, 권장)
+                - "rerank-multilingual-v3.0": 이전 다국어 모델
                 - "rerank-english-v3.0": 영어 전용
         """
         self.api_key = api_key
@@ -71,10 +72,11 @@ class CohereReranker(BaseReranker):
             return
 
         try:
-            logger.info("🔄 Cohere Reranker 초기화 중...")
+            logger.info(f"🔄 Cohere Reranker 초기화 중 (model: {model})...")
             start_time = time.time()
 
-            self.client = cohere.Client(api_key)
+            # Cohere V2 Client 사용
+            self.client = cohere.ClientV2(api_key=api_key)
 
             load_time = time.time() - start_time
             logger.info(f"✅ Cohere Reranker 초기화 완료 ({load_time:.2f}초)")
