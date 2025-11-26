@@ -278,6 +278,19 @@ def html_to_markdown(html: str, detailed: bool = False) -> str:
     return HTMLParser.table_to_markdown_simple(html)
 
 
+def html_to_markdown_with_text(html: str) -> str:
+    """
+    HTML → Markdown 테이블 + 평문 텍스트 변환 (편의 함수)
+
+    Args:
+        html: HTML 문자열
+
+    Returns:
+        Markdown 테이블 + 평문 텍스트 결합 문자열
+    """
+    return HTMLParser.html_to_markdown_with_text(html)
+
+
 def parse_html_or_markdown(content: str) -> str:
     """HTML/Markdown 자동 감지 파싱 (편의 함수)"""
     return HTMLParser.parse_html_or_markdown(content)
