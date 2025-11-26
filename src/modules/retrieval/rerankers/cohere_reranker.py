@@ -47,7 +47,8 @@ class CohereReranker(BaseReranker):
     def __init__(
         self,
         api_key: str,
-        model: str = "rerank-v3.5"
+        model: str = "rerank-v3.5",
+        max_tokens_per_doc: int = 4096
     ):
         """
         CohereReranker 초기화
@@ -58,9 +59,13 @@ class CohereReranker(BaseReranker):
                 - "rerank-v3.5": 최신 모델 (다국어 지원, 권장)
                 - "rerank-multilingual-v3.0": 이전 다국어 모델
                 - "rerank-english-v3.0": 영어 전용
+            max_tokens_per_doc: 문서당 최대 토큰 수 (기본 4096)
+                - 긴 문서 자동 잘라내기
+                - 비용/속도 최적화
         """
         self.api_key = api_key
         self.model = model
+        self.max_tokens_per_doc = max_tokens_per_doc
         self.client = None
 
         if not COHERE_AVAILABLE:
@@ -96,6 +101,7 @@ class CohereReranker(BaseReranker):
             "name": "CohereReranker",
             "type": "reranker",
             "model": self.model,
+            "max_tokens_per_doc": self.max_tokens_per_doc,
             "available": self.is_available()
         }
 
@@ -140,12 +146,13 @@ class CohereReranker(BaseReranker):
                 combined_text = f"{title}\n\n{text}"
                 doc_texts.append(combined_text)
 
-            # Cohere Rerank API 호출
+            # Cohere Rerank API 호출 (V2Client)
             response = self.client.rerank(
                 model=self.model,
                 query=query,
                 documents=doc_texts,
-                top_n=min(top_k, len(documents))  # API에서 직접 top_k 개만 반환
+                top_n=min(top_k, len(documents)),  # API에서 직접 top_k 개만 반환
+                max_tokens_per_doc=self.max_tokens_per_doc  # 문서당 토큰 제한
             )
 
             # 결과 매핑
@@ -206,7 +213,8 @@ class CohereReranker(BaseReranker):
                 model=self.model,
                 query=query,
                 documents=[document],
-                top_n=1
+                top_n=1,
+                max_tokens_per_doc=self.max_tokens_per_doc
             )
 
             if response.results:

@@ -18,6 +18,7 @@ reranker:
   # Cohere Reranker 설정
   cohere:
     model: "rerank-v3.5"  # 최신 모델 (다국어 지원)
+    max_tokens_per_doc: 4096  # 문서당 최대 토큰 (기본값 4096, 비용/속도 최적화)
     # api_key는 .env 파일에서 COHERE_API_KEY로 설정
 
 # ==========================================

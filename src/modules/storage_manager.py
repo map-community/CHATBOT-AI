@@ -337,7 +337,8 @@ class StorageManager:
                     self._reranker = RerankerFactory.create(
                         reranker_type="cohere",
                         api_key=self._cohere_api_key,
-                        model=self._reranker_cohere_config.get("model", "rerank-v3.5")
+                        model=self._reranker_cohere_config.get("model", "rerank-v3.5"),
+                        max_tokens_per_doc=self._reranker_cohere_config.get("max_tokens_per_doc", 4096)
                     )
                 else:
                     logger.error(f"❌ 알 수 없는 Reranker 타입: {self._reranker_type}")
