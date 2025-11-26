@@ -145,8 +145,7 @@ class CohereReranker(BaseReranker):
                 model=self.model,
                 query=query,
                 documents=doc_texts,
-                top_n=min(top_k, len(documents)),  # API에서 직접 top_k 개만 반환
-                return_documents=False  # 문서는 이미 있으므로 반환하지 않음
+                top_n=min(top_k, len(documents))  # API에서 직접 top_k 개만 반환
             )
 
             # 결과 매핑
@@ -207,8 +206,7 @@ class CohereReranker(BaseReranker):
                 model=self.model,
                 query=query,
                 documents=[document],
-                top_n=1,
-                return_documents=False
+                top_n=1
             )
 
             if response.results:
