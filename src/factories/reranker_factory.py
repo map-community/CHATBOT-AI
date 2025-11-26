@@ -100,18 +100,19 @@ def _register_default_rerankers() -> None:
     except ImportError as e:
         logger.debug(f"BGEReranker 등록 실패: {e}")
 
+    # Cohere Reranker
+    try:
+        from modules.retrieval.rerankers.cohere_reranker import CohereReranker
+        RerankerFactory.register("cohere", CohereReranker)
+    except ImportError as e:
+        logger.debug(f"CohereReranker 등록 실패: {e}")
+
     # 향후 추가 가능:
     # try:
     #     from modules.retrieval.rerankers.flashrank_reranker import FlashRankReranker
     #     RerankerFactory.register("flashrank", FlashRankReranker)
     # except ImportError:
     #     logger.debug("FlashRankReranker 사용 불가")
-    #
-    # try:
-    #     from modules.retrieval.rerankers.cohere_reranker import CohereReranker
-    #     RerankerFactory.register("cohere", CohereReranker)
-    # except ImportError:
-    #     logger.debug("CohereReranker 사용 불가")
 
 
 # 모듈 로드 시 자동 등록

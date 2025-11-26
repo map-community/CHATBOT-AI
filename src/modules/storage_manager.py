@@ -55,6 +55,7 @@ class StorageManager:
         self._reranker_type = os.getenv('RERANKER_TYPE', 'bge')
         self._reranker_model = os.getenv('RERANKER_MODEL', 'BAAI/bge-reranker-v2-m3')
         self._reranker_use_fp16 = os.getenv('RERANKER_USE_FP16', 'true').lower() == 'true'
+        self._cohere_api_key = os.getenv('COHERE_API_KEY')
 
         # Lazy initialization용 플래그
         self._pinecone_client = None
@@ -310,11 +311,30 @@ class StorageManager:
             logger.info(f"🔄 Reranker 초기화 중 (type: {self._reranker_type})...")
             try:
                 from factories.reranker_factory import RerankerFactory
-                self._reranker = RerankerFactory.create(
-                    reranker_type=self._reranker_type,
-                    model_name=self._reranker_model,
-                    use_fp16=self._reranker_use_fp16
-                )
+
+                # Reranker 타입에 따라 적절한 파라미터 전달
+                if self._reranker_type == "bge":
+                    self._reranker = RerankerFactory.create(
+                        reranker_type="bge",
+                        model_name=self._reranker_model,
+                        use_fp16=self._reranker_use_fp16
+                    )
+                elif self._reranker_type == "cohere":
+                    if not self._cohere_api_key:
+                        logger.error("❌ COHERE_API_KEY가 설정되지 않았습니다.")
+                        logger.warning("   Reranking이 비활성화됩니다 (원본 순서 유지)")
+                        return None
+
+                    self._reranker = RerankerFactory.create(
+                        reranker_type="cohere",
+                        api_key=self._cohere_api_key,
+                        model=os.getenv('COHERE_RERANK_MODEL', 'rerank-multilingual-v3.0')
+                    )
+                else:
+                    logger.error(f"❌ 알 수 없는 Reranker 타입: {self._reranker_type}")
+                    logger.warning("   Reranking이 비활성화됩니다 (원본 순서 유지)")
+                    return None
+
                 if self._reranker is not None:
                     logger.info("✅ Reranker 초기화 완료")
                 else:
