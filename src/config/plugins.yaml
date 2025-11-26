@@ -7,7 +7,7 @@
 reranker:
   # 사용할 Reranker 타입
   # 옵션: "bge", "cohere"
-  type: "bge"
+  type: "cohere"
 
   # BGE Reranker 설정
   bge:
