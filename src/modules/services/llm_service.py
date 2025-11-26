@@ -412,9 +412,15 @@ class LLMService:
 
         logger.info(f"{'='*80}")
 
-        # QA Prompt Template 가져오기
-        from modules.ai_modules import get_qa_prompt_template
-        PROMPT = get_qa_prompt_template()
+        # QA Prompt Template 생성
+        from config.prompts import get_qa_prompt
+        from langchain.prompts import PromptTemplate
+
+        prompt_text = get_qa_prompt()
+        PROMPT = PromptTemplate(
+            template=prompt_text,
+            input_variables=["current_time", "temporal_intent", "context", "question"]
+        )
 
         qa_chain = (
             {

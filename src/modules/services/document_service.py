@@ -275,11 +275,8 @@ class DocumentService:
             # 3. Redis에 저장 (다음을 위해)
             self._save_to_redis_cache()
 
-            # 4. Retriever 초기화
-            from modules.ai_modules import _initialize_retrievers
-            _initialize_retrievers()
-
             logger.info(f"✅ 캐시 초기화 완료! (titles: {len(self.storage.cached_titles)}, texts: {len(self.storage.cached_texts)})")
+            logger.info(f"   ⚠️  Retriever 초기화는 ai_modules에서 별도로 수행됩니다.")
 
         except Exception as e:
             logger.error(f"❌ 캐시 초기화 실패: {e}", exc_info=True)
@@ -311,11 +308,8 @@ class DocumentService:
 
             self._log_cache_stats("Redis")
 
-            # Retriever 초기화
-            from modules.ai_modules import _initialize_retrievers
-            _initialize_retrievers()
-
-            logger.info(f"✅ 캐시 초기화 완료! (titles: {len(self.storage.cached_titles)}, texts: {len(self.storage.cached_texts)})")
+            logger.info(f"✅ 캐시 로드 완료! (titles: {len(self.storage.cached_titles)}, texts: {len(self.storage.cached_texts)})")
+            logger.info(f"   ⚠️  Retriever 초기화는 ai_modules에서 별도로 수행됩니다.")
             return True
 
         except Exception as e:

@@ -119,8 +119,14 @@ def initialize_cache():
     """
     [DEPRECATED] DocumentService.initialize_cache()로 이동됨
     하위 호환성을 위한 wrapper 함수
+
+    캐시 로드 후 Retriever 초기화도 수행
     """
+    # 1. 캐시 로드 (DocumentService)
     document_service.initialize_cache()
+
+    # 2. Retriever 초기화 (ai_modules 책임)
+    _initialize_retrievers()
 
 
 def _initialize_retrievers():
@@ -381,11 +387,6 @@ def get_answer_from_chain(best_docs, user_question, query_noun, temporal_filter=
           query_noun=query_noun,
           temporal_filter=temporal_filter
       )
-
-
-
-    return qa_chain, relevant_docs, relevant_docs_content
-
 
 
 #######################################################################
