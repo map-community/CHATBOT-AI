@@ -112,6 +112,9 @@ class ResponseService:
         # ✅ Reranking 적용
         top_docs, reranking_used = self._apply_reranking(top_docs, question)
 
+        # ✅ Temporal Re-boosting: Reranker의 시간 무시 보정
+        top_docs = self._apply_temporal_reboosting(top_docs, temporal_filter, reranking_used)
+
         # ✅ 하이브리드 필터링: 극단적으로 낮은 점수만 사전 제거
         # - Top-k 기반 접근을 유지하되, "절대 불가능한" 케이스만 필터링
         # - BGE: 매우 낮은 음수 (-8 이하), Cohere: 거의 0에 가까운 값 (0.01 이하)
@@ -295,7 +298,9 @@ class ResponseService:
             relevant_docs=relevant_docs,
             relevant_docs_content=relevant_docs_content,
             final_image=final_image,
-            question=question
+            question=question,
+            temporal_filter=temporal_filter,
+            final_date=final_date
         )
 
         f_time = time.time() - s_time
@@ -398,6 +403,124 @@ class ResponseService:
             logger.info("   → Reranking 불필요")
 
         return top_docs, reranking_used
+
+    def _apply_temporal_reboosting(
+        self,
+        top_docs: List[List],
+        temporal_filter: Dict,
+        reranking_used: bool
+    ) -> List[List]:
+        """
+        Reranking 후 시간 맥락 기반 점수 재조정
+
+        Reranker는 semantic similarity만 고려하고 날짜를 무시하므로,
+        사용자가 "현재 진행중" 정보를 찾는 경우 최신 문서에 추가 부스팅 적용
+
+        Args:
+            top_docs: Reranking된 문서 리스트
+            temporal_filter: 시간 의도 파싱 결과
+            reranking_used: Reranking 사용 여부
+
+        Returns:
+            List[List]: 시간 맥락 고려하여 재정렬된 문서 리스트
+        """
+        from datetime import datetime
+        from dateutil.parser import parse
+
+        # Reranking 사용 안했거나, 시간 의도가 없으면 스킵
+        if not reranking_used or not temporal_filter:
+            return top_docs
+
+        # "현재 진행중" 의도가 아니면 스킵
+        if not temporal_filter.get('is_ongoing'):
+            return top_docs
+
+        logger.info("=" * 60)
+        logger.info("🕐 Temporal Re-boosting 시작 (Reranker의 시간 무시 보정)")
+        logger.info(f"   사용자 의도: 현재 진행중 정보 찾기 (is_ongoing=true)")
+
+        current_date = datetime.now()
+        current_year = current_date.year
+        current_month = current_date.month
+
+        # 현재 학기 판단 (3~8월: 1학기, 9~2월: 2학기)
+        if 3 <= current_month <= 8:
+            current_semester = 1
+        else:
+            current_semester = 2
+
+        logger.info(f"   현재: {current_year}년 {current_semester}학기 ({current_date.strftime('%Y-%m-%d')})")
+
+        # Re-boosting 전 Top 3 로깅
+        logger.info(f"   📊 Re-boosting 전 Top 3:")
+        for i, doc in enumerate(top_docs[:3]):
+            score, title, date, _, _ = doc[:5]
+            logger.info(f"      {i+1}위: [{score:.4f}] {title[:40]}... ({date})")
+
+        # 각 문서에 대해 시간 맥락 기반 점수 조정
+        for doc in top_docs:
+            original_score = doc[0]
+            doc_date_str = doc[2]  # ISO 8601 형식 날짜
+            doc_title = doc[1]
+
+            try:
+                doc_date = parse(doc_date_str)
+                doc_year = doc_date.year
+                doc_month = doc_date.month
+
+                # 문서 학기 판단
+                if 3 <= doc_month <= 8:
+                    doc_semester = 1
+                else:
+                    doc_semester = 2
+
+                # 시간 맥락 기반 부스팅 계산
+                boost_factor = 1.0
+                reason = ""
+
+                # 1. 현재 학기 문서: 강력한 부스팅
+                if doc_year == current_year and doc_semester == current_semester:
+                    boost_factor = 1.8  # 80% 부스팅
+                    reason = f"현재 학기 ({current_year}년 {current_semester}학기)"
+
+                # 2. 현재 연도 다른 학기: 중간 부스팅
+                elif doc_year == current_year and doc_semester != current_semester:
+                    boost_factor = 1.3  # 30% 부스팅
+                    reason = f"현재 연도 다른 학기 ({current_year}년 {doc_semester}학기)"
+
+                # 3. 1년 전: 약간 페널티
+                elif doc_year == current_year - 1:
+                    boost_factor = 0.85  # 15% 페널티
+                    reason = f"1년 전 ({doc_year}년)"
+
+                # 4. 2년 이상 전: 강한 페널티
+                elif doc_year < current_year - 1:
+                    boost_factor = 0.6  # 40% 페널티
+                    reason = f"2년 이상 전 ({doc_year}년)"
+
+                # 점수 조정
+                doc[0] = original_score * boost_factor
+
+                if boost_factor != 1.0:
+                    logger.info(f"      📅 {doc_title[:30]}...")
+                    logger.info(f"         {original_score:.4f} → {doc[0]:.4f} (×{boost_factor:.2f}, {reason})")
+
+            except Exception as e:
+                logger.warning(f"   ⚠️ 날짜 파싱 실패: {doc_date_str} ({e})")
+                continue
+
+        # 재정렬 (점수 기준 내림차순)
+        top_docs.sort(key=lambda x: x[0], reverse=True)
+
+        # Re-boosting 후 Top 3 로깅
+        logger.info(f"   🔝 Re-boosting 후 Top 3:")
+        for i, doc in enumerate(top_docs[:3]):
+            score, title, date, _, _ = doc[:5]
+            logger.info(f"      {i+1}위: [{score:.4f}] {title[:40]}... ({date})")
+
+        logger.info("=" * 60)
+
+        return top_docs
 
     def _enrich_with_same_document_chunks(
         self,
@@ -569,7 +692,9 @@ class ResponseService:
         relevant_docs: List,
         relevant_docs_content: str,
         final_image: List[str],
-        question: str
+        question: str,
+        temporal_filter: Dict = None,
+        final_date: str = None
     ) -> Dict[str, Any]:
         """
         최종 응답 JSON 생성
@@ -580,6 +705,8 @@ class ResponseService:
             relevant_docs_content: 포맷팅된 컨텍스트
             final_image: 이미지 URL 리스트
             question: 사용자 질문
+            temporal_filter: 시간 의도 파싱 결과
+            final_date: 선택된 문서 날짜
 
         Returns:
             Dict: 응답 JSON
@@ -669,12 +796,47 @@ class ResponseService:
 
                 # 답변 텍스트에서 부정 패턴 검사
                 if any(pattern in llm_answer_text for pattern in negative_patterns):
-                    logger.warning(f"⚠️ LLM answerable 오판 감지!")
+                    logger.warning(f"⚠️ LLM answerable 오판 감지 (부정 패턴)!")
                     logger.warning(f"   - LLM 판단: answerable=true")
                     logger.warning(f"   - 하지만 답변에 부정 패턴 포함: {[p for p in negative_patterns if p in llm_answer_text]}")
                     logger.warning(f"   - 답변 미리보기: {llm_answer_text[:200]}...")
                     logger.warning(f"   → answerable=false로 보정")
                     answerable = False
+
+            # ✅ Temporal Validation: 현재 진행중 질문인데 과거 데이터로 답변하면 false
+            if answerable and temporal_filter and temporal_filter.get('is_ongoing') and final_date:
+                from datetime import datetime
+                from dateutil.parser import parse
+
+                try:
+                    doc_date = parse(final_date)
+                    current_date = datetime.now()
+                    doc_year = doc_date.year
+                    current_year = current_date.year
+
+                    # 1년 이상 차이나면 과거 데이터로 판단
+                    if doc_year < current_year:
+                        logger.warning(f"⚠️ LLM answerable 오판 감지 (시간 맥락 불일치)!")
+                        logger.warning(f"   - LLM 판단: answerable=true")
+                        logger.warning(f"   - 사용자 의도: 현재 진행중 정보 (is_ongoing=true)")
+                        logger.warning(f"   - 문서 날짜: {doc_year}년 (현재: {current_year}년)")
+                        logger.warning(f"   - 시간 차이: {current_year - doc_year}년 전")
+                        logger.warning(f"   → answerable=false로 보정")
+
+                        # 답변에 과거 데이터라는 경고 추가
+                        year_diff = current_year - doc_year
+                        warning_prefix = f"⚠️ 주의: 제공된 문서는 {doc_year}년 자료입니다 ({year_diff}년 전). "
+                        if not llm_answer_text.startswith("⚠️"):
+                            llm_answer_text = warning_prefix + llm_answer_text
+
+                        # 현재 정보는 최신 공지 확인 안내 추가
+                        if "최신 공지" not in llm_answer_text and "공지사항을 확인" not in llm_answer_text:
+                            llm_answer_text += f" 현재 {current_year}년 정보는 최신 공지사항을 확인해주세요."
+
+                        answerable = False
+
+                except Exception as e:
+                    logger.warning(f"   ⚠️ Temporal Validation 실패: {e}")
         else:
             # JSON 파싱 실패 → 폴백: 패턴 매칭으로 판단
             answer_start = llm_answer_text[:150]
