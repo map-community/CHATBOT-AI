@@ -7,7 +7,7 @@ from .bm25_retriever import BM25Retriever
 from .dense_retriever import DenseRetriever
 from .document_combiner import DocumentCombiner
 from .document_clusterer import DocumentClusterer
-from .keyword_filter import KeywordFilter
+from modules.preprocessing.keyword_filter import KeywordFilter
 
 __all__ = [
     'BM25Retriever',
