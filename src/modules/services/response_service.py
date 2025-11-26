@@ -47,7 +47,7 @@ class ResponseService:
         transformed_query_fn,
         find_url_fn,
         minimum_similarity_score: float,
-        minimum_reranker_score: float = 0.3
+        minimum_reranker_score: float = 0.0  # 하위 호환성 유지 (사용 안함)
     ) -> Dict[str, Any]:
         """
         메인 응답 생성 파이프라인
@@ -56,8 +56,8 @@ class ResponseService:
             question: 사용자 질문
             transformed_query_fn: 명사 추출 함수
             find_url_fn: URL 검색 함수
-            minimum_similarity_score: 최소 유사도 임계값 (BM25+Dense용)
-            minimum_reranker_score: 최소 유사도 임계값 (Reranker용, 기본값 0.3)
+            minimum_similarity_score: 최소 유사도 임계값 (사용 안함, 하위 호환성만)
+            minimum_reranker_score: 사용 안함 (하위 호환성만)
 
         Returns:
             Dict: 응답 JSON
@@ -112,13 +112,13 @@ class ResponseService:
         # ✅ Reranking 적용
         top_docs, reranking_used = self._apply_reranking(top_docs, question)
 
-        # ✅ 적응형 임계값: Reranking 사용 여부에 따라 다른 임계값 적용
+        # ✅ Top-k 기반 접근: 상대적 순서(Ranking)만 신뢰, 절대적 임계값 제거
+        # 참고: BGE 리랭커 아티클 - "절대적 임계값이 아닌 상대적 순서로 판단"
         if reranking_used:
-            threshold = minimum_reranker_score
-            logger.info(f"✅ Reranking 적용됨 → Reranker 임계값 사용 ({threshold})")
+            logger.info("✅ Reranker 사용 → Top-k 기반 상대적 순서 신뢰")
+            logger.info("   (절대적 임계값 제거, LLM answerable이 최종 판단)")
         else:
-            threshold = minimum_similarity_score
-            logger.info(f"✅ 기본 검색 → BM25+Dense 임계값 사용 ({threshold})")
+            logger.info("✅ 초기 검색 → Top-k 사용, LLM에 전달")
 
         # ✅ Reranking 후 Top 5 로깅
         logger.info("=" * 60)
@@ -169,8 +169,8 @@ class ResponseService:
             final_url = "No URL"
             final_image = ["No content"]
 
-        # 이미지만 있고 텍스트가 없는 경우
-        if final_image[0] != "No content" and final_text == "No content" and final_score >= threshold:
+        # 이미지만 있고 텍스트가 없는 경우 (Top-k로 선택되었으므로 바로 반환)
+        if final_image[0] != "No content" and final_text == "No content":
             only_image_response = {
                 "answer": None,
                 "references": final_url,
@@ -226,8 +226,8 @@ class ResponseService:
             logger.warning(f"⚠️ 답변 생성 실패 조건 진입!")
             logger.warning(f"   조건: not qa_chain ({not qa_chain}) or not relevant_docs ({not relevant_docs})")
             logger.warning(f"   → 기본 응답 반환 예정")
-            # 적응형 임계값 적용 (Reranking 고려)
-            if final_image[0] != "No content" and final_score >= threshold:
+            # Top-k로 선택되었으므로 이미지가 있으면 반환
+            if final_image[0] != "No content":
                 data = {
                     "answer": "해당 질문에 대한 내용은 이미지 파일로 확인해주세요.",
                     "answerable": True,  # 이미지로 답변 제공
@@ -243,17 +243,11 @@ class ResponseService:
                 print(f"get_ai_message 총 돌아가는 시간 : {f_time}")
                 return not_in_notices_response
 
-        # 유사도 체크 (적응형 임계값 이미 115-121번 줄에서 계산됨)
-        if final_score < threshold:
-            logger.warning(f"⚠️ 유사도 조건 진입!")
-            logger.warning(f"   final_score ({final_score:.4f}) < threshold ({threshold})")
-            logger.warning(f"   Reranking 사용: {reranking_used}")
-            logger.warning(f"   → 기본 응답 반환")
-            f_time = time.time() - s_time
-            print(f"get_ai_message 총 돌아가는 시간 : {f_time}")
-            return not_in_notices_response
-        else:
-            logger.info(f"✅ 유사도 체크 통과: {final_score:.4f} >= {threshold}")
+        # ✅ Top-k 기반 접근: 절대적 임계값 제거
+        # Reranker/초기검색이 이미 상대적 순서로 Top-k 선택
+        # 최종 판단은 LLM의 answerable 필드에 위임
+        logger.info(f"✅ Top-1 문서 선택 완료 (score: {final_score:.4f})")
+        logger.info(f"   → LLM에 전달하여 answerable 판단 (절대적 임계값 사용 안함)")
 
         # LLM에서 답변을 생성하는 경우
         logger.info(f"✅ 모든 조건 통과! LLM 답변 생성 시작...")
