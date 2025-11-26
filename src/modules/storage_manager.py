@@ -51,6 +51,18 @@ class StorageManager:
         self._redis_host = os.getenv('REDIS_HOST', 'localhost')
         self._redis_port = int(os.getenv('REDIS_PORT', 6379))
 
+        # Reranker 설정 (plugins.yaml에서 로드)
+        from config.ml_settings import load_plugin_config
+        plugin_config = load_plugin_config()
+        reranker_config = plugin_config.get("reranker", {})
+
+        self._reranker_type = reranker_config.get("type", "bge")
+        self._reranker_bge_config = reranker_config.get("bge", {})
+        self._reranker_cohere_config = reranker_config.get("cohere", {})
+
+        # API 키는 환경변수에서만 로드 (보안)
+        self._cohere_api_key = os.getenv('COHERE_API_KEY')
+
         # Lazy initialization용 플래그
         self._pinecone_client = None
         self._pinecone_index = None
@@ -302,16 +314,44 @@ class StorageManager:
     def reranker(self):
         """DocumentReranker 인스턴스 (즉시 초기화 가능)"""
         if self._reranker is None:
-            logger.info("🔄 DocumentReranker 초기화 중...")
+            logger.info(f"🔄 Reranker 초기화 중 (type: {self._reranker_type})...")
             try:
-                from modules.retrieval.reranker import DocumentReranker
-                self._reranker = DocumentReranker(
-                    model_name="BAAI/bge-reranker-v2-m3",
-                    use_fp16=True
-                )
-                logger.info("✅ DocumentReranker 초기화 완료")
+                from factories.reranker_factory import RerankerFactory
+
+                # Reranker 타입에 따라 적절한 파라미터 전달
+                if self._reranker_type == "bge":
+                    # plugins.yaml의 BGE 설정 사용
+                    self._reranker = RerankerFactory.create(
+                        reranker_type="bge",
+                        model_name=self._reranker_bge_config.get("model_name", "BAAI/bge-reranker-v2-m3"),
+                        use_fp16=self._reranker_bge_config.get("use_fp16", True),
+                        device=self._reranker_bge_config.get("device", "cpu")
+                    )
+                elif self._reranker_type == "cohere":
+                    if not self._cohere_api_key:
+                        logger.error("❌ COHERE_API_KEY가 설정되지 않았습니다.")
+                        logger.warning("   Reranking이 비활성화됩니다 (원본 순서 유지)")
+                        return None
+
+                    # plugins.yaml의 Cohere 설정 사용
+                    self._reranker = RerankerFactory.create(
+                        reranker_type="cohere",
+                        api_key=self._cohere_api_key,
+                        model=self._reranker_cohere_config.get("model", "rerank-v3.5"),
+                        max_tokens_per_doc=self._reranker_cohere_config.get("max_tokens_per_doc", 4096)
+                    )
+                else:
+                    logger.error(f"❌ 알 수 없는 Reranker 타입: {self._reranker_type}")
+                    logger.warning("   Reranking이 비활성화됩니다 (원본 순서 유지)")
+                    return None
+
+                if self._reranker is not None:
+                    logger.info("✅ Reranker 초기화 완료")
+                else:
+                    logger.warning(f"⚠️  Reranker 초기화 실패 (타입: {self._reranker_type})")
+                    logger.warning("   Reranking이 비활성화됩니다 (원본 순서 유지)")
             except Exception as e:
-                logger.warning(f"⚠️  DocumentReranker 초기화 실패: {e}")
+                logger.warning(f"⚠️  Reranker 초기화 실패: {e}")
                 logger.warning("   Reranking이 비활성화됩니다 (원본 순서 유지)")
                 # 실패 시 None 유지 (ai_modules에서 None 체크 필요)
         return self._reranker

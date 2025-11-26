@@ -450,10 +450,15 @@ def get_ai_message_legacy(question):
         logger.info(f"   {i+1}위: [{score:.4f}] {title[:50]}... ({date})")
     logger.info("=" * 60)
 
-    # ✅ BGE-Reranker로 문서 재순위화 (관련성 기준)
+    # ✅ Reranker로 문서 재순위화 (관련성 기준)
     reranking_used = False  # Reranking 사용 여부 추적
     if storage.reranker and len(top_docs) > 1:
-        logger.info("🎯 BGE-Reranker 활성화!")
+        # 현재 사용 중인 Reranker 정보 가져오기
+        reranker_info = storage.reranker.get_model_info()
+        reranker_name = reranker_info.get('name', 'Reranker')
+        reranker_model = reranker_info.get('model', '')
+
+        logger.info(f"🎯 {reranker_name} 활성화! (모델: {reranker_model})")
         rerank_time = time.time()
         logger.info(f"   입력: {len(top_docs)}개 문서 → Reranking 시작...")
 

@@ -6,31 +6,30 @@
 # ==========================================
 reranker:
   # 사용할 Reranker 타입
-  # 옵션: "bge", "flashrank", "cohere", "voyage"
-  type: "bge"
+  # 옵션: "bge", "cohere"
+  type: "cohere"
 
-  # Reranker 설정
-  config:
+  # BGE Reranker 설정
+  bge:
     model_name: "BAAI/bge-reranker-v2-m3"  # 다국어 지원 (한국어 포함)
     use_fp16: true                          # FP16 사용 (GPU 메모리 절약)
     device: "cpu"                           # "cpu" 또는 "cuda"
 
-# ==========================================
-# FlashRank로 교체하려면 (빠른 속도)
-# ==========================================
-# reranker:
-#   type: "flashrank"
-#   config:
-#     model_name: "ms-marco-MultiBERT-L-12"
+  # Cohere Reranker 설정
+  cohere:
+    model: "rerank-v3.5"  # 최신 모델 (다국어 지원)
+    max_tokens_per_doc: 4096  # 문서당 최대 토큰 (기본값 4096, 비용/속도 최적화)
+    # api_key는 .env 파일에서 COHERE_API_KEY로 설정
 
 # ==========================================
-# Cohere API로 교체하려면 (높은 정확도, API 비용)
+# 사용 예시
 # ==========================================
-# reranker:
-#   type: "cohere"
-#   config:
-#     model: "rerank-english-v3.0"
-#     api_key: "${COHERE_API_KEY}"  # 환경 변수에서 로드
+# 1. BGE 사용 (기본값, 로컬 모델):
+#    reranker.type: "bge"
+#
+# 2. Cohere 사용 (API 기반):
+#    reranker.type: "cohere"
+#    .env에 COHERE_API_KEY 설정 필요
 
 # ==========================================
 # 향후 확장 가능한 설정들
