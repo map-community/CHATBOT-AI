@@ -1,0 +1,53 @@
+# RAG 시스템 플러그인 설정
+# 런타임에 사용할 Reranker, Embedder, LLM 등을 선택합니다.
+
+# ==========================================
+# Reranker 설정
+# ==========================================
+reranker:
+  # 사용할 Reranker 타입
+  # 옵션: "bge", "flashrank", "cohere", "voyage"
+  type: "bge"
+
+  # Reranker 설정
+  config:
+    model_name: "BAAI/bge-reranker-v2-m3"  # 다국어 지원 (한국어 포함)
+    use_fp16: true                          # FP16 사용 (GPU 메모리 절약)
+    device: "cpu"                           # "cpu" 또는 "cuda"
+
+# ==========================================
+# FlashRank로 교체하려면 (빠른 속도)
+# ==========================================
+# reranker:
+#   type: "flashrank"
+#   config:
+#     model_name: "ms-marco-MultiBERT-L-12"
+
+# ==========================================
+# Cohere API로 교체하려면 (높은 정확도, API 비용)
+# ==========================================
+# reranker:
+#   type: "cohere"
+#   config:
+#     model: "rerank-english-v3.0"
+#     api_key: "${COHERE_API_KEY}"  # 환경 변수에서 로드
+
+# ==========================================
+# 향후 확장 가능한 설정들
+# ==========================================
+
+# embedder:
+#   type: "upstage"  # "upstage", "openai", "cohere", "voyage"
+#   config:
+#     model: "solar-embedding-1-large-passage"
+
+# llm:
+#   type: "upstage"  # "upstage", "openai", "anthropic", "gemini"
+#   config:
+#     model: "solar-1-mini-chat"
+#     max_tokens: 4096
+
+# vector_store:
+#   type: "pinecone"  # "pinecone", "weaviate", "qdrant", "milvus"
+#   config:
+#     index_name: "info"

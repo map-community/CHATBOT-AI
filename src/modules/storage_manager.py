@@ -94,7 +94,7 @@ class StorageManager:
         try:
             logger.info("  📦 preprocessing 모듈 import 시도...")
             from modules.preprocessing import QueryTransformer
-            from modules.retrieval.keyword_filter import KeywordFilter
+            from modules.preprocessing.keyword_filter import KeywordFilter
             logger.info("  ✓ preprocessing 모듈 import 성공")
 
             logger.info("  🔧 QueryTransformer 생성 시도...")

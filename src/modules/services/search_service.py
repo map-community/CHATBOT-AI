@@ -8,6 +8,12 @@ import re
 from typing import Tuple, List, Optional
 from datetime import datetime
 
+from modules.constants import (
+    NOTICE_BASE_URL,
+    COMPANY_BASE_URL,
+    SEMINAR_BASE_URL
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,10 +35,10 @@ class SearchService:
         """
         self.storage = storage_manager
 
-        # URL 상수 (하드코딩 → 추후 config로 이동 가능)
-        self.NOTICE_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_1"
-        self.COMPANY_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_3_b"
-        self.SEMINAR_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_4"
+        # URL 상수 (constants.py에서 import)
+        self.NOTICE_BASE_URL = NOTICE_BASE_URL
+        self.COMPANY_BASE_URL = COMPANY_BASE_URL
+        self.SEMINAR_BASE_URL = SEMINAR_BASE_URL
 
     def search_documents(
         self,
