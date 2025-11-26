@@ -8,7 +8,6 @@ import pickle
 from rank_bm25 import BM25Okapi
 from typing import List, Tuple
 import logging
-from bs4 import BeautifulSoup
 from multiprocessing import Pool, cpu_count
 import time
 import os
@@ -54,23 +53,10 @@ def _parse_html_to_text(html_or_markdown: str) -> str:
     Note:
         - Markdown (Upstage API 제공): 표 구조 보존, 그대로 반환
         - HTML (fallback): BeautifulSoup으로 파싱
+        - utils.html_parser 모듈로 위임
     """
-    if not html_or_markdown:
-        return ""
-
-    # Markdown 형식 감지 (표 형식: '|' 구분자)
-    # Markdown이면 그대로 반환 (이미 LLM이 이해하기 좋은 형태)
-    if '|' in html_or_markdown and ('---' in html_or_markdown or '\n' in html_or_markdown):
-        # Markdown 표 형식으로 보임
-        return html_or_markdown
-
-    # HTML이면 파싱
-    try:
-        soup = BeautifulSoup(html_or_markdown, 'html.parser')
-        return soup.get_text(separator=' ', strip=True)
-    except Exception:
-        # 파싱 실패 시 원본 반환
-        return html_or_markdown
+    from utils.html_parser import parse_html_or_markdown
+    return parse_html_or_markdown(html_or_markdown)
 
 
 # ✅ 병렬 토큰화용 전역 함수 (top-level에 정의해야 multiprocessing에서 pickle 가능)

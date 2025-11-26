@@ -3,6 +3,7 @@ Upstage API 클라이언트
 Document Parse, OCR 등 Upstage 서비스 통합
 """
 import os
+import sys
 import requests
 import logging
 from typing import Optional, Dict, List
@@ -11,7 +12,18 @@ import time
 import zipfile
 import io
 
+# Python path 설정 (config 모듈 import를 위해)
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
 logger = logging.getLogger(__name__)
+
+# ML 설정 로드 (ZIP 처리 제한값)
+try:
+    from config.ml_settings import get_ml_config
+    _ml_config = get_ml_config()
+except Exception:
+    # 설정 로드 실패 시 None (각 메서드에서 기본값 사용)
+    _ml_config = None
 
 
 class UpstageClient:
@@ -229,7 +241,10 @@ class UpstageClient:
                         "ocr": "auto"
                     }
 
-                    for attempt in range(self.max_retries):
+                    from utils.retry_helper import RetryContext
+
+                    retry_ctx = RetryContext(max_retries=self.max_retries)
+                    for attempt in retry_ctx:
                         try:
                             response = requests.post(
                                 self.API_URL,
@@ -261,13 +276,7 @@ class UpstageClient:
                                 logger.warning(f"OCR API 오류: {response.status_code} - {response.text[:200]}")
 
                         except Exception as e:
-                            if attempt < self.max_retries - 1:
-                                wait_time = 2 ** attempt
-                                logger.warning(f"재시도 {attempt + 1}/{self.max_retries} (대기: {wait_time}초)")
-                                time.sleep(wait_time)
-                            else:
-                                logger.error(f"OCR 실패 (이미지 첨부파일): {e}")
-                                raise
+                            retry_ctx.handle_exception(e, attempt)
 
                     return None
 
@@ -311,7 +320,10 @@ class UpstageClient:
                     "ocr": "auto"  # OCR 자동 활성화 (PDF 내장 텍스트 우선, 필요시 OCR)
                 }
 
-                for attempt in range(self.max_retries):
+                from utils.retry_helper import RetryContext
+
+                retry_ctx = RetryContext(max_retries=self.max_retries)
+                for attempt in retry_ctx:
                     try:
                         response = requests.post(
                             self.API_URL,
@@ -353,13 +365,7 @@ class UpstageClient:
                             logger.warning(f"Document Parse API 오류: {response.status_code} - {response.text[:200]}")
 
                     except Exception as e:
-                        if attempt < self.max_retries - 1:
-                            wait_time = 2 ** attempt
-                            logger.warning(f"재시도 {attempt + 1}/{self.max_retries} (대기: {wait_time}초)")
-                            time.sleep(wait_time)
-                        else:
-                            logger.error(f"Document Parse 실패: {e}")
-                            raise
+                        retry_ctx.handle_exception(e, attempt)
 
             except Exception as download_error:
                 logger.error(f"파일 다운로드 오류: {download_error}")
@@ -449,7 +455,10 @@ class UpstageClient:
                         "ocr": "auto"
                     }
 
-                    for attempt in range(self.max_retries):
+                    from utils.retry_helper import RetryContext
+
+                    retry_ctx = RetryContext(max_retries=self.max_retries)
+                    for attempt in retry_ctx:
                         try:
                             response = requests.post(
                                 self.API_URL,
@@ -486,13 +495,7 @@ class UpstageClient:
                                 logger.warning(f"OCR API 오류: {response.status_code} - {response.text[:200]}")
 
                         except Exception as e:
-                            if attempt < self.max_retries - 1:
-                                wait_time = 2 ** attempt
-                                logger.warning(f"재시도 {attempt + 1}/{self.max_retries} (대기: {wait_time}초)")
-                                time.sleep(wait_time)
-                            else:
-                                logger.error(f"OCR 실패 (Data URI): {e}")
-                                raise
+                            retry_ctx.handle_exception(e, attempt)
 
                     return None
 
@@ -604,7 +607,10 @@ class UpstageClient:
                     "ocr": "auto"
                 }
 
-                for attempt in range(self.max_retries):
+                from utils.retry_helper import RetryContext
+
+                retry_ctx = RetryContext(max_retries=self.max_retries)
+                for attempt in retry_ctx:
                     try:
                         response = requests.post(
                             self.API_URL,
@@ -642,13 +648,7 @@ class UpstageClient:
                             logger.warning(f"OCR API 오류: {response.status_code} - {response.text[:200]}")
 
                     except Exception as e:
-                        if attempt < self.max_retries - 1:
-                            wait_time = 2 ** attempt
-                            logger.warning(f"재시도 {attempt + 1}/{self.max_retries} (대기: {wait_time}초)")
-                            time.sleep(wait_time)
-                        else:
-                            logger.error(f"OCR 실패: {e}")
-                            raise
+                        retry_ctx.handle_exception(e, attempt)
 
             except Exception as download_error:
                 logger.error(f"이미지 다운로드 오류: {download_error}")
@@ -840,9 +840,16 @@ class UpstageClient:
                 "total_files": N
             }
         """
-        MAX_ZIP_SIZE = 100 * 1024 * 1024  # 100MB
-        MAX_TOTAL_FILES = 50  # ZIP 내 최대 파일 수
-        MAX_EXTRACTION_SIZE = 500 * 1024 * 1024  # 압축 해제 후 최대 크기 (500MB, Zip Bomb 방지)
+        # ZIP 처리 제한값 (ml_config에서 로드, 실패 시 기본값)
+        if _ml_config:
+            MAX_ZIP_SIZE = _ml_config.zip_processing.max_zip_size
+            MAX_TOTAL_FILES = _ml_config.zip_processing.max_total_files
+            MAX_EXTRACTION_SIZE = _ml_config.zip_processing.max_extraction_size
+        else:
+            # 폴백 기본값
+            MAX_ZIP_SIZE = 100 * 1024 * 1024  # 100MB
+            MAX_TOTAL_FILES = 50
+            MAX_EXTRACTION_SIZE = 500 * 1024 * 1024  # 500MB
 
         successful = []
         failed = []

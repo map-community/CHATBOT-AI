@@ -3,7 +3,12 @@
 모든 하드코딩된 값들을 중앙 관리
 """
 import os
+import sys
+from pathlib import Path
 from dotenv import load_dotenv
+
+# Python path 설정 (config 모듈 import를 위해)
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # .env 파일에서 환경변수 로드
 load_dotenv()
@@ -23,9 +28,16 @@ class CrawlerConfig:
     MONGODB_NOTICE_COLLECTION = 'notice_collection'
     MONGODB_STATE_COLLECTION = 'crawl_state'  # 크롤링 상태 저장용
 
-    # 텍스트 분할 설정
-    CHUNK_SIZE = 850
-    CHUNK_OVERLAP = 100
+    # 텍스트 분할 설정 (ML 설정에서 로드)
+    try:
+        from config.ml_settings import get_ml_config
+        _ml_config = get_ml_config()
+        CHUNK_SIZE = _ml_config.text_processing.chunk_size
+        CHUNK_OVERLAP = _ml_config.text_processing.chunk_overlap
+    except Exception:
+        # 설정 로드 실패 시 기본값 사용
+        CHUNK_SIZE = 850
+        CHUNK_OVERLAP = 100
 
     # 임베딩 설정
     EMBEDDING_MODEL = 'solar-embedding-1-large-passage'
