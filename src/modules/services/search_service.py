@@ -31,7 +31,7 @@ class SearchService:
 
         # URL 상수 (하드코딩 → 추후 config로 이동 가능)
         self.NOTICE_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_1"
-        self.COMPANY_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_2"
+        self.COMPANY_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_3_b"
         self.SEMINAR_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_4"
 
     def search_documents(
