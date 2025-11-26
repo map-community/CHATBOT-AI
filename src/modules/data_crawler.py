@@ -266,8 +266,8 @@ def extract_professor_info_from_urls(urls):
                 email = contact_info[1].get_text(strip=True) if len(contact_info) > 1 else "Unknown Email"
                 text_content = f"{title}, {contact_number}, {email}"
 
-                # 날짜와 URL 설정
-                date = "작성일24-01-01 00:00"
+                # 날짜와 URL 설정 (ISO 8601 형식)
+                date = "2024-01-01T00:00:00+09:00"
 
                 prof_url_element = professor.find("a")
                 prof_url = prof_url_element["href"] if prof_url_element else "Unknown URL"
@@ -316,8 +316,8 @@ def extract_professor_info_from_urls_2(urls):
                 # 텍스트 내용 조합
                 text_content = f"성함(이름):{title}, 연구실(장소):{contact_place}, 이메일:{email}"
 
-                # 날짜와 URL 설정
-                date = "작성일24-01-01 00:00"
+                # 날짜와 URL 설정 (ISO 8601 형식)
+                date = "2024-01-01T00:00:00+09:00"
                 prof_url = url
 
                 # 각 교수의 정보를 all_data에 추가
@@ -373,8 +373,8 @@ def extract_professor_info_from_urls_3(urls):
                 # 텍스트 내용 조합
                 text_content = f"성함(이름):{title}, 연락처(전화번호):{contact_number}, 사무실(장소):{contact_place}, 이메일:{email}, 담당업무:{role}"
 
-                # 날짜와 URL 설정
-                date = "작성일24-01-01 00:00"
+                # 날짜와 URL 설정 (ISO 8601 형식)
+                date = "2024-01-01T00:00:00+09:00"
                 prof_url = url
 
                 # 각 교수의 정보를 all_data에 추가

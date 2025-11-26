@@ -35,8 +35,8 @@ def parse_korean_date(date_str: str) -> Optional[datetime]:
         # 한국 시간대 추가
         return KST.localize(naive_date)
 
-    except Exception as e:
-        print(f"⚠️  날짜 파싱 실패: {date_str} - {e}")
+    except Exception:
+        # 파싱 실패 시 None 반환 (경고 제거 - 크롤러에서만 사용됨)
         return None
 
 
@@ -132,26 +132,26 @@ def calculate_days_diff(date_str: str) -> Optional[int]:
 # 하위 호환성을 위한 함수 (기존 코드와의 호환)
 def parse_date_change_korea_time(date_str: str) -> Optional[datetime]:
     """
-    레거시 함수: 기존 코드와의 호환성 유지
-    한국어 날짜 문자열 또는 ISO 8601 문자열을 datetime 객체로 변환
+    ISO 8601 문자열을 datetime 객체로 변환
+
+    [통일된 날짜 형식] 모든 날짜는 ISO 8601 형식으로 저장/처리됩니다.
 
     Args:
-        date_str: "작성일25-10-17 15:48" 또는 ISO 8601 형식
+        date_str: ISO 8601 형식 (예: "2024-01-01T00:00:00+09:00")
 
     Returns:
         datetime 객체 (한국 시간대) 또는 None
     """
-    # 먼저 한국어 형식 시도
-    dt = parse_korean_date(date_str)
-    if dt:
-        return dt
+    if not date_str:
+        return None
 
-    # ISO 8601 형식 시도
     try:
+        # ISO 8601 형식 파싱
         dt = datetime.fromisoformat(date_str)
         # 시간대가 없으면 한국 시간대 추가
         if dt.tzinfo is None:
             return KST.localize(dt)
         return dt
     except Exception:
+        # 파싱 실패 시 None 반환 (경고 제거)
         return None

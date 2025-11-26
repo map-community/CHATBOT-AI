@@ -55,8 +55,8 @@ class ScoringService:
         # 날짜 차이 계산 (일 단위)
         days_diff = (current_date - post_date).days
 
-        # 기준 날짜 (24-01-01 00:00) 설정
-        baseline_date_str = "24-01-01 00:00"
+        # 기준 날짜 (2024-01-01 00:00) 설정
+        baseline_date_str = "2024-01-01T00:00:00+09:00"
         baseline_date = self.parse_date(baseline_date_str)
         graduate_weight = 1.0 if any(keyword in query_nouns for keyword in ['졸업', '인터뷰']) else 0
         scholar_weight = 1.0 if '장학' in query_nouns else 0
