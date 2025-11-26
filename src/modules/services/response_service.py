@@ -46,7 +46,8 @@ class ResponseService:
         question: str,
         transformed_query_fn,
         find_url_fn,
-        minimum_similarity_score: float
+        minimum_similarity_score: float,
+        minimum_reranker_score: float = 0.3
     ) -> Dict[str, Any]:
         """
         메인 응답 생성 파이프라인
@@ -55,7 +56,8 @@ class ResponseService:
             question: 사용자 질문
             transformed_query_fn: 명사 추출 함수
             find_url_fn: URL 검색 함수
-            minimum_similarity_score: 최소 유사도 임계값
+            minimum_similarity_score: 최소 유사도 임계값 (BM25+Dense용)
+            minimum_reranker_score: 최소 유사도 임계값 (Reranker용, 기본값 0.3)
 
         Returns:
             Dict: 응답 JSON
@@ -110,6 +112,14 @@ class ResponseService:
         # ✅ Reranking 적용
         top_docs, reranking_used = self._apply_reranking(top_docs, question)
 
+        # ✅ 적응형 임계값: Reranking 사용 여부에 따라 다른 임계값 적용
+        if reranking_used:
+            threshold = minimum_reranker_score
+            logger.info(f"✅ Reranking 적용됨 → Reranker 임계값 사용 ({threshold})")
+        else:
+            threshold = minimum_similarity_score
+            logger.info(f"✅ 기본 검색 → BM25+Dense 임계값 사용 ({threshold})")
+
         # ✅ Reranking 후 Top 5 로깅
         logger.info("=" * 60)
         logger.info(f"🔝 Reranking 후 최종 결과 Top {min(5, len(top_docs))}:")
@@ -160,7 +170,7 @@ class ResponseService:
             final_image = ["No content"]
 
         # 이미지만 있고 텍스트가 없는 경우
-        if final_image[0] != "No content" and final_text == "No content" and (final_score < 0 or final_score > minimum_similarity_score):
+        if final_image[0] != "No content" and final_text == "No content" and final_score >= threshold:
             only_image_response = {
                 "answer": None,
                 "references": final_url,
@@ -216,8 +226,8 @@ class ResponseService:
             logger.warning(f"⚠️ 답변 생성 실패 조건 진입!")
             logger.warning(f"   조건: not qa_chain ({not qa_chain}) or not relevant_docs ({not relevant_docs})")
             logger.warning(f"   → 기본 응답 반환 예정")
-            # Reranker 점수는 음수일 수 있으므로 final_score < 0이면 유사도 체크 스킵
-            if final_image[0] != "No content" and (final_score < 0 or final_score > minimum_similarity_score):
+            # 적응형 임계값 적용 (Reranking 고려)
+            if final_image[0] != "No content" and final_score >= threshold:
                 data = {
                     "answer": "해당 질문에 대한 내용은 이미지 파일로 확인해주세요.",
                     "answerable": True,  # 이미지로 답변 제공
@@ -233,16 +243,17 @@ class ResponseService:
                 print(f"get_ai_message 총 돌아가는 시간 : {f_time}")
                 return not_in_notices_response
 
-        # 유사도가 낮은 경우 (단, Reranker 점수는 음수일 수 있으므로 체크 스킵)
-        if final_score >= 0 and final_score < minimum_similarity_score:
+        # 유사도 체크 (적응형 임계값 이미 115-121번 줄에서 계산됨)
+        if final_score < threshold:
             logger.warning(f"⚠️ 유사도 조건 진입!")
-            logger.warning(f"   final_score ({final_score:.4f}) < MINIMUM_SIMILARITY_SCORE ({minimum_similarity_score})")
+            logger.warning(f"   final_score ({final_score:.4f}) < threshold ({threshold})")
+            logger.warning(f"   Reranking 사용: {reranking_used}")
             logger.warning(f"   → 기본 응답 반환")
             f_time = time.time() - s_time
             print(f"get_ai_message 총 돌아가는 시간 : {f_time}")
             return not_in_notices_response
-        elif final_score < 0:
-            logger.info(f"✅ Reranker 점수 감지 ({final_score:.4f}) → 유사도 체크 스킵")
+        else:
+            logger.info(f"✅ 유사도 체크 통과: {final_score:.4f} >= {threshold}")
 
         # LLM에서 답변을 생성하는 경우
         logger.info(f"✅ 모든 조건 통과! LLM 답변 생성 시작...")
