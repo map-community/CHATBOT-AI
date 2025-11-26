@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 # FlagEmbedding import 시도
 try:
-    from FlagEmbedding import FlagReranker
+    from FlagEmbedding import FlagReranker  # type: ignore
     RERANKER_AVAILABLE = True
 except ImportError:
     logger.warning("⚠️  FlagEmbedding을 불러올 수 없습니다. BGEReranker가 비활성화됩니다.")
