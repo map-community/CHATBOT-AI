@@ -51,10 +51,16 @@ class StorageManager:
         self._redis_host = os.getenv('REDIS_HOST', 'localhost')
         self._redis_port = int(os.getenv('REDIS_PORT', 6379))
 
-        # Reranker 설정
-        self._reranker_type = os.getenv('RERANKER_TYPE', 'bge')
-        self._reranker_model = os.getenv('RERANKER_MODEL', 'BAAI/bge-reranker-v2-m3')
-        self._reranker_use_fp16 = os.getenv('RERANKER_USE_FP16', 'true').lower() == 'true'
+        # Reranker 설정 (plugins.yaml에서 로드)
+        from config.ml_settings import load_plugin_config
+        plugin_config = load_plugin_config()
+        reranker_config = plugin_config.get("reranker", {})
+
+        self._reranker_type = reranker_config.get("type", "bge")
+        self._reranker_bge_config = reranker_config.get("bge", {})
+        self._reranker_cohere_config = reranker_config.get("cohere", {})
+
+        # API 키는 환경변수에서만 로드 (보안)
         self._cohere_api_key = os.getenv('COHERE_API_KEY')
 
         # Lazy initialization용 플래그
@@ -314,10 +320,12 @@ class StorageManager:
 
                 # Reranker 타입에 따라 적절한 파라미터 전달
                 if self._reranker_type == "bge":
+                    # plugins.yaml의 BGE 설정 사용
                     self._reranker = RerankerFactory.create(
                         reranker_type="bge",
-                        model_name=self._reranker_model,
-                        use_fp16=self._reranker_use_fp16
+                        model_name=self._reranker_bge_config.get("model_name", "BAAI/bge-reranker-v2-m3"),
+                        use_fp16=self._reranker_bge_config.get("use_fp16", True),
+                        device=self._reranker_bge_config.get("device", "cpu")
                     )
                 elif self._reranker_type == "cohere":
                     if not self._cohere_api_key:
@@ -325,10 +333,11 @@ class StorageManager:
                         logger.warning("   Reranking이 비활성화됩니다 (원본 순서 유지)")
                         return None
 
+                    # plugins.yaml의 Cohere 설정 사용
                     self._reranker = RerankerFactory.create(
                         reranker_type="cohere",
                         api_key=self._cohere_api_key,
-                        model=os.getenv('COHERE_RERANK_MODEL', 'rerank-v3.5')
+                        model=self._reranker_cohere_config.get("model", "rerank-v3.5")
                     )
                 else:
                     logger.error(f"❌ 알 수 없는 Reranker 타입: {self._reranker_type}")
