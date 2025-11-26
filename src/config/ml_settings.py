@@ -181,3 +181,71 @@ def get_bm25_k1() -> float:
 def get_bm25_b() -> float:
     """BM25 b 파라미터 반환"""
     return get_ml_config().bm25.b
+
+
+# ============================================================
+# 플러그인 설정 로드 (Reranker, Embedder, LLM 등)
+# ============================================================
+_plugin_config: Optional[dict] = None
+
+
+def load_plugin_config(reload: bool = False) -> dict:
+    """
+    플러그인 설정 로드 (plugins.yaml)
+
+    Args:
+        reload: 설정을 다시 로드할지 여부 (기본값: False)
+
+    Returns:
+        dict: 플러그인 설정 (reranker, embedder, llm 등)
+
+    Examples:
+        >>> config = load_plugin_config()
+        >>> reranker_type = config["reranker"]["type"]  # "bge"
+        >>> reranker_config = config["reranker"]["config"]
+    """
+    global _plugin_config
+
+    if _plugin_config is None or reload:
+        try:
+            config_dir = Path(__file__).parent
+            plugin_yaml_path = config_dir / "plugins.yaml"
+
+            if plugin_yaml_path.exists():
+                with open(plugin_yaml_path, 'r', encoding='utf-8') as f:
+                    _plugin_config = yaml.safe_load(f) or {}
+            else:
+                # plugins.yaml가 없으면 기본값 사용
+                _plugin_config = {
+                    "reranker": {
+                        "type": "bge",
+                        "config": {
+                            "model_name": "BAAI/bge-reranker-v2-m3",
+                            "use_fp16": True,
+                            "device": "cpu"
+                        }
+                    }
+                }
+        except Exception as e:
+            print(f"⚠️ 플러그인 설정 로드 실패: {e}")
+            _plugin_config = {}
+
+    return _plugin_config
+
+
+def get_reranker_config() -> dict:
+    """
+    Reranker 설정 반환
+
+    Returns:
+        dict: {"type": str, "config": dict}
+    """
+    plugin_config = load_plugin_config()
+    return plugin_config.get("reranker", {
+        "type": "bge",
+        "config": {
+            "model_name": "BAAI/bge-reranker-v2-m3",
+            "use_fp16": True,
+            "device": "cpu"
+        }
+    })
