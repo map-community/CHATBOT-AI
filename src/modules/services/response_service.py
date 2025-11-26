@@ -112,13 +112,43 @@ class ResponseService:
         # ✅ Reranking 적용
         top_docs, reranking_used = self._apply_reranking(top_docs, question)
 
-        # ✅ Top-k 기반 접근: 상대적 순서(Ranking)만 신뢰, 절대적 임계값 제거
+        # ✅ 하이브리드 필터링: 극단적으로 낮은 점수만 사전 제거
+        # - Top-k 기반 접근을 유지하되, "절대 불가능한" 케이스만 필터링
+        # - BGE: 매우 낮은 음수 (-8 이하), Cohere: 거의 0에 가까운 값 (0.01 이하)
+        # - 초기 검색(BM25+Dense): 0.5 이하 (거의 관련 없음)
+        if top_docs and len(top_docs) > 0:
+            top_score = top_docs[0][0]
+
+            # Reranker 사용 시: 극단적 저점수 필터링
+            if reranking_used:
+                # BGE는 음수도 가능, Cohere는 0~1 범위
+                # 매우 보수적인 임계값: BGE -8 이하, Cohere 0.01 이하만 제거
+                EXTREME_LOW_THRESHOLD = -8.0  # BGE 기준
+                if top_score < EXTREME_LOW_THRESHOLD:
+                    logger.warning(f"⚠️ 극단적 저점수 감지: {top_score:.4f} < {EXTREME_LOW_THRESHOLD}")
+                    logger.warning(f"   → 검색 결과가 질문과 거의 무관할 가능성 높음")
+                    f_time = time.time() - s_time
+                    print(f"get_ai_message 총 돌아가는 시간 : {f_time}")
+                    return self._build_no_result_response()
+
+            # 초기 검색 시: 0.5 이하만 제거 (BM25+Dense 스케일)
+            else:
+                INITIAL_SEARCH_LOW_THRESHOLD = 0.5
+                if top_score < INITIAL_SEARCH_LOW_THRESHOLD:
+                    logger.warning(f"⚠️ 초기 검색 저점수 감지: {top_score:.4f} < {INITIAL_SEARCH_LOW_THRESHOLD}")
+                    logger.warning(f"   → 검색 결과가 질문과 거의 무관할 가능성 높음")
+                    f_time = time.time() - s_time
+                    print(f"get_ai_message 총 돌아가는 시간 : {f_time}")
+                    return self._build_no_result_response()
+
+        # ✅ Top-k 기반 접근: 상대적 순서(Ranking)만 신뢰
         # 참고: BGE 리랭커 아티클 - "절대적 임계값이 아닌 상대적 순서로 판단"
         if reranking_used:
             logger.info("✅ Reranker 사용 → Top-k 기반 상대적 순서 신뢰")
-            logger.info("   (절대적 임계값 제거, LLM answerable이 최종 판단)")
+            logger.info("   (극단적 저점수 필터링 후, LLM answerable이 최종 판단)")
         else:
             logger.info("✅ 초기 검색 → Top-k 사용, LLM에 전달")
+            logger.info("   (극단적 저점수 필터링 후, LLM answerable이 최종 판단)")
 
         # ✅ Reranking 후 Top 5 로깅
         logger.info("=" * 60)
@@ -622,6 +652,29 @@ class ResponseService:
             # JSON 파싱 성공 → LLM이 직접 판단한 값 사용
             answerable = llm_answerable
             logger.info(f"✅ answerable 판단: JSON 파싱 결과 사용 (LLM 직접 판단: {answerable})")
+
+            # ✅ Safety Net: LLM이 answerable=true로 판단했지만 답변에 부정 패턴이 있으면 false로 보정
+            if answerable:
+                # 부정 패턴 목록 (프롬프트와 동일하게 유지)
+                negative_patterns = [
+                    "에 대한 내용은 없습니다",
+                    "에 대한 정보는 없습니다",
+                    "정보는 찾을 수 없습니다",
+                    "는 명시되어 있지 않습니다",
+                    "는 언급되어 있지 않습니다",
+                    "에서는 찾을 수 없습니다",
+                    "관련 내용이 없습니다",
+                    "포함되어 있지 않습니다"
+                ]
+
+                # 답변 텍스트에서 부정 패턴 검사
+                if any(pattern in llm_answer_text for pattern in negative_patterns):
+                    logger.warning(f"⚠️ LLM answerable 오판 감지!")
+                    logger.warning(f"   - LLM 판단: answerable=true")
+                    logger.warning(f"   - 하지만 답변에 부정 패턴 포함: {[p for p in negative_patterns if p in llm_answer_text]}")
+                    logger.warning(f"   - 답변 미리보기: {llm_answer_text[:200]}...")
+                    logger.warning(f"   → answerable=false로 보정")
+                    answerable = False
         else:
             # JSON 파싱 실패 → 폴백: 패턴 매칭으로 판단
             answer_start = llm_answer_text[:150]
