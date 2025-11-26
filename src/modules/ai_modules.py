@@ -41,6 +41,9 @@ except Exception as e:
 # StorageManager import
 from modules.storage_manager import get_storage_manager
 
+# Services import
+from modules.services.document_service import DocumentService
+
 # Configuration import
 from config.settings import MINIMUM_SIMILARITY_SCORE
 from config.prompts import get_qa_prompt, get_temporal_intent_prompt
@@ -53,6 +56,9 @@ from modules.utils.formatter import format_temporal_intent, format_docs
 
 # StorageManager 싱글톤 인스턴스 가져오기
 storage = get_storage_manager()
+
+# DocumentService 인스턴스 생성
+document_service = DocumentService(storage)
 
 # ML 설정 로드
 ml_config = get_ml_config()
@@ -88,275 +94,29 @@ def get_embeddings():
     )
 # dense_doc_vectors = np.array(embeddings.embed_documents(texts))  # 문서 임베딩
 
+# ==========================================
+# Document Service Wrapper Functions
+# ==========================================
+# 하위 호환성을 위한 wrapper 함수들
+# 실제 로직은 DocumentService로 이동됨
+# ==========================================
+
 def fetch_titles_from_pinecone():
     """
-    Pinecone에서 전체 데이터(제목, 텍스트, 메타데이터)를 조회합니다.
-    - list() 메서드(Pagination)를 사용하여 개수 제한 없이 모든 ID를 가져옵니다.
-    - fetch() 메서드(Batch)를 사용하여 데이터를 효율적으로 가져옵니다.
-    - html_available=true인 경우 MongoDB에서 실제 HTML을 가져옵니다.
+    [DEPRECATED] DocumentService.fetch_all_documents()로 이동됨
+    하위 호환성을 위한 wrapper 함수
     """
-    logger.info("🔄 Pinecone 전체 데이터 조회 시작...")
-
-    # ==========================================
-    # MongoDB 연결 (HTML 조회용)
-    # ==========================================
-    mongo_collection = None
-    mongo_client = None
-    try:
-        if storage.mongo_collection is not None:
-            # StorageManager의 MongoDB connection 사용
-            mongo_collection = storage.mongo_collection.database["multimodal_cache"]
-            logger.info("✅ MongoDB 연결 성공 (HTML 조회용)")
-    except Exception as e:
-        logger.warning(f"⚠️  MongoDB 연결 실패 (HTML 없이 진행): {e}")
-
-    # ==========================================
-    # 1. 전체 ID 가져오기 (개수 제한 없음!)
-    # ==========================================
-    all_ids = []
-    
-    try:
-        # namespace가 있다면 지정해야 합니다. (기본값 "")
-        # list()는 전체 ID를 페이지네이션하여 모두 가져옵니다.
-        for ids in storage.pinecone_index.list(namespace=""): 
-            all_ids.extend(ids)
-        logger.info(f"📊 총 {len(all_ids)}개의 벡터 ID를 발견했습니다.")
-
-    except Exception as e:
-        logger.error(f"❌ ID 리스팅 실패: {e}")
-        # 라이브러리 버전 문제일 경우를 대비한 안내
-        logger.error("👉 'requirements.txt'의 pinecone 버전을 확인하고 재빌드하세요.")
-        return [], [], [], [], [], [], [], [], [], []
-
-    # 데이터가 없으면 안전하게 종료
-    if not all_ids:
-        logger.warning("⚠️ 조회된 데이터가 0개입니다.")
-        return [], [], [], [], [], [], [], [], [], []
-
-
-    # ==========================================
-    # 2. ID로 메타데이터 가져오기 (Batch Fetch)
-    # ==========================================
-    # 결과를 담을 리스트 초기화
-    titles = []
-    texts = []
-    urls = []
-    dates = []
-    htmls = []
-    content_types = []
-    sources = []
-    image_urls = []
-    attachment_urls = []
-    attachment_types = []
-
-    # 한 번에 가져올 배치 크기
-    batch_size = 1000
-
-    # 디버깅 카운터 추가
-    html_available_count = 0
-    mongo_found_count = 0
-    html_extracted_count = 0
-
-    # 1,000개씩 끊어서 요청
-    for i in range(0, len(all_ids), batch_size):
-        logger.info(f"⏳ 데이터 가져오는 중... ({i} / {len(all_ids)})")
-        
-        batch_ids = all_ids[i:i + batch_size]
-        
-        try:
-            # Fetch 요청
-            fetch_response = storage.pinecone_index.fetch(ids=batch_ids)
-            
-            # 응답 객체를 딕셔너리로 변환 (v3 호환성 해결)
-            vectors = {}
-            if hasattr(fetch_response, 'to_dict'):
-                response_dict = fetch_response.to_dict()
-                vectors = response_dict.get('vectors', {})
-            elif hasattr(fetch_response, 'vectors'):
-                vectors = fetch_response.vectors
-            else:
-                vectors = fetch_response.get('vectors', {})
-
-            if vectors is None:
-                vectors = {}
-            
-            # 가져온 데이터 파싱
-            for vector_id in batch_ids:
-                if vector_id in vectors:
-                    vector_data = vectors[vector_id]
-                    
-                    # 메타데이터 추출
-                    if isinstance(vector_data, dict):
-                        metadata = vector_data.get('metadata', {})
-                    elif hasattr(vector_data, 'metadata'):
-                        metadata = vector_data.metadata
-                    else:
-                        metadata = {}
-
-                    if metadata is None:
-                        metadata = {}
-                    
-                    # 리스트에 데이터 추가
-                    titles.append(metadata.get("title", ""))
-                    texts.append(metadata.get("text", ""))
-                    url = metadata.get("url", "")
-                    urls.append(url)
-                    dates.append(metadata.get("date", ""))
-
-                    # 멀티모달 메타데이터: html_available이면 MongoDB에서 HTML 조회
-                    html = ""
-                    if metadata.get("html_available"):
-                        html_available_count += 1
-                        if mongo_collection is not None:
-                            try:
-                                # html_available=true인 chunk는 이미지/첨부파일에서 추출된 것
-                                # MongoDB cache는 image_url 또는 attachment_url을 key로 사용
-                                lookup_url = metadata.get("image_url") or metadata.get("attachment_url")
-
-                                if lookup_url:
-                                    # 디버깅: URL 로깅 (처음 3개만)
-                                    if html_available_count <= 3:
-                                        logger.info(f"🔍 조회 시도 URL: {lookup_url[:80]}...")
-
-                                    cached = mongo_collection.find_one({"url": lookup_url})
-                                    if cached:
-                                        mongo_found_count += 1
-                                        # 디버깅: 찾은 경우 로깅
-                                        if mongo_found_count <= 3:
-                                            logger.info(f"✅ MongoDB에서 발견: {lookup_url[:80]}...")
-                                            logger.info(f"   필드: {list(cached.keys())}")
-
-                                        # Markdown 우선 (Upstage API 제공, 고품질 표 구조)
-                                        # 이미지: ocr_markdown, 문서: markdown
-                                        markdown_content = cached.get("ocr_markdown") or cached.get("markdown", "")
-
-                                        # Markdown이 없으면 HTML 사용 (fallback)
-                                        html_content = markdown_content or cached.get("ocr_html") or cached.get("html", "")
-
-                                        if html_content:
-                                            html = html_content
-                                            html_extracted_count += 1
-                                    else:
-                                        # 디버깅: 못 찾은 경우 로깅 (처음 3개만)
-                                        if html_available_count <= 3:
-                                            logger.warning(f"❌ MongoDB에서 못 찾음: {lookup_url[:80]}...")
-                                else:
-                                    # image_url과 attachment_url이 둘 다 없는 경우
-                                    if html_available_count <= 3:
-                                        logger.warning(f"⚠️  html_available=true인데 image_url/attachment_url 없음 (board URL: {url[:80]}...)")
-                            except Exception as e:
-                                logger.warning(f"MongoDB HTML 조회 실패: {e}")
-
-                    htmls.append(html)
-                    content_types.append(metadata.get("content_type", "text"))
-                    sources.append(metadata.get("source", "original_post"))
-                    image_urls.append(metadata.get("image_url", ""))
-                    attachment_urls.append(metadata.get("attachment_url", ""))
-                    attachment_types.append(metadata.get("attachment_type", ""))
-                    
-        except Exception as e:
-            logger.error(f"⚠️ 배치 Fetch 실패 ({i}~{i+batch_size}): {e}")
-            continue
-
-    logger.info(f"✅ 전체 데이터 로드 완료: {len(titles)}개 문서")
-    logger.info(f"📊 HTML 조회 통계:")
-    logger.info(f"   - html_available=true 문서: {html_available_count}개")
-    logger.info(f"   - MongoDB에서 찾은 문서: {mongo_found_count}개")
-    logger.info(f"   - 실제 HTML 추출 성공: {html_extracted_count}개")
-
-    return titles, texts, urls, dates, htmls, content_types, sources, image_urls, attachment_urls, attachment_types
+    return document_service.fetch_all_documents()
 
 
 # 캐싱 데이터 초기화 함수
 
 def initialize_cache():
     """
-    캐시 초기화 함수 (Redis Fast Track 적용)
-    - Redis 캐시가 있으면 3초 로딩
-    - 없으면 Pinecone에서 다운로드 후 Redis에 저장 (20분 소요, 최초 1회만)
+    [DEPRECATED] DocumentService.initialize_cache()로 이동됨
+    하위 호환성을 위한 wrapper 함수
     """
-    try:
-        logger.info("🔄 캐시 초기화 시작...")
-
-        # ==========================================
-        # 1. Redis 캐시 확인 (Fast Track)
-        # ==========================================
-        if storage.redis_client is not None:
-            try:
-                logger.info("🔍 Redis 캐시 확인 중...")
-                cached_data = storage.redis_client.get('pinecone_metadata')
-
-                if cached_data:
-                    logger.info("🚀 Redis 캐시 발견! 빠른 로딩을 시작합니다...")
-
-                    # Pickle로 저장된 데이터 복원
-                    (storage.cached_titles, storage.cached_texts, storage.cached_urls, storage.cached_dates,
-                     storage.cached_htmls, storage.cached_content_types, storage.cached_sources,
-                     storage.cached_image_urls, storage.cached_attachment_urls, storage.cached_attachment_types) = pickle.loads(cached_data)
-
-                    logger.info(f"✅ Redis 로드 완료! ({len(storage.cached_titles)}개 문서, Pinecone 다운로드 생략)")
-                    logger.info(f"   - HTML 구조 있는 문서: {sum(1 for html in storage.cached_htmls if html)}개")
-                    logger.info(f"   - 이미지 OCR 문서: {sum(1 for ct in storage.cached_content_types if ct == 'image')}개")
-                    logger.info(f"   - 첨부파일 문서: {sum(1 for ct in storage.cached_content_types if ct == 'attachment')}개")
-
-                    # Retriever 초기화로 점프 (Pinecone Fetch 생략!)
-                    _initialize_retrievers()
-                    logger.info(f"✅ 캐시 초기화 완료! (titles: {len(storage.cached_titles)}, texts: {len(storage.cached_texts)})")
-                    return
-                else:
-                    logger.info("⬇️  Redis에 캐시가 없습니다. Pinecone 다운로드를 시작합니다...")
-
-            except Exception as e:
-                logger.warning(f"⚠️  Redis 로드 실패 (Pinecone에서 새로 다운로드합니다): {e}")
-
-        # ==========================================
-        # 2. Pinecone에서 데이터 가져오기 (Slow Track)
-        # ==========================================
-        logger.info("⏳ Pinecone 전체 데이터 다운로드 시작 (최초 1회, 약 20분 소요)...")
-        (storage.cached_titles, storage.cached_texts, storage.cached_urls, storage.cached_dates,
-         storage.cached_htmls, storage.cached_content_types, storage.cached_sources,
-         storage.cached_image_urls, storage.cached_attachment_urls, storage.cached_attachment_types) = fetch_titles_from_pinecone()
-        logger.info(f"✅ Pinecone에서 {len(storage.cached_titles)}개 문서 메타데이터를 가져왔습니다.")
-        logger.info(f"   - HTML 구조 있는 문서: {sum(1 for html in storage.cached_htmls if html)}개")
-        logger.info(f"   - 이미지 OCR 문서: {sum(1 for ct in storage.cached_content_types if ct == 'image')}개")
-        logger.info(f"   - 첨부파일 문서: {sum(1 for ct in storage.cached_content_types if ct == 'attachment')}개")
-
-        # ==========================================
-        # 3. Redis에 저장 (다음 재시작을 위해)
-        # ==========================================
-        if storage.redis_client is not None:
-            try:
-                cache_data = (
-                    storage.cached_titles, storage.cached_texts, storage.cached_urls, storage.cached_dates,
-                    storage.cached_htmls, storage.cached_content_types, storage.cached_sources,
-                    storage.cached_image_urls, storage.cached_attachment_urls, storage.cached_attachment_types
-                )
-                # 24시간 유효 (86400초)
-                storage.redis_client.setex('pinecone_metadata', 86400, pickle.dumps(cache_data))
-                logger.info("💾 데이터를 Redis에 저장했습니다. (다음 재시작부터는 3초 로딩!)")
-            except Exception as e:
-                logger.warning(f"⚠️  Redis 저장 실패 (메모리 캐시만 사용): {e}")
-        else:
-            logger.warning("⚠️  Redis 미사용 (메모리 캐시만 사용)")
-
-        # Retriever 초기화
-        _initialize_retrievers()
-        logger.info(f"✅ 캐시 초기화 완료! (titles: {len(storage.cached_titles)}, texts: {len(storage.cached_texts)})")
-
-    except Exception as e:
-        logger.error(f"❌ 캐시 초기화 실패: {e}", exc_info=True)
-        # 에러가 발생해도 빈 리스트로 초기화하여 앱이 크래시하지 않도록 함
-        storage.cached_titles = []
-        storage.cached_texts = []
-        storage.cached_urls = []
-        storage.cached_dates = []
-        storage.cached_htmls = []
-        storage.cached_content_types = []
-        storage.cached_sources = []
-        storage.cached_image_urls = []
-        storage.cached_attachment_urls = []
-        storage.cached_attachment_types = []
-        logger.warning("⚠️  캐시를 빈 상태로 초기화했습니다.")
+    document_service.initialize_cache()
 
 
 def _initialize_retrievers():
