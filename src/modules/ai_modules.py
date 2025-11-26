@@ -43,6 +43,7 @@ from modules.storage_manager import get_storage_manager
 
 # Services import
 from modules.services.document_service import DocumentService
+from modules.services.search_service import SearchService
 
 # Configuration import
 from config.settings import MINIMUM_SIMILARITY_SCORE
@@ -57,8 +58,9 @@ from modules.utils.formatter import format_temporal_intent, format_docs
 # StorageManager 싱글톤 인스턴스 가져오기
 storage = get_storage_manager()
 
-# DocumentService 인스턴스 생성
+# Service 인스턴스 생성
 document_service = DocumentService(storage)
+search_service = SearchService(storage)
 
 # ML 설정 로드
 ml_config = get_ml_config()
@@ -449,188 +451,23 @@ def rewrite_query_with_llm(query, current_date):
 
 
 def best_docs(user_question):
-      # 사용자 질문
-      noun_time=time.time()
-      query_noun=transformed_query(user_question)
-      query_noun_time=time.time()-noun_time
-      print(f"명사화 변환 시간 : {query_noun_time}")
-      titles_from_pinecone, texts_from_pinecone, urls_from_pinecone, dates_from_pinecone = storage.cached_titles, storage.cached_texts, storage.cached_urls, storage.cached_dates
-      if not query_noun:
-        return None,None
-      #######  최근 공지사항, 채용, 세미나, 행사, 특강의 단순한 정보를 요구하는 경우를 필터링 하기 위한 매커니즘 ########
-      remove_noticement = ['목록','리스트','내용','제일','가장','공고', '공지사항','필독','첨부파일','수업','업데이트',
-                           '컴퓨터학부','컴학','상위','정보','관련','세미나','행사','특강','강연','공지사항','채용','공고','최근','최신','지금','현재']
-      query_nouns = [noun for noun in query_noun if noun not in remove_noticement]
-      return_docs=[]
-      key=None
-      numbers=5 ## 기본으로 5개 문서 반환할 것.
-      check_num=0
-      recent_time=time.time()
-      for noun in query_nouns:
-        if '개' in noun:
-            # 숫자 추출
-            num = re.findall(r'\d+', noun)
-            if num:
-                numbers=int(num[0])
-                check_num=1
-      if (any(keyword in query_noun for keyword in ['세미나','행사','특강','강연','공지사항','채용','공고'])and any(keyword in query_noun for keyword in ['최근','최신','지금','현재'])and len(query_nouns)<1 or check_num==1):    
-        if numbers ==0:
-          #### 0개의 keyword에 대해서 질문한다면? ex) 가장 최근 공지사항 0개 알려줘######
-          keys=['세미나','행사','특강','강연','공지사항','채용']
-          return None,[keyword for keyword in keys if keyword in user_question]
-        if '공지사항' in query_noun:
-          key=['공지사항']
-          notice_url = NOTICE_BASE_URL + "&wr_id="
-          return_docs=find_url(notice_url,titles_from_pinecone,dates_from_pinecone,texts_from_pinecone,urls_from_pinecone,numbers)
-        if '채용' in query_noun:
-          key=['채용']
-          company_url = COMPANY_BASE_URL + "&wr_id="
-          return_docs=find_url(company_url,titles_from_pinecone,dates_from_pinecone,texts_from_pinecone,urls_from_pinecone,numbers)
-        other_key = ['세미나', '행사', '특강', '강연']
-        if any(keyword in query_noun for keyword in other_key):
-          seminar_url = SEMINAR_BASE_URL + "&wr_id="
-          key = [keyword for keyword in other_key if keyword in user_question]
-          return_docs=find_url(seminar_url,titles_from_pinecone,dates_from_pinecone,texts_from_pinecone,urls_from_pinecone,numbers)
-        recent_finish_time=time.time()-recent_time
-        print(f"최근 공지사항 문서 뽑는 시간 {recent_finish_time}")
-        if (len(return_docs)>0):
-          return return_docs,key
+      """
+      [DEPRECATED] SearchService.search_documents()로 이동됨
 
+      사용자 질문에 대한 가장 관련성 높은 문서 검색
 
-      remove_noticement = ['제일','가장','공고', '공지사항','필독','첨부파일','수업','컴학','상위','관련']
+      Args:
+          user_question: 사용자의 자연어 질문
 
-      # BM25 검색 (리팩토링됨 - BM25Retriever 사용)
-      bm_title_time = time.time()
-      Bm25_best_docs, adjusted_similarities = storage.bm25_retriever.search(
-          query_nouns=query_noun,
-          top_k=50,  # ✨ 25→50 증가: URL 중복 제거 위한 후보군 확대
-          normalize_factor=24.0
-      )
-      bm_title_f_time = time.time() - bm_title_time
-      print(f"bm25 문서 뽑는시간: {bm_title_f_time}")
-      ####################################################################################################
-      # Dense Retrieval (리팩토링됨 - DenseRetriever 사용)
-      dense_time = time.time()
-      combine_dense_docs = storage.dense_retriever.search(
+      Returns:
+          Tuple: (검색된 문서 리스트, 쿼리 키워드 리스트)
+      """
+      return search_service.search_documents(
           user_question=user_question,
-          query_nouns=query_noun,
-          top_k=50  # ✨ 30→50 증가: URL 중복 제거 위한 후보군 확대
+          transformed_query_fn=transformed_query,
+          find_url_fn=find_url
       )
-      pinecone_time = time.time() - dense_time
-      print(f"파인콘에서 top k 뽑는데 걸리는 시간 {pinecone_time}")
 
-      # ## 결과 출력
-      # print("\n통합된 파인콘문서 유사도:")
-      # for score, doc in combine_dense_docs:
-      #     title, date, text, url = doc
-      #     print(f"제목: {title}\n유사도: {score} {url}")
-      #     print('---------------------------------')
-
-
-      #################################################3#################################################3
-      #####################################################################################################3
-
-      # BM25와 Dense Retrieval 결과 결합 (리팩토링됨 - DocumentCombiner 사용)
-      combine_time = time.time()
-      final_best_docs = storage.document_combiner.combine(
-          dense_results=combine_dense_docs,
-          bm25_results=Bm25_best_docs,
-          bm25_similarities=adjusted_similarities,
-          titles_from_pinecone=titles_from_pinecone,
-          query_nouns=query_noun,
-          user_question=user_question,
-          top_k=30  # ✨ 20→30 증가: URL 중복 제거 전 후보군 확대
-      )
-      combine_f_time = time.time() - combine_time
-      print(f"Bm25랑 pinecone 결합 시간: {combine_f_time}")
-
-      # ✅ 날짜 부스팅 (Recency Boost) - 시간 표현 없어도 최신 문서 우선!
-      # 사용자 지적: "시간 맥락 없으면 당연히 최신순으로"
-      from datetime import datetime
-
-      def calculate_recency_boost(doc_date_str):
-          """문서 날짜에 따른 가중치 계산 (최신 문서 우선)"""
-          try:
-              current_date = datetime.now()
-              doc_date = datetime.fromisoformat(doc_date_str.replace('+09:00', ''))
-
-              # 날짜 차이 계산 (일 단위)
-              days_old = (current_date - doc_date).days
-
-              # 가중치 계산
-              if days_old < 0:  # 미래 날짜 (오류)
-                  return 1.0
-              elif days_old <= 180:  # 6개월 이내 (이번학기/저번학기)
-                  return 1.5  # 50% 부스팅
-              elif days_old <= 365:  # 1년 이내 (작년)
-                  return 1.3  # 30% 부스팅
-              elif days_old <= 730:  # 2년 이내
-                  return 1.1  # 10% 부스팅
-              else:  # 2년 이상
-                  return 0.9  # 10% 패널티
-
-          except Exception as e:
-              logger.debug(f"날짜 부스팅 계산 실패: {doc_date_str} - {e}")
-              return 1.0  # 실패 시 중립
-
-      # 결합된 결과에 날짜 부스팅 적용
-      boosted_docs = []
-      for score, title, date, text, url in final_best_docs:
-          boost = calculate_recency_boost(date)
-          boosted_score = score * boost
-          boosted_docs.append((boosted_score, title, date, text, url))
-
-      # 부스팅된 점수로 재정렬
-      boosted_docs.sort(key=lambda x: x[0], reverse=True)
-      final_best_docs = boosted_docs
-
-      logger.info(f"🚀 날짜 부스팅 완료 (최신 문서 우선: 6개월 이내 +50%, 1년 이내 +30%)")
-
-      # ✨ URL 기반 중복 제거 (같은 게시글의 서로 다른 청크 제거)
-      # 목적: 검색 결과 다양성 확보 (Top N이 모두 서로 다른 게시글이 되도록)
-      # 전략: 같은 URL(게시글)에서 최고 점수 청크만 선택
-      # 효과:
-      #   - BGE-Reranker 효율성 향상 (서로 다른 문서 재정렬)
-      #   - 로그 가독성 향상 (다양성 지표 개선)
-      #   - 향후 확장 대비 (복수 답변, 관련 문서 추천 등)
-      dedup_time = time.time()
-
-      seen_urls = {}  # {url: (score, title, date, text, url)}
-      deduplicated_docs = []
-      duplicate_count = 0
-      original_count = len(final_best_docs)
-
-      for score, title, date, text, url in final_best_docs:
-          if url in seen_urls:
-              # 같은 URL이 이미 있음 → 점수 비교
-              existing_score = seen_urls[url][0]
-
-              if score > existing_score:
-                  # 더 높은 점수면 기존 문서 제거하고 새 문서 추가
-                  deduplicated_docs.remove(seen_urls[url])
-                  deduplicated_docs.append((score, title, date, text, url))
-                  seen_urls[url] = (score, title, date, text, url)
-                  logger.debug(f"🔄 URL 중복 - 더 높은 점수로 교체: {title[:30]}... ({existing_score:.2f} → {score:.2f})")
-              else:
-                  # 낮은 점수면 무시
-                  duplicate_count += 1
-                  logger.debug(f"⏭️  URL 중복 제거: {title[:30]}... (점수: {score:.2f} < {existing_score:.2f})")
-          else:
-              # 새 URL이면 추가
-              seen_urls[url] = (score, title, date, text, url)
-              deduplicated_docs.append((score, title, date, text, url))
-
-      # 점수순 재정렬 후 Top 20
-      deduplicated_docs.sort(key=lambda x: x[0], reverse=True)
-      final_best_docs = deduplicated_docs[:20]
-
-      dedup_f_time = time.time() - dedup_time
-      unique_urls = len(seen_urls)
-      print(f"URL 중복 제거: {dedup_f_time:.4f}초 (원본: {original_count}개 → 중복 {duplicate_count}개 제거 → 최종: {len(final_best_docs)}개 서로 다른 게시글, 고유 URL {unique_urls}개)")
-
-      # 클러스터링 제거: URL 중복 제거만으로 충분 (각 게시글당 대표 청크 1개 선택 완료)
-      # get_ai_message()에서 최종 선택된 문서의 전체 청크를 다시 수집하므로 클러스터링 불필요
-      return final_best_docs, query_noun
 
 # QA 프롬프트 템플릿 로드 (전역 변수)
 _qa_prompt_template = None
