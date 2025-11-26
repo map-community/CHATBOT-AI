@@ -102,3 +102,14 @@ TOP_K_DOCUMENTS = 30
 #   * 값이 너무 낮으면 (1.0-): 관련 없는 질문에도 답변 (정밀도↓)
 #   * 현재값 1.8: 실험적으로 설정된 값 (추후 A/B 테스트로 최적화 권장)
 MINIMUM_SIMILARITY_SCORE = 1.8
+
+# Reranker 전용 최소 유사도 임계값 (Deprecated - 사용 안함)
+#
+# ⚠️ [2025-11-26] 임계값 로직 제거됨
+# - Top-k 기반 상대적 순서(Ranking) 방식으로 전환
+# - 절대적 임계값 대신 LLM의 answerable 필드가 최종 판단
+# - 참고: BGE 리랭커 아티클 - "절대적 임계값이 아닌 상대적 순서로 판단"
+#
+# 하위 호환성을 위해 변수는 유지하지만 실제로는 사용되지 않음
+# (기존 코드가 이 변수를 import하는 경우를 위한 유지)
+MINIMUM_RERANKER_SCORE = 0.3  # Deprecated - 사용 안함

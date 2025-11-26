@@ -56,12 +56,9 @@ class StorageManager:
         plugin_config = load_plugin_config()
         reranker_config = plugin_config.get("reranker", {})
 
+        # 동적 플러그인 방식: 전체 설정을 저장 (하드코딩 제거)
         self._reranker_type = reranker_config.get("type", "bge")
-        self._reranker_bge_config = reranker_config.get("bge", {})
-        self._reranker_cohere_config = reranker_config.get("cohere", {})
-
-        # API 키는 환경변수에서만 로드 (보안)
-        self._cohere_api_key = os.getenv('COHERE_API_KEY')
+        self._reranker_config_dict = reranker_config  # 전체 설정 저장
 
         # Lazy initialization용 플래그
         self._pinecone_client = None
@@ -318,35 +315,43 @@ class StorageManager:
             try:
                 from factories.reranker_factory import RerankerFactory
 
-                # Reranker 타입에 따라 적절한 파라미터 전달
-                if self._reranker_type == "bge":
-                    # plugins.yaml의 BGE 설정 사용
-                    self._reranker = RerankerFactory.create(
-                        reranker_type="bge",
-                        model_name=self._reranker_bge_config.get("model_name", "BAAI/bge-reranker-v2-m3"),
-                        use_fp16=self._reranker_bge_config.get("use_fp16", True),
-                        device=self._reranker_bge_config.get("device", "cpu")
-                    )
-                elif self._reranker_type == "cohere":
-                    if not self._cohere_api_key:
-                        logger.error("❌ COHERE_API_KEY가 설정되지 않았습니다.")
-                        logger.warning("   Reranking이 비활성화됩니다 (원본 순서 유지)")
-                        return None
+                # Dictionary Key Lookup 방식: 동적 플러그인 처리
+                # type 문자열을 key로 사용하여 해당 설정을 가져옴
+                reranker_specific_config = self._reranker_config_dict.get(
+                    self._reranker_type, {}
+                )
 
-                    # plugins.yaml의 Cohere 설정 사용
-                    self._reranker = RerankerFactory.create(
-                        reranker_type="cohere",
-                        api_key=self._cohere_api_key,
-                        model=self._reranker_cohere_config.get("model", "rerank-v3.5"),
-                        max_tokens_per_doc=self._reranker_cohere_config.get("max_tokens_per_doc", 4096)
+                if not reranker_specific_config:
+                    logger.error(
+                        f"❌ Reranker 타입 '{self._reranker_type}'에 대한 설정이 없습니다."
                     )
-                else:
-                    logger.error(f"❌ 알 수 없는 Reranker 타입: {self._reranker_type}")
                     logger.warning("   Reranking이 비활성화됩니다 (원본 순서 유지)")
                     return None
 
+                # API 키가 필요한 타입의 경우 환경변수에서 주입 (보안)
+                # API 기반 reranker 목록 (로컬 모델은 제외)
+                API_BASED_RERANKERS = {"cohere", "openai", "voyage"}
+
+                if self._reranker_type in API_BASED_RERANKERS:
+                    # 환경변수 이름 규칙: {TYPE}_API_KEY (예: COHERE_API_KEY)
+                    env_var_name = f"{self._reranker_type.upper()}_API_KEY"
+                    api_key = os.getenv(env_var_name)
+
+                    if not api_key:
+                        logger.error(f"❌ {env_var_name}가 설정되지 않았습니다.")
+                        logger.warning("   Reranking이 비활성화됩니다 (원본 순서 유지)")
+                        return None
+
+                    reranker_specific_config = {**reranker_specific_config, "api_key": api_key}
+
+                # **kwargs unpacking: 설정을 동적으로 팩토리에 전달
+                self._reranker = RerankerFactory.create(
+                    reranker_type=self._reranker_type,
+                    **reranker_specific_config
+                )
+
                 if self._reranker is not None:
-                    logger.info("✅ Reranker 초기화 완료")
+                    logger.info(f"✅ {self._reranker_type.upper()} Reranker 초기화 완료")
                 else:
                     logger.warning(f"⚠️  Reranker 초기화 실패 (타입: {self._reranker_type})")
                     logger.warning("   Reranking이 비활성화됩니다 (원본 순서 유지)")

@@ -49,7 +49,7 @@ from modules.services.scoring_service import ScoringService
 from modules.services.response_service import ResponseService
 
 # Configuration import
-from config.settings import MINIMUM_SIMILARITY_SCORE
+from config.settings import MINIMUM_SIMILARITY_SCORE, MINIMUM_RERANKER_SCORE
 from config.prompts import get_qa_prompt, get_temporal_intent_prompt
 from config.ml_settings import get_ml_config
 
@@ -373,7 +373,8 @@ def get_ai_message(question):
         question=question,
         transformed_query_fn=transformed_query,
         find_url_fn=find_url,
-        minimum_similarity_score=MINIMUM_SIMILARITY_SCORE
+        minimum_similarity_score=MINIMUM_SIMILARITY_SCORE,
+        minimum_reranker_score=MINIMUM_RERANKER_SCORE
     )
 
 
