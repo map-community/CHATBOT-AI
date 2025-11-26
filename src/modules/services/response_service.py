@@ -414,11 +414,14 @@ class ResponseService:
         Reranking 후 시간 맥락 기반 점수 재조정
 
         Reranker는 semantic similarity만 고려하고 날짜를 무시하므로,
-        사용자가 "현재 진행중" 정보를 찾는 경우 최신 문서에 추가 부스팅 적용
+        사용자가 명시한 시간 정보(년도/학기)나 "현재 진행중" 의도에 따라 부스팅 적용
 
         Args:
             top_docs: Reranking된 문서 리스트
             temporal_filter: 시간 의도 파싱 결과
+                - year: 명시된 년도 (예: 2024)
+                - semester: 명시된 학기 (예: 1, 2)
+                - is_ongoing: 현재 진행중 의도
             reranking_used: Reranking 사용 여부
 
         Returns:
@@ -431,13 +434,15 @@ class ResponseService:
         if not reranking_used or not temporal_filter:
             return top_docs
 
-        # "현재 진행중" 의도가 아니면 스킵
-        if not temporal_filter.get('is_ongoing'):
+        # 명시적 시간 정보 (year/semester) 또는 is_ongoing이 없으면 스킵
+        has_explicit_time = temporal_filter.get('year') or temporal_filter.get('semester')
+        has_ongoing = temporal_filter.get('is_ongoing')
+
+        if not has_explicit_time and not has_ongoing:
             return top_docs
 
         logger.info("=" * 60)
         logger.info("🕐 Temporal Re-boosting 시작 (Reranker의 시간 무시 보정)")
-        logger.info(f"   사용자 의도: 현재 진행중 정보 찾기 (is_ongoing=true)")
 
         current_date = datetime.now()
         current_year = current_date.year
@@ -448,6 +453,24 @@ class ResponseService:
             current_semester = 1
         else:
             current_semester = 2
+
+        # 사용자가 명시한 시간 정보
+        target_year = temporal_filter.get('year')
+        target_semester = temporal_filter.get('semester')
+
+        # 부스팅 모드 결정
+        if has_explicit_time:
+            # Mode 1: Explicit Year/Semester (명시적 시간 지정)
+            mode = "explicit"
+            logger.info(f"   모드: Explicit Temporal Boosting")
+            logger.info(f"   사용자 지정: {target_year or '미지정'}년 {target_semester or '미지정'}학기")
+        else:
+            # Mode 2: Ongoing (현재 진행중 의도)
+            mode = "ongoing"
+            target_year = current_year
+            target_semester = current_semester
+            logger.info(f"   모드: Ongoing Temporal Boosting")
+            logger.info(f"   사용자 의도: 현재 진행중 정보 찾기 (is_ongoing=true)")
 
         logger.info(f"   현재: {current_year}년 {current_semester}학기 ({current_date.strftime('%Y-%m-%d')})")
 
@@ -478,25 +501,60 @@ class ResponseService:
                 boost_factor = 1.0
                 reason = ""
 
-                # 1. 현재 학기 문서: 강력한 부스팅
-                if doc_year == current_year and doc_semester == current_semester:
-                    boost_factor = 1.8  # 80% 부스팅
-                    reason = f"현재 학기 ({current_year}년 {current_semester}학기)"
+                if mode == "explicit":
+                    # ✅ Explicit Mode: 사용자가 명시한 년도/학기에 부스팅
 
-                # 2. 현재 연도 다른 학기: 중간 부스팅
-                elif doc_year == current_year and doc_semester != current_semester:
-                    boost_factor = 1.3  # 30% 부스팅
-                    reason = f"현재 연도 다른 학기 ({current_year}년 {doc_semester}학기)"
+                    # 1. Exact Match (년도 + 학기 모두 일치)
+                    if (target_year and doc_year == target_year and
+                        target_semester and doc_semester == target_semester):
+                        boost_factor = 2.0  # 100% 부스팅
+                        reason = f"정확히 일치 ({target_year}년 {target_semester}학기)"
 
-                # 3. 1년 전: 약간 페널티
-                elif doc_year == current_year - 1:
-                    boost_factor = 0.85  # 15% 페널티
-                    reason = f"1년 전 ({doc_year}년)"
+                    # 2. Year Match (년도만 일치, 학기 미지정 또는 불일치)
+                    elif target_year and doc_year == target_year:
+                        if target_semester is None:
+                            boost_factor = 1.8  # 80% 부스팅 (년도만 지정했고 일치)
+                            reason = f"년도 일치 ({target_year}년)"
+                        else:
+                            boost_factor = 1.3  # 30% 부스팅 (년도 일치, 학기 불일치)
+                            reason = f"년도만 일치 ({target_year}년, 학기 다름)"
 
-                # 4. 2년 이상 전: 강한 페널티
-                elif doc_year < current_year - 1:
-                    boost_factor = 0.6  # 40% 페널티
-                    reason = f"2년 이상 전 ({doc_year}년)"
+                    # 3. Semester Match (학기만 일치, 년도 미지정 또는 불일치)
+                    elif target_semester and doc_semester == target_semester:
+                        if target_year is None:
+                            boost_factor = 1.5  # 50% 부스팅 (학기만 지정했고 일치)
+                            reason = f"학기 일치 ({target_semester}학기)"
+                        else:
+                            boost_factor = 0.9  # 10% 페널티 (학기 일치, 년도 불일치)
+                            reason = f"학기만 일치 ({target_semester}학기, 년도 다름)"
+
+                    # 4. 완전 불일치
+                    else:
+                        boost_factor = 0.6  # 40% 페널티
+                        reason = f"불일치 (문서: {doc_year}년 {doc_semester}학기)"
+
+                else:
+                    # ✅ Ongoing Mode: 현재 학기에 부스팅 (기존 로직)
+
+                    # 1. 현재 학기 문서: 강력한 부스팅
+                    if doc_year == current_year and doc_semester == current_semester:
+                        boost_factor = 1.8  # 80% 부스팅
+                        reason = f"현재 학기 ({current_year}년 {current_semester}학기)"
+
+                    # 2. 현재 연도 다른 학기: 중간 부스팅
+                    elif doc_year == current_year and doc_semester != current_semester:
+                        boost_factor = 1.3  # 30% 부스팅
+                        reason = f"현재 연도 다른 학기 ({current_year}년 {doc_semester}학기)"
+
+                    # 3. 1년 전: 약간 페널티
+                    elif doc_year == current_year - 1:
+                        boost_factor = 0.85  # 15% 페널티
+                        reason = f"1년 전 ({doc_year}년)"
+
+                    # 4. 2년 이상 전: 강한 페널티
+                    elif doc_year < current_year - 1:
+                        boost_factor = 0.6  # 40% 페널티
+                        reason = f"2년 이상 전 ({doc_year}년)"
 
                 # 점수 조정
                 doc[0] = original_score * boost_factor
