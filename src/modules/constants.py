@@ -28,3 +28,9 @@ CATEGORY_NOTICE = "notice"
 CATEGORY_JOB = "job"
 CATEGORY_SEMINAR = "seminar"
 CATEGORY_PROFESSOR = "professor"
+
+# URL 상수 (외부 리소스)
+NOTICE_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_1"
+COMPANY_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_3_b"
+SEMINAR_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_4"
+PROFESSOR_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub2_2"

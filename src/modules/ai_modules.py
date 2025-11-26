@@ -45,11 +45,21 @@ from modules.storage_manager import get_storage_manager
 from modules.services.document_service import DocumentService
 from modules.services.search_service import SearchService
 from modules.services.llm_service import LLMService
+from modules.services.scoring_service import ScoringService
+from modules.services.response_service import ResponseService
 
 # Configuration import
 from config.settings import MINIMUM_SIMILARITY_SCORE
 from config.prompts import get_qa_prompt, get_temporal_intent_prompt
 from config.ml_settings import get_ml_config
+
+# Constants import
+from modules.constants import (
+    NOTICE_BASE_URL,
+    COMPANY_BASE_URL,
+    SEMINAR_BASE_URL,
+    PROFESSOR_BASE_URL
+)
 
 # Utils import
 from modules.utils.date_utils import get_current_kst as get_korean_time, parse_date_change_korea_time
@@ -63,15 +73,18 @@ storage = get_storage_manager()
 document_service = DocumentService(storage)
 search_service = SearchService(storage)
 llm_service = LLMService(storage)
+scoring_service = ScoringService(
+    date_parser_fn=parse_date_change_korea_time,
+    current_time_fn=get_korean_time
+)
+response_service = ResponseService(
+    storage_manager=storage,
+    search_service=search_service,
+    llm_service=llm_service
+)
 
 # ML 설정 로드
 ml_config = get_ml_config()
-
-# URL 상수
-NOTICE_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_1"
-COMPANY_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_3_b"
-SEMINAR_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub5_4"
-PROFESSOR_BASE_URL = "https://cse.knu.ac.kr/bbs/board.php?bo_table=sub2_2"
 
 # 단어 명사화 함수 (리팩토링됨 - QueryTransformer 사용)
 def transformed_query(content):
@@ -185,99 +198,35 @@ def _initialize_retrievers():
                     #################################   24.11.16기준 정확도 측정완료 #####################################################
 ######################################################################################################################
 
-# 날짜를 파싱하는 함수 (하위 호환성 유지)
-# 이제는 utils.date_utils.parse_date_change_korea_time 사용 권장
+# ==========================================
+# Scoring Service Wrapper Functions
+# ==========================================
+# 하위 호환성을 위한 wrapper 함수들
+# 실제 로직은 ScoringService로 이동됨
+# ==========================================
 
 def calculate_weight_by_days_difference(post_date, current_date, query_nouns):
-
-    # 날짜 차이 계산 (일 단위)
-    days_diff = (current_date - post_date).days
-
-    # 기준 날짜 (24-01-01 00:00) 설정
-    baseline_date_str = "24-01-01 00:00"
-    baseline_date = parse_date_change_korea_time(baseline_date_str)
-    graduate_weight = 1.0 if any(keyword in query_nouns for keyword in ['졸업', '인터뷰']) else 0
-    scholar_weight = 1.0 if '장학' in query_nouns else 0
-    # 작성일이 기준 날짜 이전이면 가중치를 1.35로 고정
-    if post_date <= baseline_date:
-        return 1.35 + graduate_weight / 5
-
-    # '최근', '최신' 등의 키워드가 있는 경우, 최근 가중치를 추가
-    add_recent_weight = 1.5 if any(keyword in query_nouns for keyword in ['최근', '최신', '지금', '현재']) else 0
-
-    # **10일 단위 구분**: 최근 문서에 대한 세밀한 가중치 부여
-    if days_diff <= 6:
-        return 1.355 + add_recent_weight + graduate_weight + scholar_weight
-    elif days_diff <= 12:
-        return 1.330 + add_recent_weight / 3.0 + graduate_weight / 1.2 + scholar_weight / 1.5
-    elif days_diff <= 18:
-        return 1.321 + add_recent_weight / 5.0 + graduate_weight / 1.3 + scholar_weight / 2.0
-    elif days_diff <= 24:
-        return 1.310 + add_recent_weight / 7.0 + graduate_weight / 1.4 + scholar_weight / 2.5
-    elif days_diff <= 30:
-        return 1.290 + add_recent_weight / 9.0 + graduate_weight / 1.5 + scholar_weight / 3.0
-    elif days_diff <= 36:
-        return 1.270 + graduate_weight / 1.6 + scholar_weight / 3.5
-    elif days_diff <= 45:
-        return 1.250 +graduate_weight / 1.7 + scholar_weight / 4.0
-    elif days_diff <= 60:
-        return 1.230 +graduate_weight / 1.8 + scholar_weight / 4.5
-    elif days_diff <= 90:
-        return 1.210 +graduate_weight / 2.0 + scholar_weight / 5.0
-
-    # **월 단위 구분**: 2개월 이후는 월 단위로 단순화
-    month_diff = (days_diff - 90) // 30
-    month_weight_map = {
-        0: 1.19,
-        1: 1.17 - add_recent_weight / 6 - scholar_weight / 10,
-        2: 1.15 - add_recent_weight / 5 - scholar_weight / 9,
-        3: 1.13 - add_recent_weight / 4 - scholar_weight / 7,
-        4: 1.11 - add_recent_weight / 3  - scholar_weight / 5,
-    }
-
-    # 기본 가중치 반환 (6개월 이후)
-    return month_weight_map.get(month_diff, 0.88 - add_recent_weight /2  - scholar_weight / 5)
+    """
+    [DEPRECATED] ScoringService.calculate_weight_by_days_difference()로 이동됨
+    하위 호환성을 위한 wrapper 함수
+    """
+    return scoring_service.calculate_weight_by_days_difference(post_date, current_date, query_nouns)
 
 
-# 유사도를 조정하는 함수
+def adjust_date_similarity(similarity, date_str, query_nouns):
+    """
+    [DEPRECATED] ScoringService.adjust_date_similarity()로 이동됨
+    하위 호환성을 위한 wrapper 함수
+    """
+    return scoring_service.adjust_date_similarity(similarity, date_str, query_nouns)
 
-def adjust_date_similarity(similarity, date_str,query_nouns):
-    # 현재 한국 시간
-    current_time = get_korean_time()
-    # 작성일 파싱
-    post_date = parse_date_change_korea_time(date_str)
-    # 가중치 계산
-    weight = calculate_weight_by_days_difference(post_date, current_time,query_nouns)
-    # 조정된 유사도 반환
-    return similarity * weight
-
-# 사용자 질문에서 추출한 명사와 각 문서 제목에 대한 유사도를 조정하는 함수
-# (이전 버전은 삭제되었습니다 - 최적화된 버전만 유지)
 
 def adjust_similarity_scores(query_noun, title, texts, similarities):
-    query_noun_set = set(query_noun)
-    title_tokens = [set(titl.split()) for titl in title]
-
-    for idx, titl_tokens in enumerate(title_tokens):
-        matching_noun = query_noun_set.intersection(titl_tokens)
-        
-        if texts[idx] == "No content":
-            similarities[idx] *= 1.5
-            if "국가장학금" in query_noun_set and "국가장학금" in titl_tokens:
-                similarities[idx] *= 5.0
-        
-        for noun in matching_noun:
-            len_adjustment = len(noun) * 0.21
-            similarities[idx] += len_adjustment
-            if re.search(r'\d', noun):  # 숫자 포함 여부
-                similarities[idx] += len(noun) * (0.22 if noun in titl_tokens else 0.19)
-
-        if query_noun_set.intersection({'대학원', '대학원생'}) and titl_tokens.intersection({'대학원', '대학원생'}):
-            similarities[idx] += 2.0
-        if not query_noun_set.intersection({'대학원', '대학원생'}) and '대학원' in titl_tokens:
-            similarities[idx] -= 2.0
-
-    return similarities
+    """
+    [DEPRECATED] ScoringService.adjust_similarity_scores()로 이동됨
+    하위 호환성을 위한 wrapper 함수
+    """
+    return scoring_service.adjust_similarity_scores(query_noun, title, texts, similarities)
 
 
 #############################################################################################
@@ -393,7 +342,51 @@ def get_answer_from_chain(best_docs, user_question, query_noun, temporal_filter=
 
 ##### 유사도 제목 날짜 본문  url image_url순으로 저장됨
 
+# ==========================================
+# Response Service Wrapper Function
+# ==========================================
+# 하위 호환성을 위한 wrapper 함수
+# 실제 로직은 ResponseService로 이동됨
+# ==========================================
+
 def get_ai_message(question):
+    """
+    사용자 질문에 대한 AI 응답 생성
+
+    [REFACTORED] ResponseService.generate_response()로 이동됨
+    하위 호환성을 위한 wrapper 함수
+
+    Args:
+        question: 사용자 질문
+
+    Returns:
+        Dict: 응답 JSON
+            {
+                "answer": str,
+                "answerable": bool,
+                "references": str,
+                "disclaimer": str,
+                "images": List[str]
+            }
+    """
+    return response_service.generate_response(
+        question=question,
+        transformed_query_fn=transformed_query,
+        find_url_fn=find_url,
+        minimum_similarity_score=MINIMUM_SIMILARITY_SCORE
+    )
+
+
+# ==========================================
+# Legacy get_ai_message Implementation (ARCHIVED)
+# ==========================================
+# 아래는 이전 get_ai_message 구현입니다.
+# ResponseService로 완전히 이동되었으므로 참고용으로만 남깁니다.
+# 삭제 가능하지만, 일단 주석 처리하여 보관합니다.
+# ==========================================
+
+"""
+def get_ai_message_legacy(question):
     s_time=time.time()
 
     # 검색된 문서 정보 로깅 (가장 먼저!)
@@ -878,3 +871,4 @@ def get_ai_message(question):
         logger.info(f"✅ 총 처리 시간: {f_time:.2f}초")
         print(f"get_ai_message 총 돌아가는 시간 : {f_time}")
         return data
+"""
