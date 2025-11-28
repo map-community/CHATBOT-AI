@@ -586,11 +586,13 @@ class ResponseService:
             # Reranker는 tuple 리스트를 기대하므로 변환
             top_docs_tuples = [tuple(doc) for doc in top_docs]
 
-            # Reranking (어차피 1등만 사용하므로 Top 5로 압축)
+            # Reranking (Top-10으로 여유 확보)
+            # - Temporal boosting이 더 많은 후보 중에서 최적 Top-5 선택
+            # - 시간 맥락상 중요한 문서 누락 방지
             reranked_docs_tuples = self.storage.reranker.rerank(
                 query=question,
                 documents=top_docs_tuples,
-                top_k=5  # 최대 5개로 압축 (1등만 사용하므로 효율화)
+                top_k=10  # Top-10으로 증가 (Temporal boosting 여유 확보)
             )
 
             # 다시 리스트로 변환
