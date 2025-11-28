@@ -373,11 +373,70 @@ class LLMService:
             return None, None, None
 
         # 🔍 디버깅: 각 청크의 내용 길이 확인 (데이터 누락 검증)
-        logger.info(f"   📋 LLM에 전달될 청크 상세:")
+        logger.info(f"   📋 LLM에 전달될 청크 상세 (필터링 전):")
         for i, doc in enumerate(relevant_docs):
             source = doc.metadata.get('source', 'unknown')
             content_len = len(doc.page_content)
             logger.info(f"      청크{i+1}: [{source}] {content_len}자")
+
+        # ✅ 토큰 제한 내에서 청크 선택
+        # Solar Mini: 32,768 토큰 제한
+        # 예산 배분: 프롬프트(~2,000) + 질문(~200) + 답변(4,096) = ~6,300 토큰
+        # 문서 예산: 20,000 토큰 (안전 여유분 포함)
+        # 토큰 추정: 1 토큰 ≈ 2.5자 (한글 기준) → 20,000 토큰 ≈ 50,000자
+        MAX_CONTEXT_CHARS = 50000
+
+        # 청크 우선순위화: 본문 > 이미지 OCR > 첨부파일
+        PRIORITY_ORDER = {
+            'original_post': 1,
+            'image_ocr': 2,
+            'document_parse': 3,
+            'unknown': 4
+        }
+
+        # 우선순위별로 청크 정렬 (같은 우선순위 내에서는 원본 순서 유지)
+        relevant_docs_prioritized = sorted(
+            relevant_docs,
+            key=lambda doc: PRIORITY_ORDER.get(doc.metadata.get('source', 'unknown'), 99)
+        )
+
+        # 토큰 예산 내에서 청크 선택
+        selected_docs = []
+        total_chars = 0
+        skipped_by_token_limit = 0
+
+        for doc in relevant_docs_prioritized:
+            content_len = len(doc.page_content)
+
+            # 토큰 예산 초과 체크
+            if total_chars + content_len > MAX_CONTEXT_CHARS:
+                skipped_by_token_limit += 1
+                continue
+
+            selected_docs.append(doc)
+            total_chars += content_len
+
+        logger.info(f"   🎯 토큰 제한 적용 결과:")
+        logger.info(f"      전체 청크: {len(relevant_docs)}개")
+        logger.info(f"      선택된 청크: {len(selected_docs)}개")
+        logger.info(f"      제외된 청크: {skipped_by_token_limit}개 (토큰 제한)")
+        logger.info(f"      총 문자 수: {total_chars:,}자 (제한: {MAX_CONTEXT_CHARS:,}자)")
+        logger.info(f"      예상 토큰: ~{total_chars // 2.5:,.0f} tokens (제한: 20,000 tokens)")
+
+        # 선택된 청크 상세 로그
+        logger.info(f"   📋 최종 선택된 청크 ({len(selected_docs)}개):")
+        for i, doc in enumerate(selected_docs):
+            source = doc.metadata.get('source', 'unknown')
+            content_len = len(doc.page_content)
+            logger.info(f"      청크{i+1}: [{source}] {content_len:,}자")
+
+        # 선택된 청크가 없으면 에러
+        if not selected_docs:
+            logger.warning(f"⚠️ 토큰 제한으로 선택된 청크가 없습니다!")
+            return None, None, None
+
+        # 선택된 청크로 교체
+        relevant_docs = selected_docs
 
         # LLM 초기화 (명단 질문을 위한 충분한 max_tokens 설정)
         llm = ChatUpstage(
