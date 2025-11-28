@@ -668,6 +668,12 @@ class ResponseService:
             mode = "explicit"
             pipeline_log.metric("부스팅 모드", "Explicit Temporal Boosting")
             pipeline_log.metric("사용자 지정", f"{target_year or '미지정'}년 {target_semester or '미지정'}학기")
+
+            # 최근성 부스팅 적용 여부 표시
+            if target_year == current_year and target_semester == current_semester:
+                pipeline_log.metric("최근성 부스팅", "✅ 적용 (현재 학기 대상)")
+            else:
+                pipeline_log.metric("최근성 부스팅", "❌ 미적용 (과거 학기 대상)")
         else:
             # Mode 2: Ongoing (현재 진행중 의도)
             mode = "ongoing"
@@ -675,6 +681,7 @@ class ResponseService:
             target_semester = current_semester
             pipeline_log.metric("부스팅 모드", "Ongoing Temporal Boosting")
             pipeline_log.metric("사용자 의도", "현재 진행중 정보 찾기")
+            pipeline_log.metric("최근성 부스팅", "✅ 적용 (30일/60일/90일 단계별)")
 
         pipeline_log.metric("현재 시점", f"{current_year}년 {current_semester}학기 ({current_date.strftime('%Y-%m-%d')})")
 
@@ -690,6 +697,9 @@ class ResponseService:
             } for i, doc in enumerate(top_docs[:10])],
             top_k=10
         )
+
+        # 최근성 부스팅 적용 여부 (통계용)
+        recency_applied = False
 
         # 각 문서에 대해 시간 맥락 기반 점수 조정
         for doc in top_docs:
@@ -711,6 +721,8 @@ class ResponseService:
                 # 시간 맥락 기반 부스팅 계산
                 boost_factor = 1.0
                 reason = ""
+                recency_boost = 1.0
+                recency_reason = ""
 
                 if mode == "explicit":
                     # ✅ Explicit Mode: 사용자가 명시한 년도/학기에 부스팅
@@ -767,14 +779,69 @@ class ResponseService:
                         boost_factor = 0.6  # 40% 페널티
                         reason = f"2년 이상 전 ({doc_year}년)"
 
-                # 점수 조정
-                doc[0] = original_score * boost_factor
+                # ✅ 최근성 부스팅 (Recency Boost): 현재 학기 대상일 때만 적용
+                # - 명시적 과거 학기를 원하는 경우는 제외
+                # - 최근 글일수록 더 높은 점수
+                apply_recency = False
 
-                # 부스팅 적용 로그 (상위 5개만)
-                if boost_factor != 1.0 and top_docs.index(doc) < 5:
+                if mode == "ongoing":
+                    # Ongoing 모드: 항상 최근성 부스팅 적용
+                    apply_recency = True
+                elif mode == "explicit":
+                    # Explicit 모드: 명시한 학기가 현재 학기일 때만 적용
+                    if (target_year == current_year and target_semester == current_semester):
+                        apply_recency = True
+
+                if apply_recency:
+                    # 현재 시간과 문서 시간의 차이 계산
+                    days_diff = (current_date - doc_date).days
+
+                    if days_diff < 0:
+                        # 미래 날짜 (오류 가능성)
+                        recency_boost = 1.0
+                        recency_reason = ""
+                    elif days_diff <= 30:
+                        # 30일 이내: 강력한 최근성 부스팅
+                        recency_boost = 1.4  # 40% 추가
+                        recency_reason = f"30일 이내 ({days_diff}일 전)"
+                        recency_applied = True
+                    elif days_diff <= 60:
+                        # 60일 이내: 중간 최근성 부스팅
+                        recency_boost = 1.25  # 25% 추가
+                        recency_reason = f"60일 이내 ({days_diff}일 전)"
+                        recency_applied = True
+                    elif days_diff <= 90:
+                        # 90일 이내: 약한 최근성 부스팅
+                        recency_boost = 1.15  # 15% 추가
+                        recency_reason = f"90일 이내 ({days_diff}일 전)"
+                        recency_applied = True
+                    else:
+                        # 90일 초과: 최근성 부스팅 없음
+                        recency_boost = 1.0
+                        recency_reason = ""
+
+                # 최종 점수 = 원본 점수 × 학기 부스팅 × 최근성 부스팅
+                final_boost = boost_factor * recency_boost
+                doc[0] = original_score * final_boost
+
+                # 부스팅 사유 결합
+                if recency_reason:
+                    combined_reason = f"{reason} + {recency_reason}"
+                else:
+                    combined_reason = reason
+
+                # 부스팅 적용 로그 (상위 10개, 변경 있는 것만)
+                if final_boost != 1.0 and top_docs.index(doc) < 10:
                     # 개행 제거하여 한 줄로 표시
                     clean_title = doc_title.replace('\n', ' ').replace('\r', ' ')
-                    pipeline_log.substep(f"📅 {clean_title[:50]}... | {original_score:.4f} → {doc[0]:.4f} (×{boost_factor:.2f}, {reason})")
+
+                    # ✅ 학기 부스팅과 최근성 부스팅 분리 표시
+                    if recency_boost != 1.0:
+                        boost_detail = f"학기×{boost_factor:.2f} + 최근성×{recency_boost:.2f} = ×{final_boost:.2f}"
+                    else:
+                        boost_detail = f"×{final_boost:.2f}"
+
+                    pipeline_log.substep(f"📅 {clean_title[:45]}... | {original_score:.4f} → {doc[0]:.4f} ({boost_detail}, {combined_reason})")
 
             except Exception as e:
                 logger.warning(f"⚠️ 날짜 파싱 실패: {doc_date_str} ({e})")
@@ -795,6 +862,14 @@ class ResponseService:
             } for i, doc in enumerate(top_docs[:10])],
             top_k=10
         )
+
+        # ✅ 부스팅 적용 통계 요약
+        pipeline_log.section("부스팅 적용 요약", "📊")
+        pipeline_log.substep(f"학기 부스팅: ✅ 적용 ({mode} 모드)")
+        if recency_applied:
+            pipeline_log.substep(f"최근성 부스팅: ✅ 실제 적용됨 (90일 이내 문서 존재)")
+        else:
+            pipeline_log.substep(f"최근성 부스팅: ⚠️ 조건 충족하나 적용 안됨 (90일 이내 문서 없음)")
 
         return top_docs
 
