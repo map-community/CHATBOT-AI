@@ -526,9 +526,8 @@ class LLMService:
 
             if add_if_fits(doc, 'phase3'):
                 logger.info(f"      ✅ [{score:.4f}] {title}... [{source}] 추가")
-            else:
-                # 토큰 부족으로 더 이상 추가 불가
-                break
+            # else: 이 청크는 안 들어가지만, 더 작은 청크가 있을 수 있으므로 계속 시도
+            # → break 제거하여 토큰 예산을 최대한 활용
 
         logger.info(f"      → Phase 3 완료: {phase_stats['phase3_added']}개 추가, "
                    f"{phase_stats['phase3_skipped']}개 제외, "
