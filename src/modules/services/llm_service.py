@@ -388,8 +388,8 @@ class LLMService:
 
         # 🔍 디버깅: 전체 context 크기 및 내용 확인
         logger.info(f"   📊 전체 Context 크기: {len(relevant_docs_content)}자")
-        logger.info(f"   📄 실제 전달되는 Context 요약 (각 청크당 앞 100자 + 뒤 100자):")
-        logger.info(f"{'='*80}")
+        logger.info(f"   📄 실제 전달되는 Context 요약:")
+        logger.info(f"{'='*100}")
 
         # 각 청크를 "\n\n문서 제목:"으로 분리
         chunks = relevant_docs_content.split('\n\n문서 제목:')
@@ -399,18 +399,18 @@ class LLMService:
 
             chunk_len = len(chunk)
 
+            # ✅ 개행 제거하여 한 줄로 표시
+            chunk_clean = chunk.replace('\n', ' ').replace('\r', ' ')
+
             if chunk_len <= 200:
-                # 200자 이하면 전체 출력
-                logger.info(chunk)
+                # 200자 이하면 전체 출력 (개행 제거됨)
+                logger.info(f"   청크{i}: {chunk_clean[:150]}...")
             else:
-                # 앞 100자 + ... + 뒤 100자
-                preview = chunk[:100] + f'... ({chunk_len - 200}자 생략) ...' + chunk[-100:]
-                logger.info(preview)
+                # 앞 100자 + ... + 뒤 100자 (개행 제거됨)
+                preview = chunk_clean[:100] + f' ... ({chunk_len - 200}자 생략) ... ' + chunk_clean[-100:]
+                logger.info(f"   청크{i}: {preview}")
 
-            if i < len(chunks) - 1:
-                logger.info('')  # 청크 구분용 빈 줄
-
-        logger.info(f"{'='*80}")
+        logger.info(f"{'='*100}")
 
         # QA Prompt Template 생성
         from config.prompts import get_qa_prompt

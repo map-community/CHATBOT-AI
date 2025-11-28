@@ -646,8 +646,7 @@ class ResponseService:
         if not has_explicit_time and not has_ongoing:
             return top_docs
 
-        logger.info("=" * 60)
-        logger.info("🕐 Temporal Re-boosting 시작 (Reranker의 시간 무시 보정)")
+        pipeline_log = get_pipeline_logger()
 
         current_date = datetime.now()
         current_year = current_date.year
@@ -667,23 +666,30 @@ class ResponseService:
         if has_explicit_time:
             # Mode 1: Explicit Year/Semester (명시적 시간 지정)
             mode = "explicit"
-            logger.info(f"   모드: Explicit Temporal Boosting")
-            logger.info(f"   사용자 지정: {target_year or '미지정'}년 {target_semester or '미지정'}학기")
+            pipeline_log.metric("부스팅 모드", "Explicit Temporal Boosting")
+            pipeline_log.metric("사용자 지정", f"{target_year or '미지정'}년 {target_semester or '미지정'}학기")
         else:
             # Mode 2: Ongoing (현재 진행중 의도)
             mode = "ongoing"
             target_year = current_year
             target_semester = current_semester
-            logger.info(f"   모드: Ongoing Temporal Boosting")
-            logger.info(f"   사용자 의도: 현재 진행중 정보 찾기 (is_ongoing=true)")
+            pipeline_log.metric("부스팅 모드", "Ongoing Temporal Boosting")
+            pipeline_log.metric("사용자 의도", "현재 진행중 정보 찾기")
 
-        logger.info(f"   현재: {current_year}년 {current_semester}학기 ({current_date.strftime('%Y-%m-%d')})")
+        pipeline_log.metric("현재 시점", f"{current_year}년 {current_semester}학기 ({current_date.strftime('%Y-%m-%d')})")
 
-        # Re-boosting 전 Top 3 로깅
-        logger.info(f"   📊 Re-boosting 전 Top 3:")
-        for i, doc in enumerate(top_docs[:3]):
-            score, title, date, _, _ = doc[:5]
-            logger.info(f"      {i+1}위: [{score:.4f}] {title[:40]}... ({date})")
+        # Re-boosting 전 Top 10 표시 (통일된 양식)
+        pipeline_log.ranking_table(
+            title="Re-boosting 전 순위",
+            items=[{
+                "rank": i+1,
+                "score": doc[0],
+                "title": doc[1],
+                "date": doc[2],
+                "url": doc[4]
+            } for i, doc in enumerate(top_docs[:10])],
+            top_k=10
+        )
 
         # 각 문서에 대해 시간 맥락 기반 점수 조정
         for doc in top_docs:
@@ -764,24 +770,31 @@ class ResponseService:
                 # 점수 조정
                 doc[0] = original_score * boost_factor
 
-                if boost_factor != 1.0:
-                    logger.info(f"      📅 {doc_title[:30]}...")
-                    logger.info(f"         {original_score:.4f} → {doc[0]:.4f} (×{boost_factor:.2f}, {reason})")
+                # 부스팅 적용 로그 (상위 5개만)
+                if boost_factor != 1.0 and top_docs.index(doc) < 5:
+                    # 개행 제거하여 한 줄로 표시
+                    clean_title = doc_title.replace('\n', ' ').replace('\r', ' ')
+                    pipeline_log.substep(f"📅 {clean_title[:50]}... | {original_score:.4f} → {doc[0]:.4f} (×{boost_factor:.2f}, {reason})")
 
             except Exception as e:
-                logger.warning(f"   ⚠️ 날짜 파싱 실패: {doc_date_str} ({e})")
+                logger.warning(f"⚠️ 날짜 파싱 실패: {doc_date_str} ({e})")
                 continue
 
         # 재정렬 (점수 기준 내림차순)
         top_docs.sort(key=lambda x: x[0], reverse=True)
 
-        # Re-boosting 후 Top 3 로깅
-        logger.info(f"   🔝 Re-boosting 후 Top 3:")
-        for i, doc in enumerate(top_docs[:3]):
-            score, title, date, _, _ = doc[:5]
-            logger.info(f"      {i+1}위: [{score:.4f}] {title[:40]}... ({date})")
-
-        logger.info("=" * 60)
+        # Re-boosting 후 Top 10 표시 (통일된 양식)
+        pipeline_log.ranking_table(
+            title="Re-boosting 후 최종 순위",
+            items=[{
+                "rank": i+1,
+                "score": doc[0],
+                "title": doc[1],
+                "date": doc[2],
+                "url": doc[4]
+            } for i, doc in enumerate(top_docs[:10])],
+            top_k=10
+        )
 
         return top_docs
 
