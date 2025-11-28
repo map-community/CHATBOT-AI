@@ -456,8 +456,8 @@ class ResponseService:
         # ✅ Top-k 기반 접근: 절대적 임계값 제거
         # Reranker/초기검색이 이미 상대적 순서로 Top-k 선택
         # 최종 판단은 LLM의 answerable 필드에 위임
-        logger.info(f"✅ Top-1 문서 선택 완료 (score: {final_score:.4f})")
-        logger.info(f"   → LLM에 전달하여 answerable 판단 (절대적 임계값 사용 안함)")
+        logger.info(f"✅ Top-5 문서 확장 완료 (총 {len(enriched_docs)}개 청크)")
+        logger.info(f"   → LLM에 모든 청크 전달하여 answerable 판단 (절대적 임계값 사용 안함)")
 
         # LLM 답변 생성 실행
         pipeline_log.substep("LLM 답변 생성 시작...")
@@ -636,15 +636,8 @@ class ResponseService:
         from dateutil.parser import parse
         from zoneinfo import ZoneInfo
 
-        # Reranking 사용 안했거나, 시간 의도가 없으면 스킵
-        if not reranking_used or not temporal_filter:
-            return top_docs
-
-        # 명시적 시간 정보 (year/semester) 또는 is_ongoing이 없으면 스킵
-        has_explicit_time = temporal_filter.get('year') or temporal_filter.get('semester')
-        has_ongoing = temporal_filter.get('is_ongoing')
-
-        if not has_explicit_time and not has_ongoing:
+        # Reranking 사용 안했으면 스킵
+        if not reranking_used:
             return top_docs
 
         pipeline_log = get_pipeline_logger()
@@ -661,8 +654,10 @@ class ResponseService:
             current_semester = 2
 
         # 사용자가 명시한 시간 정보
-        target_year = temporal_filter.get('year')
-        target_semester = temporal_filter.get('semester')
+        has_explicit_time = temporal_filter.get('year') or temporal_filter.get('semester') if temporal_filter else False
+        has_ongoing = temporal_filter.get('is_ongoing') if temporal_filter else False
+        target_year = temporal_filter.get('year') if temporal_filter else None
+        target_semester = temporal_filter.get('semester') if temporal_filter else None
 
         # 부스팅 모드 결정
         if has_explicit_time:
@@ -676,13 +671,21 @@ class ResponseService:
                 pipeline_log.metric("최근성 부스팅", "✅ 적용 (현재 학기 대상)")
             else:
                 pipeline_log.metric("최근성 부스팅", "❌ 미적용 (과거 학기 대상)")
-        else:
+        elif has_ongoing:
             # Mode 2: Ongoing (현재 진행중 의도)
             mode = "ongoing"
             target_year = current_year
             target_semester = current_semester
             pipeline_log.metric("부스팅 모드", "Ongoing Temporal Boosting")
             pipeline_log.metric("사용자 의도", "현재 진행중 정보 찾기")
+            pipeline_log.metric("최근성 부스팅", "✅ 적용 (30일/60일/90일 단계별)")
+        else:
+            # Mode 3: Default (시간 의도 없음, 최근성만 적용)
+            mode = "default"
+            target_year = current_year
+            target_semester = current_semester
+            pipeline_log.metric("부스팅 모드", "Default Recency Boosting (시간 의도 없음)")
+            pipeline_log.metric("기본 전략", "현재 학기 문서 우선 + 최근성 부스팅")
             pipeline_log.metric("최근성 부스팅", "✅ 적용 (30일/60일/90일 단계별)")
 
         pipeline_log.metric("현재 시점", f"{current_year}년 {current_semester}학기 ({current_date.strftime('%Y-%m-%d')})")
@@ -764,7 +767,7 @@ class ResponseService:
                         reason = f"불일치 (문서: {doc_year}년 {doc_semester}학기)"
 
                 else:
-                    # ✅ Ongoing Mode: 현재 학기에 부스팅 (기존 로직)
+                    # ✅ Ongoing/Default Mode: 현재 학기에 부스팅
 
                     # 1. 현재 학기 문서: 강력한 부스팅
                     if doc_year == current_year and doc_semester == current_semester:
@@ -791,8 +794,8 @@ class ResponseService:
                 # - 최근 글일수록 더 높은 점수
                 apply_recency = False
 
-                if mode == "ongoing":
-                    # Ongoing 모드: 항상 최근성 부스팅 적용
+                if mode in ["ongoing", "default"]:
+                    # Ongoing/Default 모드: 항상 최근성 부스팅 적용
                     apply_recency = True
                 elif mode == "explicit":
                     # Explicit 모드: 명시한 학기가 현재 학기일 때만 적용
