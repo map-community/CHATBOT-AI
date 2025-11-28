@@ -60,6 +60,10 @@ class HTMLParser:
         if not html:
             return ""
 
+        # HTML 태그가 없으면 평문으로 간주하고 그대로 반환 (성능 최적화)
+        if '<' not in html:
+            return html.strip()
+
         try:
             soup = BeautifulSoup(html, 'html.parser')
             return soup.get_text(separator=' ', strip=True)
@@ -87,6 +91,10 @@ class HTMLParser:
             multimodal_processor.py의 _html_table_to_markdown() 로직 기반
         """
         if not html:
+            return ""
+
+        # HTML 태그가 없으면 테이블도 없음
+        if '<' not in html:
             return ""
 
         try:
@@ -151,6 +159,10 @@ class HTMLParser:
         if not html:
             return ""
 
+        # HTML 태그가 없으면 테이블도 없음
+        if '<' not in html:
+            return ""
+
         try:
             soup = BeautifulSoup(html, 'html.parser')
             tables = soup.find_all('table')
@@ -198,6 +210,10 @@ class HTMLParser:
         """
         if not html:
             return ""
+
+        # HTML 태그가 없으면 평문으로 간주
+        if '<' not in html:
+            return html.strip()
 
         try:
             soup = BeautifulSoup(html, 'html.parser')

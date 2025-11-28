@@ -388,29 +388,45 @@ class LLMService:
 
         # 🔍 디버깅: 전체 context 크기 및 내용 확인
         logger.info(f"   📊 전체 Context 크기: {len(relevant_docs_content)}자")
-        logger.info(f"   📄 실제 전달되는 Context 요약 (각 청크당 앞 100자 + 뒤 100자):")
-        logger.info(f"{'='*80}")
+        logger.info(f"   📄 실제 전달되는 Context 요약:")
+        logger.info(f"{'='*100}")
 
         # 각 청크를 "\n\n문서 제목:"으로 분리
         chunks = relevant_docs_content.split('\n\n문서 제목:')
-        for i, chunk in enumerate(chunks):
-            if i > 0:  # 첫 번째는 빈 문자열이므로 스킵
-                chunk = '문서 제목:' + chunk  # 분리 시 제거된 부분 복원
 
+        # ✅ 첫 번째 빈 문자열 제거 후 모든 청크 표시
+        actual_chunks = []
+        for i, chunk in enumerate(chunks):
+            if i == 0 and not chunk.strip():
+                # 첫 번째 빈 청크는 건너뛰기
+                continue
+
+            # 분리 시 제거된 '문서 제목:' 복원
+            if i > 0:
+                chunk = '문서 제목:' + chunk
+
+            actual_chunks.append(chunk)
+
+        # ✅ 모든 청크 표시 (개수 제한 없음)
+        logger.info(f"   총 {len(actual_chunks)}개 청크를 LLM에 전달:")
+        logger.info("")
+
+        for idx, chunk in enumerate(actual_chunks, 1):
             chunk_len = len(chunk)
 
+            # 개행 제거하여 한 줄로 표시
+            chunk_clean = chunk.replace('\n', ' ').replace('\r', ' ')
+
             if chunk_len <= 200:
-                # 200자 이하면 전체 출력
-                logger.info(chunk)
+                # 200자 이하면 전체 출력 (개행 제거됨)
+                logger.info(f"   [청크 {idx}/{len(actual_chunks)}] {chunk_clean}")
             else:
-                # 앞 100자 + ... + 뒤 100자
-                preview = chunk[:100] + f'... ({chunk_len - 200}자 생략) ...' + chunk[-100:]
-                logger.info(preview)
+                # 앞 150자 + ... + 뒤 150자 (개행 제거됨)
+                preview = chunk_clean[:150] + f' ... ({chunk_len - 300}자 생략) ... ' + chunk_clean[-150:]
+                logger.info(f"   [청크 {idx}/{len(actual_chunks)}] {preview}")
 
-            if i < len(chunks) - 1:
-                logger.info('')  # 청크 구분용 빈 줄
-
-        logger.info(f"{'='*80}")
+        logger.info("")
+        logger.info(f"{'='*100}")
 
         # QA Prompt Template 생성
         from config.prompts import get_qa_prompt

@@ -16,8 +16,10 @@ from modules.constants import (
     SEMINAR_BASE_URL,
     PROFESSOR_BASE_URL
 )
+from modules.utils.pipeline_logger import get_pipeline_logger
 
 logger = logging.getLogger(__name__)
+pipeline_log = get_pipeline_logger("modules")
 
 
 class ResponseService:
@@ -71,22 +73,46 @@ class ResponseService:
         """
         s_time = time.time()
 
-        # 검색된 문서 정보 로깅 (가장 먼저!)
-        logger.info(f"📝 사용자 질문: {question}")
+        # ============================================================
+        # PHASE 1: 질문 전처리 (Question Preprocessing)
+        # ============================================================
+        pipeline_log.phase_start(
+            phase_num=1,
+            title="질문 전처리 (Question Preprocessing)",
+            purpose="사용자 질문에서 핵심 키워드와 시간 맥락을 추출하여 검색 최적화"
+        )
 
-        # ✅ 시간 의도 파싱 (LLM 답변 시 활용)
+        pipeline_log.input("사용자 질문", question, truncate=100)
+
+        # 시간 의도 파싱
         from datetime import datetime
         temporal_filter = self.llm_service.parse_temporal_intent(question, datetime.now())
 
-        best_time = time.time()
-        top_doc, query_noun = self.search_service.search_documents(
-            user_question=question,
-            transformed_query_fn=transformed_query_fn,
-            find_url_fn=find_url_fn
+        if temporal_filter:
+            pipeline_log.metric("시간 의도 감지", "YES")
+            pipeline_log.debug_data("Temporal Filter", {
+                "year": temporal_filter.get('year', '미지정'),
+                "semester": temporal_filter.get('semester', '미지정'),
+                "is_ongoing": temporal_filter.get('is_ongoing', False)
+            })
+        else:
+            pipeline_log.metric("시간 의도 감지", "NO")
+
+        # 문서 검색 및 키워드 추출
+        with pipeline_log.timer("초기 검색 (BM25 + Dense Retrieval)"):
+            top_doc, query_noun = self.search_service.search_documents(
+                user_question=question,
+                transformed_query_fn=transformed_query_fn,
+                find_url_fn=find_url_fn
+            )
+
+        pipeline_log.output("추출된 키워드", query_noun)
+        pipeline_log.metric("검색 결과 개수", len(top_doc) if top_doc else 0, "개")
+
+        pipeline_log.phase_end(
+            phase_num=1,
+            summary=f"{len(query_noun) if query_noun else 0}개 키워드 추출, {len(top_doc) if top_doc else 0}개 문서 검색"
         )
-        best_f_time = time.time() - best_time
-        print(f"best_docs 뽑는 시간:{best_f_time}")
-        logger.info(f"🔍 추출된 키워드: {query_noun}")
 
         # query_noun이 없거나 top_doc이 비어있는 경우 처리
         if not query_noun or not top_doc or len(top_doc) == 0:
@@ -101,19 +127,55 @@ class ResponseService:
 
         top_docs = [list(doc) for doc in top_doc]
 
-        # ✅ Reranking 전 Top 5 로깅
-        logger.info("=" * 60)
-        logger.info(f"📊 Reranking 전 검색 결과 Top {min(5, len(top_docs))}:")
-        for i, doc in enumerate(top_docs[:5]):
-            score, title, date, text, url = doc[:5]
-            logger.info(f"   {i+1}위: [{score:.4f}] {title[:50]}... ({date})")
-        logger.info("=" * 60)
+        # ============================================================
+        # PHASE 2: Reranking (문서 재순위화)
+        # ============================================================
+        pipeline_log.phase_start(
+            phase_num=2,
+            title="Reranking (문서 재순위화)",
+            purpose="Semantic 유사도 기반으로 검색 결과를 재정렬하여 정확도 향상"
+        )
 
-        # ✅ Reranking 적용
+        # Reranking 전 Top 10 표시 (연산에 사용되는 모든 항목)
+        pipeline_log.ranking_table(
+            title="Reranking 전 검색 결과",
+            items=[{
+                "rank": i+1,
+                "score": doc[0],
+                "title": doc[1],
+                "date": doc[2],
+                "url": doc[4]
+            } for i, doc in enumerate(top_docs[:10])],
+            top_k=10
+        )
+
+        # Reranking 적용
         top_docs, reranking_used = self._apply_reranking(top_docs, question)
 
-        # ✅ Temporal Re-boosting: Reranker의 시간 무시 보정
-        top_docs = self._apply_temporal_reboosting(top_docs, temporal_filter, reranking_used)
+        pipeline_log.metric("Reranker 사용 여부", "YES" if reranking_used else "NO")
+        pipeline_log.phase_end(
+            phase_num=2,
+            summary=f"{'Reranking 완료' if reranking_used else '원본 순서 유지'} ({len(top_docs)}개 문서)"
+        )
+
+        # ============================================================
+        # PHASE 3: Temporal Re-boosting (시간 맥락 보정)
+        # ============================================================
+        if temporal_filter and reranking_used:
+            pipeline_log.phase_start(
+                phase_num=3,
+                title="Temporal Re-boosting (시간 맥락 보정)",
+                purpose="Reranker가 무시한 시간 정보를 다시 반영하여 최신성/관련성 향상"
+            )
+
+            top_docs = self._apply_temporal_reboosting(top_docs, temporal_filter, reranking_used)
+
+            pipeline_log.phase_end(
+                phase_num=3,
+                summary="시간 맥락 기반 점수 조정 완료"
+            )
+        else:
+            top_docs = self._apply_temporal_reboosting(top_docs, temporal_filter, reranking_used)
 
         # ✅ 하이브리드 필터링: 극단적으로 낮은 점수만 사전 제거
         # - Top-k 기반 접근을 유지하되, "절대 불가능한" 케이스만 필터링
@@ -153,46 +215,88 @@ class ResponseService:
             logger.info("✅ 초기 검색 → Top-k 사용, LLM에 전달")
             logger.info("   (극단적 저점수 필터링 후, LLM answerable이 최종 판단)")
 
-        # ✅ Reranking 후 Top 5 로깅
-        logger.info("=" * 60)
-        logger.info(f"🔝 Reranking 후 최종 결과 Top {min(5, len(top_docs))}:")
+        # ============================================================
+        # PHASE 4: 최종 문서 선택 및 검증
+        # ============================================================
+        pipeline_log.phase_start(
+            phase_num=4,
+            title="최종 문서 선택 및 검증",
+            purpose="Top-5 서로 다른 문서 선택 후 점수 검증 및 다양성 확인"
+        )
+
+        # Reranking 후 Top 5 표시 (다양성 확인)
         seen_urls = set()
         unique_url_count = 0
-        for i, doc in enumerate(top_docs[:5]):
+        ranking_items = []
+
+        for i, doc in enumerate(top_docs[:10]):  # Top 10까지 확인 (중복 고려)
             score, title, date, text, url = doc[:5]
 
             # URL 중복 체크
             if url not in seen_urls:
                 seen_urls.add(url)
                 unique_url_count += 1
-                url_marker = "🆕"  # 새로운 URL
+                marker = "🆕"  # 새로운 URL
             else:
-                url_marker = "🔁"  # 중복 URL (같은 문서의 다른 청크)
+                marker = "🔁"  # 중복 URL (같은 문서의 다른 청크)
 
-            logger.info(f"   {i+1}위: [{score:.4f}] {url_marker} {title[:50]}... ({date})")
-            logger.info(f"      URL: {url}")
+            ranking_items.append({
+                "rank": i+1,
+                "score": score,
+                "title": title,
+                "date": date,
+                "url": url,
+                "marker": marker
+            })
 
-        logger.info(f"   💡 다양성: Top 5 중 {unique_url_count}개 서로 다른 문서")
-        logger.info("=" * 60)
+        pipeline_log.ranking_table(
+            title="최종 순위 (Reranking 후)",
+            items=ranking_items,
+            top_k=10
+        )
 
-        final_score = top_docs[0][0]
-        final_title = top_docs[0][1]
-        final_date = top_docs[0][2]
-        final_text = top_docs[0][3]
-        final_url = top_docs[0][4]
+        pipeline_log.metric("문서 다양성", f"Top 10 중 {unique_url_count}개 서로 다른 문서")
+
+        # ✅ 변경: Top-5 서로 다른 문서 추출
+        top_k_unique_docs = []
+        seen_titles = set()
+
+        for doc in top_docs:
+            title = doc[1]
+            # 제목 기준으로 중복 제거 (같은 게시글의 다른 청크는 나중에 확장)
+            if title not in seen_titles:
+                seen_titles.add(title)
+                top_k_unique_docs.append(doc)
+                if len(top_k_unique_docs) >= 5:
+                    break
+
+        # Top-5 서로 다른 문서를 통일된 양식으로 표시
+        pipeline_log.ranking_table(
+            title="Top-5 서로 다른 문서 선택 (최종 확장 대상)",
+            items=[{
+                "rank": i+1,
+                "score": doc[0],
+                "title": doc[1],
+                "date": doc[2],
+                "url": doc[4]
+            } for i, doc in enumerate(top_k_unique_docs)],
+            top_k=5
+        )
+
+        # Top-1 정보 저장 (이미지 조회 및 backward compatibility)
+        final_score = top_k_unique_docs[0][0] if top_k_unique_docs else 0
+        final_title = top_k_unique_docs[0][1] if top_k_unique_docs else "No content"
+        final_date = top_k_unique_docs[0][2] if top_k_unique_docs else "No content"
+        final_text = top_k_unique_docs[0][3] if top_k_unique_docs else "No content"
+        final_url = top_k_unique_docs[0][4] if top_k_unique_docs else "No URL"
         final_image = []
 
-        # 최종 선택된 문서 정보 로깅
-        logger.info(f"📄 최종 선택 문서:")
-        logger.info(f"   제목: {final_title}")
-        logger.info(f"   날짜: {final_date}")
-        logger.info(f"   유사도: {final_score:.4f}")
-        logger.info(f"   URL: {final_url}")
-        logger.info(f"   본문 길이: {len(final_text)}자")
-        if len(final_text) > 0:
-            logger.info(f"   본문 미리보기: {final_text[:100]}...")
+        pipeline_log.phase_end(
+            phase_num=4,
+            summary=f"Top-5 서로 다른 문서 선택 완료 ({len(top_k_unique_docs)}개)"
+        )
 
-        # MongoDB 연결 확인 후 이미지 URL 조회
+        # MongoDB 연결 확인 후 이미지 URL 조회 (Top-1 문서만, 하위호환성)
         final_image = self._fetch_images_from_mongodb(final_title)
         if not final_image:
             final_score = 0
@@ -214,22 +318,95 @@ class ResponseService:
             print(f"get_ai_message 총 돌아가는 시간 : {f_time}")
             return only_image_response
 
-        # ✅ 같은 게시글의 모든 청크 수집 (본문 + 첨부파일 + 이미지 OCR)
-        top_docs = self._enrich_with_same_document_chunks(top_docs)
-
-        # QA Chain 생성
-        chain_time = time.time()
-        qa_chain, relevant_docs, relevant_docs_content = self.llm_service.get_answer_from_chain(
-            top_docs, question, query_noun, temporal_filter
+        # ============================================================
+        # PHASE 5: 문서 확장 (Document Enrichment)
+        # ============================================================
+        pipeline_log.phase_start(
+            phase_num=5,
+            title="문서 확장 (Document Enrichment)",
+            purpose="Top-5 문서 각각의 모든 청크(본문/첨부파일/이미지) 수집"
         )
-        chain_f_time = time.time() - chain_time
-        print(f"chain 생성하는 시간: {chain_f_time}")
 
-        # 🔍 디버깅: get_answer_from_chain 반환값 확인
-        logger.info(f"🔍 get_answer_from_chain 반환값 확인:")
-        logger.info(f"   qa_chain: {type(qa_chain)} (None? {qa_chain is None})")
-        logger.info(f"   relevant_docs: {type(relevant_docs)} (None? {relevant_docs is None}, 개수: {len(relevant_docs) if relevant_docs else 0})")
-        logger.info(f"   relevant_docs_content: {type(relevant_docs_content)} (None? {relevant_docs_content is None})")
+        pipeline_log.input("선택된 고유 문서 수", f"{len(top_k_unique_docs)}개")
+        for i, doc in enumerate(top_k_unique_docs, 1):
+            title = doc[1]
+            pipeline_log.substep(f"{i}위: {title[:50]}...")
+
+        enriched_docs = self._enrich_with_same_document_chunks(top_k_unique_docs)
+
+        pipeline_log.output("확장된 총 청크 개수", f"{len(enriched_docs)}개")
+        pipeline_log.phase_end(
+            phase_num=5,
+            summary=f"Top-{len(top_k_unique_docs)}개 문서 → {len(enriched_docs)}개 청크로 확장 완료"
+        )
+
+        # ============================================================
+        # PHASE 6: LLM 답변 생성 (Answer Generation)
+        # ============================================================
+        pipeline_log.phase_start(
+            phase_num=6,
+            title="LLM 답변 생성 (Answer Generation)",
+            purpose="확장된 문서를 Context로 LLM에 전달하여 자연어 답변 생성"
+        )
+
+        with pipeline_log.timer("QA Chain 생성"):
+            qa_chain, relevant_docs, relevant_docs_content = self.llm_service.get_answer_from_chain(
+                enriched_docs, question, query_noun, temporal_filter
+            )
+
+        pipeline_log.metric("LLM 전달 문서 개수", f"{len(relevant_docs) if relevant_docs else 0}개")
+        pipeline_log.metric("LLM 전달 Context 길이", f"{len(relevant_docs_content) if relevant_docs_content else 0}자")
+
+        # ✅ LLM에 전달되는 각 문서 명확히 표시
+        if relevant_docs:
+            pipeline_log.section("LLM에 전달되는 문서 목록", "📋")
+
+            # 문서 제목별로 그룹화하여 표시
+            doc_by_title = {}
+            for doc in relevant_docs:
+                title = doc.metadata.get('title', 'Unknown')
+                source = doc.metadata.get('source', 'unknown')
+                content_type = doc.metadata.get('content_type', 'unknown')
+
+                if title not in doc_by_title:
+                    doc_by_title[title] = {
+                        'title': title,
+                        'url': doc.metadata.get('url', 'N/A'),
+                        'date': doc.metadata.get('date', 'N/A'),
+                        'chunks': []
+                    }
+
+                # 개행 제거하여 한 줄로 표시
+                content_preview = doc.page_content.replace('\n', ' ').replace('\r', ' ')[:100]
+                doc_by_title[title]['chunks'].append({
+                    'source': source,
+                    'content_type': content_type,
+                    'content': content_preview
+                })
+
+            # 문서별로 구분하여 표시
+            for idx, (title, info) in enumerate(doc_by_title.items(), 1):
+                pipeline_log.substep(f"[문서 {idx}] {title[:70]}")
+                pipeline_log.substep(f"   📅 날짜: {info['date']}")
+                pipeline_log.substep(f"   🔗 URL: {info['url'][:80]}")
+                pipeline_log.substep(f"   📦 청크 개수: {len(info['chunks'])}개")
+
+                # 각 청크의 타입 표시
+                chunk_types = {}
+                for chunk in info['chunks']:
+                    source = chunk['source']
+                    chunk_types[source] = chunk_types.get(source, 0) + 1
+
+                chunk_summary = ", ".join([f"{src}: {cnt}개" for src, cnt in chunk_types.items()])
+                pipeline_log.substep(f"   🏷️  청크 구성: {chunk_summary}")
+
+                # 첫 번째 청크 미리보기
+                if info['chunks']:
+                    pipeline_log.substep(f"   📄 미리보기: {info['chunks'][0]['content']}...")
+
+                # 문서 구분선
+                if idx < len(doc_by_title):
+                    pipeline_log.substep("   " + "-" * 70)
 
         # 교수 연락처 특수 처리
         if final_url == PROFESSOR_BASE_URL + "&lang=kor" and any(keyword in query_noun for keyword in ['연락처', '전화', '번호', '전화번호']):
@@ -279,18 +456,31 @@ class ResponseService:
         # ✅ Top-k 기반 접근: 절대적 임계값 제거
         # Reranker/초기검색이 이미 상대적 순서로 Top-k 선택
         # 최종 판단은 LLM의 answerable 필드에 위임
-        logger.info(f"✅ Top-1 문서 선택 완료 (score: {final_score:.4f})")
-        logger.info(f"   → LLM에 전달하여 answerable 판단 (절대적 임계값 사용 안함)")
+        logger.info(f"✅ Top-5 문서 확장 완료 (총 {len(enriched_docs)}개 청크)")
+        logger.info(f"   → LLM에 모든 청크 전달하여 answerable 판단 (절대적 임계값 사용 안함)")
 
-        # LLM에서 답변을 생성하는 경우
-        logger.info(f"✅ 모든 조건 통과! LLM 답변 생성 시작...")
-        answer_time = time.time()
+        # LLM 답변 생성 실행
+        pipeline_log.substep("LLM 답변 생성 시작...")
 
-        # qa_chain.invoke() 사용 (기존 방식 유지)
-        answer_result = qa_chain.invoke(question)
+        with pipeline_log.timer("LLM 답변 생성"):
+            answer_result = qa_chain.invoke(question)
 
-        answer_f_time = time.time() - answer_time
-        print(f"답변 생성하는 시간: {answer_f_time}")
+        pipeline_log.output("LLM 답변 길이", f"{len(answer_result)}자")
+        pipeline_log.output("LLM 답변 미리보기", answer_result[:150], truncate=150)
+
+        pipeline_log.phase_end(
+            phase_num=6,
+            summary=f"LLM 답변 생성 완료 ({len(answer_result)}자)"
+        )
+
+        # ============================================================
+        # PHASE 7: 응답 구조화 (Response Formatting)
+        # ============================================================
+        pipeline_log.phase_start(
+            phase_num=7,
+            title="응답 구조화 (Response Formatting)",
+            purpose="LLM 답변을 검증하고 answerable 판단, 참고문서 및 경고 추가"
+        )
 
         # 최종 응답 생성
         data = self._build_final_response(
@@ -303,9 +493,24 @@ class ResponseService:
             final_date=final_date
         )
 
+        pipeline_log.metric("answerable 판단", "YES" if data['answerable'] else "NO")
+        pipeline_log.metric("이미지 개수", f"{len(data['images'])}개")
+
+        pipeline_log.phase_end(
+            phase_num=7,
+            summary=f"응답 구조화 완료 (answerable: {data['answerable']})"
+        )
+
+        # ============================================================
+        # 전체 파이프라인 완료
+        # ============================================================
         f_time = time.time() - s_time
-        logger.info(f"✅ 총 처리 시간: {f_time:.2f}초")
-        print(f"get_ai_message 총 돌아가는 시간 : {f_time}")
+        pipeline_log.logger.info("")
+        pipeline_log.logger.info("=" * 80)
+        pipeline_log.logger.info(f"✅ RAG 파이프라인 전체 완료")
+        pipeline_log.logger.info(f"⏱️  총 처리 시간: {f_time:.2f}초")
+        pipeline_log.logger.info("=" * 80)
+
         return data
 
     def _handle_keyword_only_query(
@@ -429,22 +634,16 @@ class ResponseService:
         """
         from datetime import datetime
         from dateutil.parser import parse
+        from zoneinfo import ZoneInfo
 
-        # Reranking 사용 안했거나, 시간 의도가 없으면 스킵
-        if not reranking_used or not temporal_filter:
+        # Reranking 사용 안했으면 스킵
+        if not reranking_used:
             return top_docs
 
-        # 명시적 시간 정보 (year/semester) 또는 is_ongoing이 없으면 스킵
-        has_explicit_time = temporal_filter.get('year') or temporal_filter.get('semester')
-        has_ongoing = temporal_filter.get('is_ongoing')
+        pipeline_log = get_pipeline_logger()
 
-        if not has_explicit_time and not has_ongoing:
-            return top_docs
-
-        logger.info("=" * 60)
-        logger.info("🕐 Temporal Re-boosting 시작 (Reranker의 시간 무시 보정)")
-
-        current_date = datetime.now()
+        # ✅ timezone-aware datetime 사용 (한국 시간대)
+        current_date = datetime.now(ZoneInfo("Asia/Seoul"))
         current_year = current_date.year
         current_month = current_date.month
 
@@ -455,30 +654,57 @@ class ResponseService:
             current_semester = 2
 
         # 사용자가 명시한 시간 정보
-        target_year = temporal_filter.get('year')
-        target_semester = temporal_filter.get('semester')
+        has_explicit_time = temporal_filter.get('year') or temporal_filter.get('semester') if temporal_filter else False
+        has_ongoing = temporal_filter.get('is_ongoing') if temporal_filter else False
+        target_year = temporal_filter.get('year') if temporal_filter else None
+        target_semester = temporal_filter.get('semester') if temporal_filter else None
 
         # 부스팅 모드 결정
         if has_explicit_time:
             # Mode 1: Explicit Year/Semester (명시적 시간 지정)
             mode = "explicit"
-            logger.info(f"   모드: Explicit Temporal Boosting")
-            logger.info(f"   사용자 지정: {target_year or '미지정'}년 {target_semester or '미지정'}학기")
-        else:
+            pipeline_log.metric("부스팅 모드", "Explicit Temporal Boosting")
+            pipeline_log.metric("사용자 지정", f"{target_year or '미지정'}년 {target_semester or '미지정'}학기")
+
+            # 최근성 부스팅 적용 여부 표시
+            if target_year == current_year and target_semester == current_semester:
+                pipeline_log.metric("최근성 부스팅", "✅ 적용 (현재 학기 대상)")
+            else:
+                pipeline_log.metric("최근성 부스팅", "❌ 미적용 (과거 학기 대상)")
+        elif has_ongoing:
             # Mode 2: Ongoing (현재 진행중 의도)
             mode = "ongoing"
             target_year = current_year
             target_semester = current_semester
-            logger.info(f"   모드: Ongoing Temporal Boosting")
-            logger.info(f"   사용자 의도: 현재 진행중 정보 찾기 (is_ongoing=true)")
+            pipeline_log.metric("부스팅 모드", "Ongoing Temporal Boosting")
+            pipeline_log.metric("사용자 의도", "현재 진행중 정보 찾기")
+            pipeline_log.metric("최근성 부스팅", "✅ 적용 (30일/60일/90일 단계별)")
+        else:
+            # Mode 3: Default (시간 의도 없음, 최근성만 적용)
+            mode = "default"
+            target_year = current_year
+            target_semester = current_semester
+            pipeline_log.metric("부스팅 모드", "Default Recency Boosting (시간 의도 없음)")
+            pipeline_log.metric("기본 전략", "현재 학기 문서 우선 + 최근성 부스팅")
+            pipeline_log.metric("최근성 부스팅", "✅ 적용 (30일/60일/90일 단계별)")
 
-        logger.info(f"   현재: {current_year}년 {current_semester}학기 ({current_date.strftime('%Y-%m-%d')})")
+        pipeline_log.metric("현재 시점", f"{current_year}년 {current_semester}학기 ({current_date.strftime('%Y-%m-%d')})")
 
-        # Re-boosting 전 Top 3 로깅
-        logger.info(f"   📊 Re-boosting 전 Top 3:")
-        for i, doc in enumerate(top_docs[:3]):
-            score, title, date, _, _ = doc[:5]
-            logger.info(f"      {i+1}위: [{score:.4f}] {title[:40]}... ({date})")
+        # Re-boosting 전 Top 10 표시 (통일된 양식)
+        pipeline_log.ranking_table(
+            title="Re-boosting 전 순위",
+            items=[{
+                "rank": i+1,
+                "score": doc[0],
+                "title": doc[1],
+                "date": doc[2],
+                "url": doc[4]
+            } for i, doc in enumerate(top_docs[:10])],
+            top_k=10
+        )
+
+        # 최근성 부스팅 적용 여부 (통계용)
+        recency_applied = False
 
         # 각 문서에 대해 시간 맥락 기반 점수 조정
         for doc in top_docs:
@@ -488,6 +714,11 @@ class ResponseService:
 
             try:
                 doc_date = parse(doc_date_str)
+
+                # ✅ timezone 정보가 없으면 한국 시간대로 가정
+                if doc_date.tzinfo is None:
+                    doc_date = doc_date.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+
                 doc_year = doc_date.year
                 doc_month = doc_date.month
 
@@ -500,6 +731,8 @@ class ResponseService:
                 # 시간 맥락 기반 부스팅 계산
                 boost_factor = 1.0
                 reason = ""
+                recency_boost = 1.0
+                recency_reason = ""
 
                 if mode == "explicit":
                     # ✅ Explicit Mode: 사용자가 명시한 년도/학기에 부스팅
@@ -534,7 +767,7 @@ class ResponseService:
                         reason = f"불일치 (문서: {doc_year}년 {doc_semester}학기)"
 
                 else:
-                    # ✅ Ongoing Mode: 현재 학기에 부스팅 (기존 로직)
+                    # ✅ Ongoing/Default Mode: 현재 학기에 부스팅
 
                     # 1. 현재 학기 문서: 강력한 부스팅
                     if doc_year == current_year and doc_semester == current_semester:
@@ -556,135 +789,182 @@ class ResponseService:
                         boost_factor = 0.6  # 40% 페널티
                         reason = f"2년 이상 전 ({doc_year}년)"
 
-                # 점수 조정
-                doc[0] = original_score * boost_factor
+                # ✅ 최근성 부스팅 (Recency Boost): 현재 학기 대상일 때만 적용
+                # - 명시적 과거 학기를 원하는 경우는 제외
+                # - 최근 글일수록 더 높은 점수
+                apply_recency = False
 
-                if boost_factor != 1.0:
-                    logger.info(f"      📅 {doc_title[:30]}...")
-                    logger.info(f"         {original_score:.4f} → {doc[0]:.4f} (×{boost_factor:.2f}, {reason})")
+                if mode in ["ongoing", "default"]:
+                    # Ongoing/Default 모드: 항상 최근성 부스팅 적용
+                    apply_recency = True
+                elif mode == "explicit":
+                    # Explicit 모드: 명시한 학기가 현재 학기일 때만 적용
+                    if (target_year == current_year and target_semester == current_semester):
+                        apply_recency = True
+
+                if apply_recency:
+                    # 현재 시간과 문서 시간의 차이 계산
+                    days_diff = (current_date - doc_date).days
+
+                    if days_diff < 0:
+                        # 미래 날짜 (오류 가능성)
+                        recency_boost = 1.0
+                        recency_reason = ""
+                    elif days_diff <= 30:
+                        # 30일 이내: 강력한 최근성 부스팅
+                        recency_boost = 1.4  # 40% 추가
+                        recency_reason = f"30일 이내 ({days_diff}일 전)"
+                        recency_applied = True
+                    elif days_diff <= 60:
+                        # 60일 이내: 중간 최근성 부스팅
+                        recency_boost = 1.25  # 25% 추가
+                        recency_reason = f"60일 이내 ({days_diff}일 전)"
+                        recency_applied = True
+                    elif days_diff <= 90:
+                        # 90일 이내: 약한 최근성 부스팅
+                        recency_boost = 1.15  # 15% 추가
+                        recency_reason = f"90일 이내 ({days_diff}일 전)"
+                        recency_applied = True
+                    else:
+                        # 90일 초과: 최근성 부스팅 없음
+                        recency_boost = 1.0
+                        recency_reason = ""
+
+                # 최종 점수 = 원본 점수 × 학기 부스팅 × 최근성 부스팅
+                final_boost = boost_factor * recency_boost
+                doc[0] = original_score * final_boost
+
+                # 부스팅 사유 결합
+                if recency_reason:
+                    combined_reason = f"{reason} + {recency_reason}"
+                else:
+                    combined_reason = reason
+
+                # 부스팅 적용 로그 (상위 10개, 변경 있는 것만)
+                if final_boost != 1.0 and top_docs.index(doc) < 10:
+                    # 개행 제거하여 한 줄로 표시
+                    clean_title = doc_title.replace('\n', ' ').replace('\r', ' ')
+
+                    # ✅ 학기 부스팅과 최근성 부스팅 분리 표시
+                    if recency_boost != 1.0:
+                        boost_detail = f"학기×{boost_factor:.2f} + 최근성×{recency_boost:.2f} = ×{final_boost:.2f}"
+                    else:
+                        boost_detail = f"×{final_boost:.2f}"
+
+                    pipeline_log.substep(f"📅 {clean_title[:45]}... | {original_score:.4f} → {doc[0]:.4f} ({boost_detail}, {combined_reason})")
 
             except Exception as e:
-                logger.warning(f"   ⚠️ 날짜 파싱 실패: {doc_date_str} ({e})")
+                logger.warning(f"⚠️ 날짜 파싱 실패: {doc_date_str} ({e})")
                 continue
 
         # 재정렬 (점수 기준 내림차순)
         top_docs.sort(key=lambda x: x[0], reverse=True)
 
-        # Re-boosting 후 Top 3 로깅
-        logger.info(f"   🔝 Re-boosting 후 Top 3:")
-        for i, doc in enumerate(top_docs[:3]):
-            score, title, date, _, _ = doc[:5]
-            logger.info(f"      {i+1}위: [{score:.4f}] {title[:40]}... ({date})")
+        # Re-boosting 후 Top 10 표시 (통일된 양식)
+        pipeline_log.ranking_table(
+            title="Re-boosting 후 최종 순위",
+            items=[{
+                "rank": i+1,
+                "score": doc[0],
+                "title": doc[1],
+                "date": doc[2],
+                "url": doc[4]
+            } for i, doc in enumerate(top_docs[:10])],
+            top_k=10
+        )
 
-        logger.info("=" * 60)
+        # ✅ 부스팅 적용 통계 요약
+        pipeline_log.section("부스팅 적용 요약", "📊")
+        pipeline_log.substep(f"학기 부스팅: ✅ 적용 ({mode} 모드)")
+        if recency_applied:
+            pipeline_log.substep(f"최근성 부스팅: ✅ 실제 적용됨 (90일 이내 문서 존재)")
+        else:
+            pipeline_log.substep(f"최근성 부스팅: ⚠️ 조건 충족하나 적용 안됨 (90일 이내 문서 없음)")
 
         return top_docs
 
     def _enrich_with_same_document_chunks(
         self,
-        top_docs: List[List]
+        unique_docs: List[List]
     ) -> List[List]:
         """
-        같은 게시글의 모든 청크 수집 (본문 + 첨부파일 + 이미지 OCR)
+        Top-K 서로 다른 문서의 모든 청크 수집 (본문 + 첨부파일 + 이미지 OCR)
 
         Args:
-            top_docs: 검색 결과 문서 리스트
+            unique_docs: Top-K 서로 다른 문서 리스트 (제목 기준 중복 제거됨)
 
         Returns:
-            List[List]: 확장된 문서 리스트
+            List[List]: 모든 문서의 확장된 청크 리스트
         """
         enrich_time = time.time()
 
-        # Top 문서의 URL 추출 (게시글 URL)
-        top_url = top_docs[0][4] if top_docs else None
+        if not unique_docs:
+            return []
 
-        if not top_url:
-            return top_docs
+        pipeline_log = get_pipeline_logger()
+        all_enriched_docs = []
+        seen_texts = set()  # 전역 중복 텍스트 제거용
 
-        # ✅ 변경: URL 기반 매칭 대신 제목 기반 매칭 사용!
-        top_title = top_docs[0][1]  # 첫 번째 문서의 제목
-        wr_id = top_url.split('&wr_id=')[-1] if '&wr_id=' in top_url else top_url.split('wr_id=')[-1] if 'wr_id=' in top_url else None
+        # 각 고유 문서에 대해 청크 수집
+        for doc_idx, unique_doc in enumerate(unique_docs, 1):
+            doc_score = unique_doc[0]
+            doc_title = unique_doc[1]
+            doc_url = unique_doc[4]
 
-        logger.info(f"🔍 같은 게시글 청크 검색: 제목='{top_title}' (wr_id={wr_id})")
+            wr_id = doc_url.split('&wr_id=')[-1] if '&wr_id=' in doc_url else doc_url.split('wr_id=')[-1] if 'wr_id=' in doc_url else None
 
-        # 같은 게시글의 모든 청크 찾기 (본문 + 첨부파일 + 이미지 OCR)
-        enriched_docs = []
-        seen_texts = set()  # 중복 텍스트 제거용
+            pipeline_log.substep(f"[{doc_idx}/{len(unique_docs)}] '{doc_title[:40]}...' 청크 수집 중...")
 
-        # 디버깅: 매칭 상황 추적
-        total_checked = 0
-        matched_count = 0
-        duplicate_count = 0
+            # 같은 게시글의 모든 청크 찾기
+            doc_chunks = []
+            matched_count = 0
+            duplicate_count = 0
 
-        for i, url in enumerate(self.storage.cached_urls):
-            # ✅ 같은 게시글인지 확인 (제목 기준 - 이미지/첨부파일 포함!)
-            if self.storage.cached_titles[i] == top_title:
-                total_checked += 1
-                matched_count += 1
+            for i, cached_title in enumerate(self.storage.cached_titles):
+                # 제목 기준 매칭 (이미지/첨부파일 포함)
+                if cached_title == doc_title:
+                    matched_count += 1
 
-                text = self.storage.cached_texts[i]
-                content_type = self.storage.cached_content_types[i] if i < len(self.storage.cached_content_types) else "unknown"
-                source = self.storage.cached_sources[i] if i < len(self.storage.cached_sources) else "unknown"
+                    text = self.storage.cached_texts[i]
+                    url = self.storage.cached_urls[i]
+                    content_type = self.storage.cached_content_types[i] if i < len(self.storage.cached_content_types) else "unknown"
+                    source = self.storage.cached_sources[i] if i < len(self.storage.cached_sources) else "unknown"
 
-                # 디버깅 로그 (처음 5개만)
-                if matched_count <= 5:
-                    html_data = self.storage.cached_htmls[i] if i < len(self.storage.cached_htmls) else ""
-                    logger.info(f"   [{matched_count}] URL: {url[:80]}...")
-                    logger.info(f"       타입: {content_type}, 소스: {source}")
-                    logger.info(f"       텍스트: {len(text)}자, HTML: {len(html_data)}자")
-                    logger.info(f"       인덱스: {i}")
+                    # 중복 텍스트 제거
+                    text_key = ''.join(text.split())  # 공백 제거 후 비교
 
-                # 빈 텍스트는 건너뛰지 않음! (중요: "No content"도 포함)
-                text_key = ''.join(text.split())  # 공백 제거 후 비교
-
-                # 중복 텍스트 제거 (빈 문자열은 제외하지 않음!)
-                if text_key not in seen_texts:
-                    seen_texts.add(text_key)
-                    enriched_docs.append((
-                        top_docs[0][0],  # 점수는 top 문서와 동일
-                        self.storage.cached_titles[i],
-                        self.storage.cached_dates[i],
-                        text,
-                        url,
-                        self.storage.cached_htmls[i] if i < len(self.storage.cached_htmls) else "",
-                        self.storage.cached_content_types[i] if i < len(self.storage.cached_content_types) else "unknown",
-                        self.storage.cached_sources[i] if i < len(self.storage.cached_sources) else "unknown",
-                        self.storage.cached_attachment_types[i] if i < len(self.storage.cached_attachment_types) else ""
-                    ))
-                else:
-                    duplicate_count += 1
-
-        logger.info(f"   📊 매칭 통계: 전체 {len(self.storage.cached_urls)}개 중 {matched_count}개 매칭, {duplicate_count}개 중복 제거")
-
-        # 청크를 찾았으면 top_docs를 교체 (본문 + 첨부파일 + 이미지)
-        if enriched_docs:
-            logger.info(f"🔧 같은 게시글의 모든 청크 수집: {len(top_docs)}개 → {len(enriched_docs)}개")
+                    if text_key not in seen_texts:
+                        seen_texts.add(text_key)
+                        doc_chunks.append((
+                            doc_score,  # 원본 문서의 점수 유지
+                            self.storage.cached_titles[i],
+                            self.storage.cached_dates[i],
+                            text,
+                            url,
+                            self.storage.cached_htmls[i] if i < len(self.storage.cached_htmls) else "",
+                            content_type,
+                            source,
+                            self.storage.cached_attachment_types[i] if i < len(self.storage.cached_attachment_types) else ""
+                        ))
+                    else:
+                        duplicate_count += 1
 
             # 타입별 카운트
-            original_post_count = 0
-            image_count = 0
-            attachment_count = 0
+            original_post_count = sum(1 for chunk in doc_chunks if chunk[7] == "original_post")
+            image_count = sum(1 for chunk in doc_chunks if chunk[7] == "image_ocr")
+            attachment_count = sum(1 for chunk in doc_chunks if chunk[7] == "document_parse")
 
-            for i, (score, title, date, text, url, html, content_type, source, attachment_type) in enumerate(enriched_docs):
-                if source == "original_post":
-                    original_post_count += 1
-                elif source == "image_ocr":
-                    image_count += 1
-                elif source == "document_parse":
-                    attachment_count += 1
+            pipeline_log.substep(
+                f"   → {len(doc_chunks)}개 청크 수집 "
+                f"(본문: {original_post_count}, 이미지: {image_count}, 첨부: {attachment_count}, 중복제거: {duplicate_count})"
+            )
 
-            logger.info(f"   📦 본문 청크: {original_post_count}개")
-            logger.info(f"   🖼️  이미지 OCR 청크: {image_count}개")
-            logger.info(f"   📎 첨부파일 청크: {attachment_count}개")
-            top_docs = enriched_docs
-        else:
-            logger.warning(f"⚠️  같은 게시글 청크를 찾지 못했습니다! wr_id={wr_id}")
-            logger.warning(f"   Top URL: {top_url}")
+            all_enriched_docs.extend(doc_chunks)
 
         enrich_f_time = time.time() - enrich_time
-        print(f"청크 수집 시간: {enrich_f_time}")
+        pipeline_log.metric("총 청크 수집 시간", f"{enrich_f_time:.2f}초")
 
-        return top_docs
+        return all_enriched_docs
 
     def _fetch_images_from_mongodb(self, final_title: str) -> List[str]:
         """
