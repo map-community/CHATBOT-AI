@@ -16,8 +16,10 @@ from modules.constants import (
     SEMINAR_BASE_URL,
     PROFESSOR_BASE_URL
 )
+from modules.utils.pipeline_logger import get_pipeline_logger
 
 logger = logging.getLogger(__name__)
+pipeline_log = get_pipeline_logger("modules")
 
 
 class ResponseService:
@@ -71,22 +73,46 @@ class ResponseService:
         """
         s_time = time.time()
 
-        # 검색된 문서 정보 로깅 (가장 먼저!)
-        logger.info(f"📝 사용자 질문: {question}")
+        # ============================================================
+        # PHASE 1: 질문 전처리 (Question Preprocessing)
+        # ============================================================
+        pipeline_log.phase_start(
+            phase_num=1,
+            title="질문 전처리 (Question Preprocessing)",
+            purpose="사용자 질문에서 핵심 키워드와 시간 맥락을 추출하여 검색 최적화"
+        )
 
-        # ✅ 시간 의도 파싱 (LLM 답변 시 활용)
+        pipeline_log.input("사용자 질문", question, truncate=100)
+
+        # 시간 의도 파싱
         from datetime import datetime
         temporal_filter = self.llm_service.parse_temporal_intent(question, datetime.now())
 
-        best_time = time.time()
-        top_doc, query_noun = self.search_service.search_documents(
-            user_question=question,
-            transformed_query_fn=transformed_query_fn,
-            find_url_fn=find_url_fn
+        if temporal_filter:
+            pipeline_log.metric("시간 의도 감지", "YES")
+            pipeline_log.debug_data("Temporal Filter", {
+                "year": temporal_filter.get('year', '미지정'),
+                "semester": temporal_filter.get('semester', '미지정'),
+                "is_ongoing": temporal_filter.get('is_ongoing', False)
+            })
+        else:
+            pipeline_log.metric("시간 의도 감지", "NO")
+
+        # 문서 검색 및 키워드 추출
+        with pipeline_log.timer("초기 검색 (BM25 + Dense Retrieval)"):
+            top_doc, query_noun = self.search_service.search_documents(
+                user_question=question,
+                transformed_query_fn=transformed_query_fn,
+                find_url_fn=find_url_fn
+            )
+
+        pipeline_log.output("추출된 키워드", query_noun)
+        pipeline_log.metric("검색 결과 개수", len(top_doc) if top_doc else 0, "개")
+
+        pipeline_log.phase_end(
+            phase_num=1,
+            summary=f"{len(query_noun) if query_noun else 0}개 키워드 추출, {len(top_doc) if top_doc else 0}개 문서 검색"
         )
-        best_f_time = time.time() - best_time
-        print(f"best_docs 뽑는 시간:{best_f_time}")
-        logger.info(f"🔍 추출된 키워드: {query_noun}")
 
         # query_noun이 없거나 top_doc이 비어있는 경우 처리
         if not query_noun or not top_doc or len(top_doc) == 0:
@@ -101,19 +127,55 @@ class ResponseService:
 
         top_docs = [list(doc) for doc in top_doc]
 
-        # ✅ Reranking 전 Top 5 로깅
-        logger.info("=" * 60)
-        logger.info(f"📊 Reranking 전 검색 결과 Top {min(5, len(top_docs))}:")
-        for i, doc in enumerate(top_docs[:5]):
-            score, title, date, text, url = doc[:5]
-            logger.info(f"   {i+1}위: [{score:.4f}] {title[:50]}... ({date})")
-        logger.info("=" * 60)
+        # ============================================================
+        # PHASE 2: Reranking (문서 재순위화)
+        # ============================================================
+        pipeline_log.phase_start(
+            phase_num=2,
+            title="Reranking (문서 재순위화)",
+            purpose="Semantic 유사도 기반으로 검색 결과를 재정렬하여 정확도 향상"
+        )
 
-        # ✅ Reranking 적용
+        # Reranking 전 Top 5 표시
+        pipeline_log.ranking_table(
+            title="Reranking 전 검색 결과",
+            items=[{
+                "rank": i+1,
+                "score": doc[0],
+                "title": doc[1],
+                "date": doc[2],
+                "url": doc[4]
+            } for i, doc in enumerate(top_docs[:5])],
+            top_k=5
+        )
+
+        # Reranking 적용
         top_docs, reranking_used = self._apply_reranking(top_docs, question)
 
-        # ✅ Temporal Re-boosting: Reranker의 시간 무시 보정
-        top_docs = self._apply_temporal_reboosting(top_docs, temporal_filter, reranking_used)
+        pipeline_log.metric("Reranker 사용 여부", "YES" if reranking_used else "NO")
+        pipeline_log.phase_end(
+            phase_num=2,
+            summary=f"{'Reranking 완료' if reranking_used else '원본 순서 유지'} ({len(top_docs)}개 문서)"
+        )
+
+        # ============================================================
+        # PHASE 3: Temporal Re-boosting (시간 맥락 보정)
+        # ============================================================
+        if temporal_filter and reranking_used:
+            pipeline_log.phase_start(
+                phase_num=3,
+                title="Temporal Re-boosting (시간 맥락 보정)",
+                purpose="Reranker가 무시한 시간 정보를 다시 반영하여 최신성/관련성 향상"
+            )
+
+            top_docs = self._apply_temporal_reboosting(top_docs, temporal_filter, reranking_used)
+
+            pipeline_log.phase_end(
+                phase_num=3,
+                summary="시간 맥락 기반 점수 조정 완료"
+            )
+        else:
+            top_docs = self._apply_temporal_reboosting(top_docs, temporal_filter, reranking_used)
 
         # ✅ 하이브리드 필터링: 극단적으로 낮은 점수만 사전 제거
         # - Top-k 기반 접근을 유지하되, "절대 불가능한" 케이스만 필터링
@@ -153,11 +215,20 @@ class ResponseService:
             logger.info("✅ 초기 검색 → Top-k 사용, LLM에 전달")
             logger.info("   (극단적 저점수 필터링 후, LLM answerable이 최종 판단)")
 
-        # ✅ Reranking 후 Top 5 로깅
-        logger.info("=" * 60)
-        logger.info(f"🔝 Reranking 후 최종 결과 Top {min(5, len(top_docs))}:")
+        # ============================================================
+        # PHASE 4: 최종 문서 선택 및 검증
+        # ============================================================
+        pipeline_log.phase_start(
+            phase_num=4,
+            title="최종 문서 선택 및 검증",
+            purpose="Top-1 문서 선택 후 점수 검증 및 다양성 확인"
+        )
+
+        # Reranking 후 Top 5 표시 (다양성 확인)
         seen_urls = set()
         unique_url_count = 0
+        ranking_items = []
+
         for i, doc in enumerate(top_docs[:5]):
             score, title, date, text, url = doc[:5]
 
@@ -165,15 +236,26 @@ class ResponseService:
             if url not in seen_urls:
                 seen_urls.add(url)
                 unique_url_count += 1
-                url_marker = "🆕"  # 새로운 URL
+                marker = "🆕"  # 새로운 URL
             else:
-                url_marker = "🔁"  # 중복 URL (같은 문서의 다른 청크)
+                marker = "🔁"  # 중복 URL (같은 문서의 다른 청크)
 
-            logger.info(f"   {i+1}위: [{score:.4f}] {url_marker} {title[:50]}... ({date})")
-            logger.info(f"      URL: {url}")
+            ranking_items.append({
+                "rank": i+1,
+                "score": score,
+                "title": title,
+                "date": date,
+                "url": url,
+                "marker": marker
+            })
 
-        logger.info(f"   💡 다양성: Top 5 중 {unique_url_count}개 서로 다른 문서")
-        logger.info("=" * 60)
+        pipeline_log.ranking_table(
+            title="최종 순위 (Reranking 후)",
+            items=ranking_items,
+            top_k=5
+        )
+
+        pipeline_log.metric("문서 다양성", f"Top 5 중 {unique_url_count}개 서로 다른 문서")
 
         final_score = top_docs[0][0]
         final_title = top_docs[0][1]
@@ -182,15 +264,21 @@ class ResponseService:
         final_url = top_docs[0][4]
         final_image = []
 
-        # 최종 선택된 문서 정보 로깅
-        logger.info(f"📄 최종 선택 문서:")
-        logger.info(f"   제목: {final_title}")
-        logger.info(f"   날짜: {final_date}")
-        logger.info(f"   유사도: {final_score:.4f}")
-        logger.info(f"   URL: {final_url}")
-        logger.info(f"   본문 길이: {len(final_text)}자")
+        # 최종 선택 문서 정보 출력
+        pipeline_log.section("Top-1 문서 정보", "📄")
+        pipeline_log.metric("제목", final_title)
+        pipeline_log.metric("날짜", final_date)
+        pipeline_log.metric("유사도 점수", f"{final_score:.4f}")
+        pipeline_log.metric("본문 길이", f"{len(final_text)}자")
+        pipeline_log.substep(f"URL: {final_url}")
+
         if len(final_text) > 0:
-            logger.info(f"   본문 미리보기: {final_text[:100]}...")
+            pipeline_log.substep(f"본문 미리보기: {final_text[:100]}...")
+
+        pipeline_log.phase_end(
+            phase_num=4,
+            summary=f"Top-1 문서 선택: {final_title[:40]}... (점수: {final_score:.4f})"
+        )
 
         # MongoDB 연결 확인 후 이미지 URL 조회
         final_image = self._fetch_images_from_mongodb(final_title)
@@ -214,22 +302,44 @@ class ResponseService:
             print(f"get_ai_message 총 돌아가는 시간 : {f_time}")
             return only_image_response
 
-        # ✅ 같은 게시글의 모든 청크 수집 (본문 + 첨부파일 + 이미지 OCR)
+        # ============================================================
+        # PHASE 5: 문서 확장 (Document Enrichment)
+        # ============================================================
+        pipeline_log.phase_start(
+            phase_num=5,
+            title="문서 확장 (Document Enrichment)",
+            purpose="Top-1 문서와 같은 게시글의 모든 청크(본문/첨부파일/이미지) 수집"
+        )
+
+        pipeline_log.input("Top-1 문서 URL", final_url)
+
         top_docs = self._enrich_with_same_document_chunks(top_docs)
 
-        # QA Chain 생성
-        chain_time = time.time()
-        qa_chain, relevant_docs, relevant_docs_content = self.llm_service.get_answer_from_chain(
-            top_docs, question, query_noun, temporal_filter
+        pipeline_log.output("확장된 문서 개수", f"{len(top_docs)}개")
+        pipeline_log.phase_end(
+            phase_num=5,
+            summary=f"{len(top_docs)}개 청크로 확장 완료"
         )
-        chain_f_time = time.time() - chain_time
-        print(f"chain 생성하는 시간: {chain_f_time}")
 
-        # 🔍 디버깅: get_answer_from_chain 반환값 확인
-        logger.info(f"🔍 get_answer_from_chain 반환값 확인:")
-        logger.info(f"   qa_chain: {type(qa_chain)} (None? {qa_chain is None})")
-        logger.info(f"   relevant_docs: {type(relevant_docs)} (None? {relevant_docs is None}, 개수: {len(relevant_docs) if relevant_docs else 0})")
-        logger.info(f"   relevant_docs_content: {type(relevant_docs_content)} (None? {relevant_docs_content is None})")
+        # ============================================================
+        # PHASE 6: LLM 답변 생성 (Answer Generation)
+        # ============================================================
+        pipeline_log.phase_start(
+            phase_num=6,
+            title="LLM 답변 생성 (Answer Generation)",
+            purpose="확장된 문서를 Context로 LLM에 전달하여 자연어 답변 생성"
+        )
+
+        with pipeline_log.timer("QA Chain 생성"):
+            qa_chain, relevant_docs, relevant_docs_content = self.llm_service.get_answer_from_chain(
+                top_docs, question, query_noun, temporal_filter
+            )
+
+        pipeline_log.debug_data("Chain 반환값 검증", {
+            "qa_chain": f"{type(qa_chain).__name__} (None: {qa_chain is None})",
+            "relevant_docs": f"{len(relevant_docs) if relevant_docs else 0}개",
+            "relevant_docs_content": f"{len(relevant_docs_content) if relevant_docs_content else 0}자"
+        })
 
         # 교수 연락처 특수 처리
         if final_url == PROFESSOR_BASE_URL + "&lang=kor" and any(keyword in query_noun for keyword in ['연락처', '전화', '번호', '전화번호']):
@@ -282,15 +392,28 @@ class ResponseService:
         logger.info(f"✅ Top-1 문서 선택 완료 (score: {final_score:.4f})")
         logger.info(f"   → LLM에 전달하여 answerable 판단 (절대적 임계값 사용 안함)")
 
-        # LLM에서 답변을 생성하는 경우
-        logger.info(f"✅ 모든 조건 통과! LLM 답변 생성 시작...")
-        answer_time = time.time()
+        # LLM 답변 생성 실행
+        pipeline_log.substep("LLM 답변 생성 시작...")
 
-        # qa_chain.invoke() 사용 (기존 방식 유지)
-        answer_result = qa_chain.invoke(question)
+        with pipeline_log.timer("LLM 답변 생성"):
+            answer_result = qa_chain.invoke(question)
 
-        answer_f_time = time.time() - answer_time
-        print(f"답변 생성하는 시간: {answer_f_time}")
+        pipeline_log.output("LLM 답변 길이", f"{len(answer_result)}자")
+        pipeline_log.output("LLM 답변 미리보기", answer_result[:150], truncate=150)
+
+        pipeline_log.phase_end(
+            phase_num=6,
+            summary=f"LLM 답변 생성 완료 ({len(answer_result)}자)"
+        )
+
+        # ============================================================
+        # PHASE 7: 응답 구조화 (Response Formatting)
+        # ============================================================
+        pipeline_log.phase_start(
+            phase_num=7,
+            title="응답 구조화 (Response Formatting)",
+            purpose="LLM 답변을 검증하고 answerable 판단, 참고문서 및 경고 추가"
+        )
 
         # 최종 응답 생성
         data = self._build_final_response(
@@ -303,9 +426,24 @@ class ResponseService:
             final_date=final_date
         )
 
+        pipeline_log.metric("answerable 판단", "YES" if data['answerable'] else "NO")
+        pipeline_log.metric("이미지 개수", f"{len(data['images'])}개")
+
+        pipeline_log.phase_end(
+            phase_num=7,
+            summary=f"응답 구조화 완료 (answerable: {data['answerable']})"
+        )
+
+        # ============================================================
+        # 전체 파이프라인 완료
+        # ============================================================
         f_time = time.time() - s_time
-        logger.info(f"✅ 총 처리 시간: {f_time:.2f}초")
-        print(f"get_ai_message 총 돌아가는 시간 : {f_time}")
+        pipeline_log.logger.info("")
+        pipeline_log.logger.info("=" * 80)
+        pipeline_log.logger.info(f"✅ RAG 파이프라인 전체 완료")
+        pipeline_log.logger.info(f"⏱️  총 처리 시간: {f_time:.2f}초")
+        pipeline_log.logger.info("=" * 80)
+
         return data
 
     def _handle_keyword_only_query(
