@@ -221,7 +221,7 @@ class ResponseService:
         pipeline_log.phase_start(
             phase_num=4,
             title="최종 문서 선택 및 검증",
-            purpose="Top-1 문서 선택 후 점수 검증 및 다양성 확인"
+            purpose="Top-5 서로 다른 문서 선택 후 점수 검증 및 다양성 확인"
         )
 
         # Reranking 후 Top 5 표시 (다양성 확인)
@@ -229,7 +229,7 @@ class ResponseService:
         unique_url_count = 0
         ranking_items = []
 
-        for i, doc in enumerate(top_docs[:5]):
+        for i, doc in enumerate(top_docs[:10]):  # Top 10까지 확인 (중복 고려)
             score, title, date, text, url = doc[:5]
 
             # URL 중복 체크
@@ -252,35 +252,43 @@ class ResponseService:
         pipeline_log.ranking_table(
             title="최종 순위 (Reranking 후)",
             items=ranking_items,
-            top_k=5
+            top_k=10
         )
 
-        pipeline_log.metric("문서 다양성", f"Top 5 중 {unique_url_count}개 서로 다른 문서")
+        pipeline_log.metric("문서 다양성", f"Top 10 중 {unique_url_count}개 서로 다른 문서")
 
-        final_score = top_docs[0][0]
-        final_title = top_docs[0][1]
-        final_date = top_docs[0][2]
-        final_text = top_docs[0][3]
-        final_url = top_docs[0][4]
+        # ✅ 변경: Top-5 서로 다른 문서 추출
+        top_k_unique_docs = []
+        seen_titles = set()
+
+        for doc in top_docs:
+            title = doc[1]
+            # 제목 기준으로 중복 제거 (같은 게시글의 다른 청크는 나중에 확장)
+            if title not in seen_titles:
+                seen_titles.add(title)
+                top_k_unique_docs.append(doc)
+                if len(top_k_unique_docs) >= 5:
+                    break
+
+        pipeline_log.section("Top-5 서로 다른 문서 선택", "📄")
+        for i, doc in enumerate(top_k_unique_docs, 1):
+            score, title, date, text, url = doc[:5]
+            pipeline_log.substep(f"{i}위: {title[:50]}... (점수: {score:.4f})")
+
+        # Top-1 정보 저장 (이미지 조회 및 backward compatibility)
+        final_score = top_k_unique_docs[0][0] if top_k_unique_docs else 0
+        final_title = top_k_unique_docs[0][1] if top_k_unique_docs else "No content"
+        final_date = top_k_unique_docs[0][2] if top_k_unique_docs else "No content"
+        final_text = top_k_unique_docs[0][3] if top_k_unique_docs else "No content"
+        final_url = top_k_unique_docs[0][4] if top_k_unique_docs else "No URL"
         final_image = []
-
-        # 최종 선택 문서 정보 출력
-        pipeline_log.section("Top-1 문서 정보", "📄")
-        pipeline_log.metric("제목", final_title)
-        pipeline_log.metric("날짜", final_date)
-        pipeline_log.metric("유사도 점수", f"{final_score:.4f}")
-        pipeline_log.metric("본문 길이", f"{len(final_text)}자")
-        pipeline_log.substep(f"URL: {final_url}")
-
-        if len(final_text) > 0:
-            pipeline_log.substep(f"본문 미리보기: {final_text[:100]}...")
 
         pipeline_log.phase_end(
             phase_num=4,
-            summary=f"Top-1 문서 선택: {final_title[:40]}... (점수: {final_score:.4f})"
+            summary=f"Top-5 서로 다른 문서 선택 완료 ({len(top_k_unique_docs)}개)"
         )
 
-        # MongoDB 연결 확인 후 이미지 URL 조회
+        # MongoDB 연결 확인 후 이미지 URL 조회 (Top-1 문서만, 하위호환성)
         final_image = self._fetch_images_from_mongodb(final_title)
         if not final_image:
             final_score = 0
@@ -308,17 +316,20 @@ class ResponseService:
         pipeline_log.phase_start(
             phase_num=5,
             title="문서 확장 (Document Enrichment)",
-            purpose="Top-1 문서와 같은 게시글의 모든 청크(본문/첨부파일/이미지) 수집"
+            purpose="Top-5 문서 각각의 모든 청크(본문/첨부파일/이미지) 수집"
         )
 
-        pipeline_log.input("Top-1 문서 URL", final_url)
+        pipeline_log.input("선택된 고유 문서 수", f"{len(top_k_unique_docs)}개")
+        for i, doc in enumerate(top_k_unique_docs, 1):
+            title = doc[1]
+            pipeline_log.substep(f"{i}위: {title[:50]}...")
 
-        top_docs = self._enrich_with_same_document_chunks(top_docs)
+        enriched_docs = self._enrich_with_same_document_chunks(top_k_unique_docs)
 
-        pipeline_log.output("확장된 문서 개수", f"{len(top_docs)}개")
+        pipeline_log.output("확장된 총 청크 개수", f"{len(enriched_docs)}개")
         pipeline_log.phase_end(
             phase_num=5,
-            summary=f"{len(top_docs)}개 청크로 확장 완료"
+            summary=f"Top-{len(top_k_unique_docs)}개 문서 → {len(enriched_docs)}개 청크로 확장 완료"
         )
 
         # ============================================================
@@ -332,7 +343,7 @@ class ResponseService:
 
         with pipeline_log.timer("QA Chain 생성"):
             qa_chain, relevant_docs, relevant_docs_content = self.llm_service.get_answer_from_chain(
-                top_docs, question, query_noun, temporal_filter
+                enriched_docs, question, query_noun, temporal_filter
             )
 
         pipeline_log.debug_data("Chain 반환값 검증", {
@@ -720,109 +731,86 @@ class ResponseService:
 
     def _enrich_with_same_document_chunks(
         self,
-        top_docs: List[List]
+        unique_docs: List[List]
     ) -> List[List]:
         """
-        같은 게시글의 모든 청크 수집 (본문 + 첨부파일 + 이미지 OCR)
+        Top-K 서로 다른 문서의 모든 청크 수집 (본문 + 첨부파일 + 이미지 OCR)
 
         Args:
-            top_docs: 검색 결과 문서 리스트
+            unique_docs: Top-K 서로 다른 문서 리스트 (제목 기준 중복 제거됨)
 
         Returns:
-            List[List]: 확장된 문서 리스트
+            List[List]: 모든 문서의 확장된 청크 리스트
         """
         enrich_time = time.time()
 
-        # Top 문서의 URL 추출 (게시글 URL)
-        top_url = top_docs[0][4] if top_docs else None
+        if not unique_docs:
+            return []
 
-        if not top_url:
-            return top_docs
+        pipeline_log = get_pipeline_logger()
+        all_enriched_docs = []
+        seen_texts = set()  # 전역 중복 텍스트 제거용
 
-        # ✅ 변경: URL 기반 매칭 대신 제목 기반 매칭 사용!
-        top_title = top_docs[0][1]  # 첫 번째 문서의 제목
-        wr_id = top_url.split('&wr_id=')[-1] if '&wr_id=' in top_url else top_url.split('wr_id=')[-1] if 'wr_id=' in top_url else None
+        # 각 고유 문서에 대해 청크 수집
+        for doc_idx, unique_doc in enumerate(unique_docs, 1):
+            doc_score = unique_doc[0]
+            doc_title = unique_doc[1]
+            doc_url = unique_doc[4]
 
-        logger.info(f"🔍 같은 게시글 청크 검색: 제목='{top_title}' (wr_id={wr_id})")
+            wr_id = doc_url.split('&wr_id=')[-1] if '&wr_id=' in doc_url else doc_url.split('wr_id=')[-1] if 'wr_id=' in doc_url else None
 
-        # 같은 게시글의 모든 청크 찾기 (본문 + 첨부파일 + 이미지 OCR)
-        enriched_docs = []
-        seen_texts = set()  # 중복 텍스트 제거용
+            pipeline_log.substep(f"[{doc_idx}/{len(unique_docs)}] '{doc_title[:40]}...' 청크 수집 중...")
 
-        # 디버깅: 매칭 상황 추적
-        total_checked = 0
-        matched_count = 0
-        duplicate_count = 0
+            # 같은 게시글의 모든 청크 찾기
+            doc_chunks = []
+            matched_count = 0
+            duplicate_count = 0
 
-        for i, url in enumerate(self.storage.cached_urls):
-            # ✅ 같은 게시글인지 확인 (제목 기준 - 이미지/첨부파일 포함!)
-            if self.storage.cached_titles[i] == top_title:
-                total_checked += 1
-                matched_count += 1
+            for i, cached_title in enumerate(self.storage.cached_titles):
+                # 제목 기준 매칭 (이미지/첨부파일 포함)
+                if cached_title == doc_title:
+                    matched_count += 1
 
-                text = self.storage.cached_texts[i]
-                content_type = self.storage.cached_content_types[i] if i < len(self.storage.cached_content_types) else "unknown"
-                source = self.storage.cached_sources[i] if i < len(self.storage.cached_sources) else "unknown"
+                    text = self.storage.cached_texts[i]
+                    url = self.storage.cached_urls[i]
+                    content_type = self.storage.cached_content_types[i] if i < len(self.storage.cached_content_types) else "unknown"
+                    source = self.storage.cached_sources[i] if i < len(self.storage.cached_sources) else "unknown"
 
-                # 디버깅 로그 (처음 5개만)
-                if matched_count <= 5:
-                    html_data = self.storage.cached_htmls[i] if i < len(self.storage.cached_htmls) else ""
-                    logger.info(f"   [{matched_count}] URL: {url[:80]}...")
-                    logger.info(f"       타입: {content_type}, 소스: {source}")
-                    logger.info(f"       텍스트: {len(text)}자, HTML: {len(html_data)}자")
-                    logger.info(f"       인덱스: {i}")
+                    # 중복 텍스트 제거
+                    text_key = ''.join(text.split())  # 공백 제거 후 비교
 
-                # 빈 텍스트는 건너뛰지 않음! (중요: "No content"도 포함)
-                text_key = ''.join(text.split())  # 공백 제거 후 비교
-
-                # 중복 텍스트 제거 (빈 문자열은 제외하지 않음!)
-                if text_key not in seen_texts:
-                    seen_texts.add(text_key)
-                    enriched_docs.append((
-                        top_docs[0][0],  # 점수는 top 문서와 동일
-                        self.storage.cached_titles[i],
-                        self.storage.cached_dates[i],
-                        text,
-                        url,
-                        self.storage.cached_htmls[i] if i < len(self.storage.cached_htmls) else "",
-                        self.storage.cached_content_types[i] if i < len(self.storage.cached_content_types) else "unknown",
-                        self.storage.cached_sources[i] if i < len(self.storage.cached_sources) else "unknown",
-                        self.storage.cached_attachment_types[i] if i < len(self.storage.cached_attachment_types) else ""
-                    ))
-                else:
-                    duplicate_count += 1
-
-        logger.info(f"   📊 매칭 통계: 전체 {len(self.storage.cached_urls)}개 중 {matched_count}개 매칭, {duplicate_count}개 중복 제거")
-
-        # 청크를 찾았으면 top_docs를 교체 (본문 + 첨부파일 + 이미지)
-        if enriched_docs:
-            logger.info(f"🔧 같은 게시글의 모든 청크 수집: {len(top_docs)}개 → {len(enriched_docs)}개")
+                    if text_key not in seen_texts:
+                        seen_texts.add(text_key)
+                        doc_chunks.append((
+                            doc_score,  # 원본 문서의 점수 유지
+                            self.storage.cached_titles[i],
+                            self.storage.cached_dates[i],
+                            text,
+                            url,
+                            self.storage.cached_htmls[i] if i < len(self.storage.cached_htmls) else "",
+                            content_type,
+                            source,
+                            self.storage.cached_attachment_types[i] if i < len(self.storage.cached_attachment_types) else ""
+                        ))
+                    else:
+                        duplicate_count += 1
 
             # 타입별 카운트
-            original_post_count = 0
-            image_count = 0
-            attachment_count = 0
+            original_post_count = sum(1 for chunk in doc_chunks if chunk[7] == "original_post")
+            image_count = sum(1 for chunk in doc_chunks if chunk[7] == "image_ocr")
+            attachment_count = sum(1 for chunk in doc_chunks if chunk[7] == "document_parse")
 
-            for i, (score, title, date, text, url, html, content_type, source, attachment_type) in enumerate(enriched_docs):
-                if source == "original_post":
-                    original_post_count += 1
-                elif source == "image_ocr":
-                    image_count += 1
-                elif source == "document_parse":
-                    attachment_count += 1
+            pipeline_log.substep(
+                f"   → {len(doc_chunks)}개 청크 수집 "
+                f"(본문: {original_post_count}, 이미지: {image_count}, 첨부: {attachment_count}, 중복제거: {duplicate_count})"
+            )
 
-            logger.info(f"   📦 본문 청크: {original_post_count}개")
-            logger.info(f"   🖼️  이미지 OCR 청크: {image_count}개")
-            logger.info(f"   📎 첨부파일 청크: {attachment_count}개")
-            top_docs = enriched_docs
-        else:
-            logger.warning(f"⚠️  같은 게시글 청크를 찾지 못했습니다! wr_id={wr_id}")
-            logger.warning(f"   Top URL: {top_url}")
+            all_enriched_docs.extend(doc_chunks)
 
         enrich_f_time = time.time() - enrich_time
-        print(f"청크 수집 시간: {enrich_f_time}")
+        pipeline_log.metric("총 청크 수집 시간", f"{enrich_f_time:.2f}초")
 
-        return top_docs
+        return all_enriched_docs
 
     def _fetch_images_from_mongodb(self, final_title: str) -> List[str]:
         """
