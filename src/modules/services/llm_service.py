@@ -383,9 +383,10 @@ class LLMService:
         # ✅ 계층적 토큰 제한 전략 (Tiered Token Budget Strategy)
         # Solar Mini: 32,768 토큰 제한
         # 예산 배분: 프롬프트(~2,000) + 질문(~200) + 답변(4,096) = ~6,300 토큰
-        # 문서 예산: 20,000 토큰 (안전 여유분 포함)
-        # 토큰 추정: 1 토큰 ≈ 2.5자 (한글 기준) → 20,000 토큰 ≈ 50,000자
-        MAX_CONTEXT_CHARS = 50000
+        # 문서 예산: 26,000 토큰 (안전 여유분 포함)
+        # 토큰 추정: 1 토큰 ≈ 1.2자 (한글 많음) → 26,000 토큰 ≈ 31,200자
+        # 실측 데이터: 39,559자 = 29,692 토큰 → 1 토큰 ≈ 1.33자
+        MAX_CONTEXT_CHARS = 30000
 
         # ==========================================
         # Step 1: 문서별 점수 분석 및 그룹 분류
@@ -545,7 +546,7 @@ class LLMService:
         logger.info(f"         └─ Phase 3 (추가 청크): {phase_stats['phase3_added']}개")
         logger.info(f"      제외된 청크: {sum([phase_stats['phase1_skipped'], phase_stats['phase2_skipped'], phase_stats['phase3_skipped']])}개")
         logger.info(f"      총 문자 수: {total_chars:,}자 (제한: {MAX_CONTEXT_CHARS:,}자)")
-        logger.info(f"      예상 토큰: ~{total_chars // 2.5:,.0f} tokens (제한: 20,000 tokens)")
+        logger.info(f"      예상 토큰: ~{total_chars // 1.2:,.0f} tokens (제한: 26,000 tokens)")
         logger.info(f"      토큰 활용률: {(total_chars / MAX_CONTEXT_CHARS * 100):.1f}%")
 
         # 선택된 청크가 없으면 에러
