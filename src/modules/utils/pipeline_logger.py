@@ -205,41 +205,48 @@ class PipelineLogger:
 
     def ranking_table(self, title: str, items: List[Dict[str, Any]], top_k: int = 5):
         """
-        순위 테이블 로깅
+        순위 테이블 로깅 (통일된 양식)
 
         Args:
             title: 테이블 제목
             items: 순위 항목 리스트
-                  [{"rank": 1, "score": 0.95, "title": "...", "date": "..."}, ...]
+                  [{"rank": 1, "score": 0.95, "title": "...", "date": "...", "url": "..."}, ...]
             top_k: 표시할 최대 개수
         """
         self.logger.info("")
         self.logger.info(f"🏆 {title} (Top {min(top_k, len(items))})")
-        self.logger.info("-" * 80)
+        self.logger.info("=" * 100)
 
         for i, item in enumerate(items[:top_k]):
             rank = item.get("rank", i + 1)
             score = item.get("score", 0.0)
             title_text = item.get("title", "")
-            date = item.get("date", "")
-            url = item.get("url", "")
+            date = item.get("date", "N/A")
+            url = item.get("url", "N/A")
             marker = item.get("marker", "")
 
+            # ✅ 개행 제거 (한 줄로 표시)
+            title_text = title_text.replace('\n', ' ').replace('\r', ' ')
+
             # 제목 길이 제한
-            if len(title_text) > 60:
-                title_text = title_text[:60] + "..."
+            if len(title_text) > 50:
+                title_text = title_text[:50] + "..."
 
-            marker_str = f" {marker}" if marker else ""
-            self.logger.info(f"   {rank}위: [{score:.4f}]{marker_str} {title_text}")
+            # URL 길이 제한
+            url_display = url[:70] + "..." if len(url) > 70 else url
 
-            if date:
-                self.logger.info(f"        날짜: {date}")
+            # ✅ 통일된 양식: 한 눈에 보이도록 구조화
+            marker_str = f"{marker} " if marker else ""
+            self.logger.info(f"   [{rank}위] {marker_str}점수: {score:.4f}")
+            self.logger.info(f"      📌 제목: {title_text}")
+            self.logger.info(f"      📅 날짜: {date}")
+            self.logger.info(f"      🔗 URL: {url_display}")
 
-            if url:
-                url_display = url[:80] + "..." if len(url) > 80 else url
-                self.logger.info(f"        URL: {url_display}")
+            # 항목 구분선
+            if i < min(top_k, len(items)) - 1:
+                self.logger.info("   " + "-" * 90)
 
-        self.logger.info("-" * 80)
+        self.logger.info("=" * 100)
 
     @contextmanager
     def indent(self):

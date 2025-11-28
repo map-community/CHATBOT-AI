@@ -136,7 +136,7 @@ class ResponseService:
             purpose="Semantic 유사도 기반으로 검색 결과를 재정렬하여 정확도 향상"
         )
 
-        # Reranking 전 Top 5 표시
+        # Reranking 전 Top 10 표시 (연산에 사용되는 모든 항목)
         pipeline_log.ranking_table(
             title="Reranking 전 검색 결과",
             items=[{
@@ -145,8 +145,8 @@ class ResponseService:
                 "title": doc[1],
                 "date": doc[2],
                 "url": doc[4]
-            } for i, doc in enumerate(top_docs[:5])],
-            top_k=5
+            } for i, doc in enumerate(top_docs[:10])],
+            top_k=10
         )
 
         # Reranking 적용
@@ -270,10 +270,18 @@ class ResponseService:
                 if len(top_k_unique_docs) >= 5:
                     break
 
-        pipeline_log.section("Top-5 서로 다른 문서 선택", "📄")
-        for i, doc in enumerate(top_k_unique_docs, 1):
-            score, title, date, text, url = doc[:5]
-            pipeline_log.substep(f"{i}위: {title[:50]}... (점수: {score:.4f})")
+        # Top-5 서로 다른 문서를 통일된 양식으로 표시
+        pipeline_log.ranking_table(
+            title="Top-5 서로 다른 문서 선택 (최종 확장 대상)",
+            items=[{
+                "rank": i+1,
+                "score": doc[0],
+                "title": doc[1],
+                "date": doc[2],
+                "url": doc[4]
+            } for i, doc in enumerate(top_k_unique_docs)],
+            top_k=5
+        )
 
         # Top-1 정보 저장 (이미지 조회 및 backward compatibility)
         final_score = top_k_unique_docs[0][0] if top_k_unique_docs else 0
@@ -346,11 +354,59 @@ class ResponseService:
                 enriched_docs, question, query_noun, temporal_filter
             )
 
-        pipeline_log.debug_data("Chain 반환값 검증", {
-            "qa_chain": f"{type(qa_chain).__name__} (None: {qa_chain is None})",
-            "relevant_docs": f"{len(relevant_docs) if relevant_docs else 0}개",
-            "relevant_docs_content": f"{len(relevant_docs_content) if relevant_docs_content else 0}자"
-        })
+        pipeline_log.metric("LLM 전달 문서 개수", f"{len(relevant_docs) if relevant_docs else 0}개")
+        pipeline_log.metric("LLM 전달 Context 길이", f"{len(relevant_docs_content) if relevant_docs_content else 0}자")
+
+        # ✅ LLM에 전달되는 각 문서 명확히 표시
+        if relevant_docs:
+            pipeline_log.section("LLM에 전달되는 문서 목록", "📋")
+
+            # 문서 제목별로 그룹화하여 표시
+            doc_by_title = {}
+            for doc in relevant_docs:
+                title = doc.metadata.get('title', 'Unknown')
+                source = doc.metadata.get('source', 'unknown')
+                content_type = doc.metadata.get('content_type', 'unknown')
+
+                if title not in doc_by_title:
+                    doc_by_title[title] = {
+                        'title': title,
+                        'url': doc.metadata.get('url', 'N/A'),
+                        'date': doc.metadata.get('date', 'N/A'),
+                        'chunks': []
+                    }
+
+                # 개행 제거하여 한 줄로 표시
+                content_preview = doc.page_content.replace('\n', ' ').replace('\r', ' ')[:100]
+                doc_by_title[title]['chunks'].append({
+                    'source': source,
+                    'content_type': content_type,
+                    'content': content_preview
+                })
+
+            # 문서별로 구분하여 표시
+            for idx, (title, info) in enumerate(doc_by_title.items(), 1):
+                pipeline_log.substep(f"[문서 {idx}] {title[:70]}")
+                pipeline_log.substep(f"   📅 날짜: {info['date']}")
+                pipeline_log.substep(f"   🔗 URL: {info['url'][:80]}")
+                pipeline_log.substep(f"   📦 청크 개수: {len(info['chunks'])}개")
+
+                # 각 청크의 타입 표시
+                chunk_types = {}
+                for chunk in info['chunks']:
+                    source = chunk['source']
+                    chunk_types[source] = chunk_types.get(source, 0) + 1
+
+                chunk_summary = ", ".join([f"{src}: {cnt}개" for src, cnt in chunk_types.items()])
+                pipeline_log.substep(f"   🏷️  청크 구성: {chunk_summary}")
+
+                # 첫 번째 청크 미리보기
+                if info['chunks']:
+                    pipeline_log.substep(f"   📄 미리보기: {info['chunks'][0]['content']}...")
+
+                # 문서 구분선
+                if idx < len(doc_by_title):
+                    pipeline_log.substep("   " + "-" * 70)
 
         # 교수 연락처 특수 처리
         if final_url == PROFESSOR_BASE_URL + "&lang=kor" and any(keyword in query_noun for keyword in ['연락처', '전화', '번호', '전화번호']):
