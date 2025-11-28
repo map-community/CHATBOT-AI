@@ -634,6 +634,7 @@ class ResponseService:
         """
         from datetime import datetime
         from dateutil.parser import parse
+        from zoneinfo import ZoneInfo
 
         # Reranking 사용 안했거나, 시간 의도가 없으면 스킵
         if not reranking_used or not temporal_filter:
@@ -648,7 +649,8 @@ class ResponseService:
 
         pipeline_log = get_pipeline_logger()
 
-        current_date = datetime.now()
+        # ✅ timezone-aware datetime 사용 (한국 시간대)
+        current_date = datetime.now(ZoneInfo("Asia/Seoul"))
         current_year = current_date.year
         current_month = current_date.month
 
@@ -709,6 +711,11 @@ class ResponseService:
 
             try:
                 doc_date = parse(doc_date_str)
+
+                # ✅ timezone 정보가 없으면 한국 시간대로 가정
+                if doc_date.tzinfo is None:
+                    doc_date = doc_date.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+
                 doc_year = doc_date.year
                 doc_month = doc_date.month
 
