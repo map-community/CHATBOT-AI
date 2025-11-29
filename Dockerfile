@@ -87,11 +87,6 @@ RUN mkdir -p logs
 # 포트 노출
 EXPOSE 5000
 
-# Health check
-# start-period=1200s: Pinecone 캐시 초기화 (~20분) 대기
-HEALTHCHECK --interval=30s --timeout=10s --start-period=1200s --retries=3 \
-    CMD curl -f http://localhost:5000/health || exit 1
-
 # 컨테이너 시작 명령 (Gunicorn 프로덕션 서버)
 # --workers 2: 2개 워커 프로세스 (CPU 2개 활용)
 # --threads 2: 워커당 2개 쓰레드 (총 4 동시 요청 처리)
