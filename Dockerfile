@@ -89,5 +89,17 @@ EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:5000/health || exit 1
 
-# 컨테이너 시작 명령
-CMD ["python", "src/app.py"]
+# 컨테이너 시작 명령 (Gunicorn 프로덕션 서버)
+# --workers 2: 2개 워커 프로세스 (CPU 2개 활용)
+# --threads 2: 워커당 2개 쓰레드 (총 4 동시 요청 처리)
+# --timeout 120: LLM API 호출 대기 시간 (기본 30초는 부족)
+# --access-logfile -: 액세스 로그를 stdout으로
+# --error-logfile -: 에러 로그를 stderr로
+CMD ["gunicorn", \
+     "--bind", "0.0.0.0:5000", \
+     "--workers", "2", \
+     "--threads", "2", \
+     "--timeout", "120", \
+     "--access-logfile", "-", \
+     "--error-logfile", "-", \
+     "src.app:app"]
