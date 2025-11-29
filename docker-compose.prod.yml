@@ -21,14 +21,6 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 1G  # 1.5G → 1G 감소
-        reservations:
-          cpus: '0.25'
-          memory: 512M
     logging:
       driver: "json-file"
       options:
@@ -58,14 +50,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-    deploy:
-      resources:
-        limits:
-          cpus: '0.3'
-          memory: 1G  # Pinecone 메타데이터 캐시 저장을 위해 1GB 필요
-        reservations:
-          cpus: '0.1'
-          memory: 256M
     logging:
       driver: "json-file"
       options:
@@ -118,14 +102,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-    deploy:
-      resources:
-        limits:
-          cpus: '1.5'
-          # memory: 3G  # ← 주석 처리: Swap 사용 허용
-        reservations:
-          cpus: '0.5'
-          memory: 1G
     logging:
       driver: "json-file"
       options:
