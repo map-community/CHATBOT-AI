@@ -96,7 +96,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=1200s --retries=3 \
 # --workers 2: 2개 워커 프로세스 (CPU 2개 활용)
 # --threads 2: 워커당 2개 쓰레드 (총 4 동시 요청 처리)
 # --timeout 0: timeout 비활성화 (초기화 20분 + LLM API 응답 시간 예측 불가)
-# --preload-app: Master에서 앱 로드 후 fork (초기화 1번만, 메모리 공유)
+# --preload: Master에서 앱 로드 후 fork (초기화 1번만, 메모리 공유)
 # --access-logfile -: 액세스 로그를 stdout으로
 # --error-logfile -: 에러 로그를 stderr로
 CMD ["gunicorn", \
@@ -104,7 +104,7 @@ CMD ["gunicorn", \
      "--workers", "2", \
      "--threads", "2", \
      "--timeout", "0", \
-     "--preload-app", \
+     "--preload", \
      "--access-logfile", "-", \
      "--error-logfile", "-", \
      "src.app:app"]
