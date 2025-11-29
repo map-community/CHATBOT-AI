@@ -88,14 +88,14 @@ RUN mkdir -p logs
 EXPOSE 5000
 
 # Health check
-# start-period=300s: Pinecone 캐시 초기화(~240s) + 여유(60s)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \
+# start-period=1200s: Pinecone 캐시 초기화 (~20분) 대기
+HEALTHCHECK --interval=30s --timeout=10s --start-period=1200s --retries=3 \
     CMD curl -f http://localhost:5000/health || exit 1
 
 # 컨테이너 시작 명령 (Gunicorn 프로덕션 서버)
 # --workers 2: 2개 워커 프로세스 (CPU 2개 활용)
 # --threads 2: 워커당 2개 쓰레드 (총 4 동시 요청 처리)
-# --timeout 120: LLM API 호출 대기 시간 (기본 30초는 부족)
+# --timeout 0: timeout 비활성화 (초기화 20분 + LLM API 응답 시간 예측 불가)
 # --preload-app: Master에서 앱 로드 후 fork (초기화 1번만, 메모리 공유)
 # --access-logfile -: 액세스 로그를 stdout으로
 # --error-logfile -: 에러 로그를 stderr로
@@ -103,7 +103,7 @@ CMD ["gunicorn", \
      "--bind", "0.0.0.0:5000", \
      "--workers", "2", \
      "--threads", "2", \
-     "--timeout", "120", \
+     "--timeout", "0", \
      "--preload-app", \
      "--access-logfile", "-", \
      "--error-logfile", "-", \
