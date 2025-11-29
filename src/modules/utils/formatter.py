@@ -99,6 +99,17 @@ def format_docs(docs: List[Any]) -> str:
         # 메타데이터에서 제목 추출
         title = doc.metadata.get('title', '제목 없음')
 
+        # 날짜 정보 추출 및 포맷팅
+        doc_date = doc.metadata.get('doc_date')
+        if doc_date:
+            # datetime 객체를 한국어 형식으로 변환
+            try:
+                date_str = doc_date.strftime('%Y년 %m월 %d일')
+            except:
+                date_str = str(doc_date)
+        else:
+            date_str = '날짜 미상'
+
         # 출처에 따라 라벨 생성
         source = doc.metadata.get('source', 'original_post')
         content_type = doc.metadata.get('content_type', 'text')
@@ -113,8 +124,8 @@ def format_docs(docs: List[Any]) -> str:
             # 원본 게시글
             label = "[본문]"
 
-        # 제목 + 라벨 + 내용 (제목을 명시하여 청크의 문맥 제공)
-        formatted.append(f"문서 제목: {title}\n{label}\n{doc.page_content}")
+        # 제목 + 날짜 + 라벨 + 내용 (시간 맥락 제공)
+        formatted.append(f"문서 제목: {title}\n작성일: {date_str}\n{label}\n{doc.page_content}")
 
     return "\n\n".join(formatted)
 
