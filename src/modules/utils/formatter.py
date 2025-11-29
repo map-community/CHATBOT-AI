@@ -95,7 +95,7 @@ def format_docs(docs: List[Any]) -> str:
     """
     formatted = []
 
-    for doc in docs:
+    for i, doc in enumerate(docs, 1):
         # 메타데이터에서 제목 추출
         title = doc.metadata.get('title', '제목 없음')
 
@@ -124,8 +124,16 @@ def format_docs(docs: List[Any]) -> str:
             # 원본 게시글
             label = "[본문]"
 
-        # 제목 + 날짜 + 라벨 + 내용 (시간 맥락 제공)
-        formatted.append(f"문서 제목: {title}\n작성일: {date_str}\n{label}\n{doc.page_content}")
+        # 문서 번호 + 구분선 + 제목 + 날짜 + 라벨 + 내용 (명확한 구분과 우선순위 제공)
+        doc_block = f"""{'='*60}
+📄 문서 {i} (검색 순위: {i}위)
+{'='*60}
+문서 제목: {title}
+작성일: {date_str}
+{label}
+
+{doc.page_content}"""
+        formatted.append(doc_block)
 
     return "\n\n".join(formatted)
 
