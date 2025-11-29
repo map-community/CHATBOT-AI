@@ -9,6 +9,8 @@ ENV PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
+    # Python 모듈 경로 (Gunicorn에서 modules 찾기)
+    PYTHONPATH=/app/src \
     # CPU 최적화 설정
     OMP_NUM_THREADS=2 \
     MKL_NUM_THREADS=2 \
