@@ -26,6 +26,26 @@ class QueryTransformer:
     다양한 패턴 매칭과 형태소 분석을 통해 핵심 키워드를 추출합니다.
     """
 
+    # 불용어(stopwords) 정의: 검색에 불필요한 일반 단어 제거
+    STOPWORDS = {
+        # 메타 표현 (검색 의도가 아님)
+        '포함', '전부', '모두', '다', '말하다', '알려주다', '설명하다', '보여주다',
+        '있다', '없다', '하다', '되다', '이다', '아니다',
+
+        # 일반 명사 (너무 흔함)
+        '문서', '게시글', '글', '내용', '정보', '자료', '데이터',
+        '것', '거', '수', '때', '곳', '점', '건', '개',
+
+        # 질문 표현
+        '질문', '답변', '대답',
+
+        # 시간 표현 (별도 파싱됨)
+        '오늘', '어제', '내일', '요즘', '최근',
+
+        # 조사/어미 잔류물
+        '이', '가', '을', '를', '은', '는', '에', '에서', '으로', '부터', '까지'
+    }
+
     def __init__(self, use_mecab: bool = True):
         """
         QueryTransformer 초기화
@@ -75,14 +95,20 @@ class QueryTransformer:
         # 3. 특수 키워드 처리 (도메인 지식 기반)
         query_nouns.extend(self._extract_special_keywords(content))
 
-        # 4. Mecab 형태소 분석기를 이용한 추가 명사 추출
+        # 4. Mecab 형태소 분석기를 이용한 추가 명사 추출 (불용어 제거)
         if self.use_mecab and self.mecab:
-            additional_nouns = [noun for noun in self.mecab.nouns(content) if len(noun) > 1]
+            additional_nouns = [
+                noun for noun in self.mecab.nouns(content)
+                if len(noun) > 1 and noun not in self.STOPWORDS  # ✅ 불용어 필터링 추가
+            ]
             query_nouns += additional_nouns
         else:
-            # Mecab 없이 간단한 토큰화
+            # Mecab 없이 간단한 토큰화 (불용어 제거)
             simple_tokens = content.split()
-            additional_nouns = [token for token in simple_tokens if len(token) > 1]
+            additional_nouns = [
+                token for token in simple_tokens
+                if len(token) > 1 and token not in self.STOPWORDS  # ✅ 불용어 필터링 추가
+            ]
             query_nouns += additional_nouns
 
         # 5. 후처리: 특정 조건에서 추가 키워드 삽입
