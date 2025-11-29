@@ -585,23 +585,49 @@ class LLMService:
 
             actual_chunks.append(chunk)
 
-        # ✅ 모든 청크 표시 (개수 제한 없음)
-        logger.info(f"   총 {len(actual_chunks)}개 청크를 LLM에 전달:")
+        # ✅ 각 청크를 명확하게 표시 (구조 확인 가능)
+        logger.info(f"   총 {len(actual_chunks)}개 문서를 LLM에 전달:")
         logger.info("")
 
         for idx, chunk in enumerate(actual_chunks, 1):
             chunk_len = len(chunk)
 
-            # 개행 제거하여 한 줄로 표시
-            chunk_clean = chunk.replace('\n', ' ').replace('\r', ' ')
+            # 구분선으로 각 청크 시작 표시
+            logger.info(f"   {'─'*80}")
+            logger.info(f"   📄 청크 {idx}/{len(actual_chunks)} (총 {chunk_len}자)")
+            logger.info(f"   {'─'*80}")
 
-            if chunk_len <= 200:
-                # 200자 이하면 전체 출력 (개행 제거됨)
-                logger.info(f"   [청크 {idx}/{len(actual_chunks)}] {chunk_clean}")
-            else:
-                # 앞 150자 + ... + 뒤 150자 (개행 제거됨)
-                preview = chunk_clean[:150] + f' ... ({chunk_len - 300}자 생략) ... ' + chunk_clean[-150:]
-                logger.info(f"   [청크 {idx}/{len(actual_chunks)}] {preview}")
+            # 청크 내용에서 핵심 메타데이터 추출 (첫 500자 내에서)
+            lines = chunk.split('\n')
+            header_lines = []
+            content_start_idx = 0
+
+            # 문서 번호, 제목, 작성일 등 헤더 정보 추출 (최대 10줄)
+            for i, line in enumerate(lines[:10]):
+                stripped = line.strip()
+                if any(keyword in stripped for keyword in ['📄 문서', '====', '문서 제목:', '작성일:', '[본문]', '[이미지', '[첨부파일']):
+                    header_lines.append(line)
+                    if '[본문]' in stripped or '[이미지' in stripped or '[첨부파일' in stripped:
+                        content_start_idx = i + 1
+                        break
+
+            # 헤더 출력
+            if header_lines:
+                for line in header_lines:
+                    logger.info(f"   {line}")
+
+            # 본문 미리보기 (첫 3줄)
+            if content_start_idx < len(lines):
+                logger.info("")
+                preview_lines = lines[content_start_idx:content_start_idx+3]
+                for line in preview_lines:
+                    if line.strip():  # 빈 줄 제외
+                        truncated = line[:100] + '...' if len(line) > 100 else line
+                        logger.info(f"   {truncated}")
+
+                remaining_lines = len(lines) - content_start_idx - 3
+                if remaining_lines > 0:
+                    logger.info(f"   ... (이하 {remaining_lines}줄 생략)")
 
         logger.info("")
         logger.info(f"{'='*100}")
